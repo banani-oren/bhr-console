@@ -180,6 +180,7 @@ export default function Users() {
         full_name: inviteForm.full_name.trim(),
         role: inviteForm.role,
         email: inviteForm.email.trim(),
+        portal_token: crypto.randomUUID(),
       })
 
       if (profileError) throw profileError

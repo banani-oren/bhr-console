@@ -1,9 +1,14 @@
 export type Profile = {
   id: string
   full_name: string
+  email: string
   role: 'admin' | 'employee'
   bonus_model: BonusModel | null
   hours_category_enabled: boolean
+  portal_token: string | null
+  phone: string | null
+  status: string
+  created_at: string
 }
 
 export type Client = {
@@ -54,21 +59,10 @@ export type Transaction = {
   created_at: string
 }
 
-export type TeamMember = {
-  id: string
-  name: string
-  role: string
-  email: string
-  status: string
-  bonus_model: BonusModel | null
-  hours_category_enabled: boolean
-  portal_token: string | null
-  created_at: string
-}
-
 export type HoursLog = {
   id: string
-  team_member_id: string
+  team_member_id: string | null
+  profile_id: string | null
   client_name: string
   visit_date: string
   hours: number

@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { useTable, useDelete } from '@/hooks/useSupabaseQuery'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import type { TeamMember, BonusModel, BonusTier } from '@/lib/types'
+import type { Profile, BonusModel, BonusTier } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -25,16 +24,13 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { Plus, Pencil, Trash2, Copy, Link, UserCircle } from 'lucide-react'
+import { Pencil, Trash2, Copy, Link, UserCircle, Plus } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type MemberForm = {
-  name: string
-  role: string
-  email: string
+type EmployeeForm = {
   hours_category_enabled: boolean
   bonus_enabled: boolean
   bonus_filter_field: string
@@ -44,22 +40,18 @@ type MemberForm = {
 
 const emptyTier = (): BonusTier => ({ min: 0, bonus: 0 })
 
-const emptyForm: MemberForm = {
-  name: '',
-  role: '',
-  email: '',
-  hours_category_enabled: false,
-  bonus_enabled: false,
-  bonus_filter_field: '',
-  bonus_filter_contains: '',
-  bonus_tiers: [],
+function profileToForm(profile: Profile): EmployeeForm {
+  const bm = profile.bonus_model
+  return {
+    hours_category_enabled: profile.hours_category_enabled,
+    bonus_enabled: !!bm,
+    bonus_filter_field: bm?.filter?.field ?? '',
+    bonus_filter_contains: bm?.filter?.contains ?? '',
+    bonus_tiers: bm?.tiers ? bm.tiers.map((t) => ({ ...t })) : [],
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formToPayload(form: MemberForm): Partial<TeamMember> {
+function formToPayload(form: EmployeeForm): Partial<Profile> {
   const bonus_model: BonusModel | null = form.bonus_enabled
     ? {
         type: 'flat',
@@ -72,43 +64,26 @@ function formToPayload(form: MemberForm): Partial<TeamMember> {
     : null
 
   return {
-    name: form.name,
-    role: form.role,
-    email: form.email,
-    hours_category_enabled: form.hours_category_enabled,
     bonus_model,
+    hours_category_enabled: form.hours_category_enabled,
   }
 }
 
-function memberToForm(member: TeamMember): MemberForm {
-  const bm = member.bonus_model
-  return {
-    name: member.name,
-    role: member.role,
-    email: member.email,
-    hours_category_enabled: member.hours_category_enabled,
-    bonus_enabled: !!bm,
-    bonus_filter_field: bm?.filter?.field ?? '',
-    bonus_filter_contains: bm?.filter?.contains ?? '',
-    bonus_tiers: bm?.tiers ? bm.tiers.map((t) => ({ ...t })) : [],
-  }
-}
-
-function portalUrl(member: TeamMember): string {
-  return `${window.location.origin}/portal?token=${member.portal_token ?? ''}`
+function portalUrl(profile: Profile): string {
+  return `${window.location.origin}/portal?token=${profile.portal_token ?? ''}`
 }
 
 // ---------------------------------------------------------------------------
-// Member Form Body (shared between Add and Edit dialogs)
+// Employee Form Body
 // ---------------------------------------------------------------------------
 
-type MemberFormBodyProps = {
-  form: MemberForm
-  onChange: (form: MemberForm) => void
+type FormBodyProps = {
+  form: EmployeeForm
+  onChange: (form: EmployeeForm) => void
 }
 
-function MemberFormBody({ form, onChange }: MemberFormBodyProps) {
-  function set<K extends keyof MemberForm>(key: K, value: MemberForm[K]) {
+function EmployeeFormBody({ form, onChange }: FormBodyProps) {
+  function set<K extends keyof EmployeeForm>(key: K, value: EmployeeForm[K]) {
     onChange({ ...form, [key]: value })
   }
 
@@ -122,49 +97,11 @@ function MemberFormBody({ form, onChange }: MemberFormBodyProps) {
   }
 
   function removeTier(index: number) {
-    set(
-      'bonus_tiers',
-      form.bonus_tiers.filter((_, i) => i !== index)
-    )
+    set('bonus_tiers', form.bonus_tiers.filter((_, i) => i !== index))
   }
 
   return (
     <div className="space-y-4 py-2">
-      {/* Basic fields */}
-      <div className="space-y-1.5">
-        <Label htmlFor="tm-name">שם</Label>
-        <Input
-          id="tm-name"
-          value={form.name}
-          onChange={(e) => set('name', e.target.value)}
-          placeholder="שם מלא"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="tm-role">תפקיד</Label>
-        <Input
-          id="tm-role"
-          value={form.role}
-          onChange={(e) => set('role', e.target.value)}
-          placeholder="תפקיד"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor="tm-email">אימייל</Label>
-        <Input
-          id="tm-email"
-          type="email"
-          dir="ltr"
-          value={form.email}
-          onChange={(e) => set('email', e.target.value)}
-          placeholder="example@company.com"
-        />
-      </div>
-
-      <Separator />
-
       {/* Hours category toggle */}
       <div className="flex items-center justify-between gap-4">
         <Label htmlFor="tm-hours" className="leading-snug">
@@ -294,190 +231,138 @@ function MemberFormBody({ form, onChange }: MemberFormBodyProps) {
 
 export default function Team() {
   const queryClient = useQueryClient()
-  const { data: members = [], isLoading } = useTable<TeamMember>('team_members')
-  const remove = useDelete('team_members')
+
+  const { data: employees = [], isLoading } = useQuery<Profile[]>({
+    queryKey: ['team-employees'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'employee')
+        .order('full_name', { ascending: true })
+      if (error) throw error
+      return data as Profile[]
+    },
+  })
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingMember, setEditingMember] = useState<TeamMember | null>(null)
-  const [form, setForm] = useState<MemberForm>(emptyForm)
+  const [editingProfile, setEditingProfile] = useState<Profile | null>(null)
+  const [form, setForm] = useState<EmployeeForm>({
+    hours_category_enabled: false,
+    bonus_enabled: false,
+    bonus_filter_field: '',
+    bonus_filter_contains: '',
+    bonus_tiers: [],
+  })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
 
-  // Delete state
-  const [deleteTarget, setDeleteTarget] = useState<TeamMember | null>(null)
-
-  // Per-card copy state: maps member id → boolean (copied)
+  // Copy state
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
-  // -------------------------------------------------------------------------
-  // Dialog handlers
-  // -------------------------------------------------------------------------
-
-  function openAddDialog() {
-    setEditingMember(null)
-    setForm(emptyForm)
-    setDialogOpen(true)
-  }
-
-  function openEditDialog(member: TeamMember) {
-    setEditingMember(member)
-    setForm(memberToForm(member))
+  function openEditDialog(profile: Profile) {
+    setEditingProfile(profile)
+    setForm(profileToForm(profile))
+    setSaveStatus('idle')
     setDialogOpen(true)
   }
 
   function closeDialog() {
     setDialogOpen(false)
-    setForm(emptyForm)
-    setEditingMember(null)
+    setEditingProfile(null)
     setSaveStatus('idle')
   }
 
   async function handleSave() {
-    if (!form.name.trim()) return
+    if (!editingProfile) return
     setSaveStatus('saving')
 
     const payload = formToPayload(form)
 
-    if (editingMember) {
-      const { data, error } = await supabase
-        .from('team_members')
-        .update(payload)
-        .eq('id', editingMember.id)
-        .select()
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(payload)
+      .eq('id', editingProfile.id)
+      .select()
 
-      if (error) {
-        console.error('Save error:', error)
-        setSaveStatus('error')
-        return
-      }
-      console.log('Saved:', data)
-    } else {
-      const { data, error } = await supabase
-        .from('team_members')
-        .insert(payload)
-        .select()
-
-      if (error) {
-        console.error('Save error:', error)
-        setSaveStatus('error')
-        return
-      }
-      console.log('Saved:', data)
+    if (error) {
+      console.error('Save error:', error)
+      setSaveStatus('error')
+      return
     }
+    console.log('Saved:', data)
 
     setSaveStatus('success')
-    queryClient.invalidateQueries({ queryKey: ['team_members'] })
-    setTimeout(() => {
-      closeDialog()
-    }, 2000)
+    queryClient.invalidateQueries({ queryKey: ['team-employees'] })
+    setTimeout(() => closeDialog(), 2000)
   }
 
-  // -------------------------------------------------------------------------
-  // Delete handlers
-  // -------------------------------------------------------------------------
-
-  async function handleDelete() {
-    if (!deleteTarget) return
-    await remove.mutateAsync(deleteTarget.id)
-    setDeleteTarget(null)
+  function copyPortalLink(profile: Profile) {
+    navigator.clipboard.writeText(portalUrl(profile))
+    setCopiedId(profile.id)
+    setTimeout(() => setCopiedId((prev) => (prev === profile.id ? null : prev)), 2000)
   }
-
-  // -------------------------------------------------------------------------
-  // Copy portal link
-  // -------------------------------------------------------------------------
-
-  function copyPortalLink(member: TeamMember) {
-    navigator.clipboard.writeText(portalUrl(member))
-    setCopiedId(member.id)
-    setTimeout(() => setCopiedId((prev) => (prev === member.id ? null : prev)), 2000)
-  }
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
 
   return (
     <div dir="rtl" className="p-6 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">צוות</h1>
-        <Button
-          onClick={openAddDialog}
-          className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white"
-        >
-          <Plus className="h-4 w-4" />
-          הוסף חבר צוות
-        </Button>
+        <p className="text-sm text-muted-foreground">
+          להוספת עובד חדש, הזמן אותו דרך <strong>ניהול משתמשים</strong>
+        </p>
       </div>
 
       {/* Cards grid */}
       {isLoading ? (
         <div className="py-12 text-center text-muted-foreground">טוען...</div>
-      ) : members.length === 0 ? (
+      ) : employees.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
-          אין חברי צוות עדיין. לחץ "הוסף חבר צוות" להתחלה.
+          אין עובדים עדיין. הזמן עובד חדש דרך "ניהול משתמשים".
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {members.map((member) => (
-            <Card key={member.id} className="flex flex-col">
+          {employees.map((emp) => (
+            <Card key={emp.id} className="flex flex-col">
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <UserCircle className="h-8 w-8 shrink-0 text-purple-500" />
                     <div className="min-w-0">
                       <CardTitle className="text-lg leading-tight truncate">
-                        {member.name}
+                        {emp.full_name}
                       </CardTitle>
-                      {member.role && (
-                        <Badge
-                          variant="secondary"
-                          className="mt-1 text-xs font-normal"
-                        >
-                          {member.role}
-                        </Badge>
-                      )}
+                      <Badge variant="secondary" className="mt-1 text-xs font-normal">
+                        עובד
+                      </Badge>
                     </div>
                   </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8"
-                      onClick={() => openEditDialog(member)}
-                      title="עריכה"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-8 w-8 text-destructive hover:text-destructive"
-                      onClick={() => setDeleteTarget(member)}
-                      title="מחיקה"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8"
+                    onClick={() => openEditDialog(emp)}
+                    title="עריכה"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
                 </div>
               </CardHeader>
 
               <CardContent className="flex flex-col gap-3 pt-0">
-                {/* Email */}
-                {member.email && (
+                {emp.email && (
                   <p className="text-sm text-muted-foreground truncate" dir="ltr">
-                    {member.email}
+                    {emp.email}
                   </p>
                 )}
 
-                {/* Badges row */}
                 <div className="flex flex-wrap gap-1.5">
-                  {member.hours_category_enabled && (
+                  {emp.hours_category_enabled && (
                     <Badge variant="outline" className="text-xs border-purple-300 text-purple-700">
                       שעות BHR/איגוד
                     </Badge>
                   )}
-                  {member.bonus_model && (
+                  {emp.bonus_model && (
                     <Badge variant="outline" className="text-xs border-green-300 text-green-700">
                       בונוס פעיל
                     </Badge>
@@ -486,7 +371,6 @@ export default function Team() {
 
                 <Separator />
 
-                {/* Portal link */}
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1 text-xs text-muted-foreground">
                     <Link className="h-3.5 w-3.5" />
@@ -497,22 +381,20 @@ export default function Team() {
                       className="flex-1 text-xs bg-muted rounded px-2 py-1 truncate"
                       dir="ltr"
                     >
-                      {member.portal_token
-                        ? portalUrl(member)
-                        : '(אין טוקן)'}
+                      {emp.portal_token ? portalUrl(emp) : '(אין טוקן)'}
                     </code>
                     <Button
                       size="icon"
                       variant="outline"
                       className="h-7 w-7 shrink-0"
-                      onClick={() => copyPortalLink(member)}
-                      disabled={!member.portal_token}
+                      onClick={() => copyPortalLink(emp)}
+                      disabled={!emp.portal_token}
                       title="העתק קישור"
                     >
                       <Copy className="h-3.5 w-3.5" />
                     </Button>
                   </div>
-                  {copiedId === member.id && (
+                  {copiedId === emp.id && (
                     <p className="text-xs text-green-600 font-medium">הועתק!</p>
                   )}
                 </div>
@@ -522,16 +404,16 @@ export default function Team() {
         </div>
       )}
 
-      {/* Add / Edit Dialog */}
+      {/* Edit Dialog — employee-specific fields only */}
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog() }}>
         <DialogContent dir="rtl" className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              {editingMember ? `עריכת ${editingMember.name}` : 'הוספת חבר צוות'}
+              עריכת {editingProfile?.full_name}
             </DialogTitle>
           </DialogHeader>
 
-          <MemberFormBody form={form} onChange={setForm} />
+          <EmployeeFormBody form={form} onChange={setForm} />
 
           <DialogFooter className="flex flex-col gap-2">
             {saveStatus === 'success' && (
@@ -543,7 +425,7 @@ export default function Team() {
             <div className="flex gap-2 flex-row-reverse">
               <Button
                 onClick={handleSave}
-                disabled={saveStatus === 'saving' || saveStatus === 'success' || !form.name.trim()}
+                disabled={saveStatus === 'saving' || saveStatus === 'success'}
                 className="bg-purple-600 hover:bg-purple-700 text-white"
               >
                 {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
@@ -552,35 +434,6 @@ export default function Team() {
                 ביטול
               </Button>
             </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}
-      >
-        <DialogContent dir="rtl" className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>מחיקת חבר צוות</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            האם אתה בטוח שברצונך למחוק את{' '}
-            <span className="font-semibold text-foreground">{deleteTarget?.name}</span>?
-            פעולה זו אינה ניתנת לביטול.
-          </p>
-          <DialogFooter className="flex gap-2 flex-row-reverse">
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={remove.isPending}
-            >
-              {remove.isPending ? 'מוחק...' : 'מחק'}
-            </Button>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-              ביטול
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

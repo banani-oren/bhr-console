@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import type { TeamMember, HoursLog, Transaction, BonusTier } from '@/lib/types'
+import type { Profile, HoursLog, Transaction, BonusTier } from '@/lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   Card,
@@ -111,7 +111,7 @@ function MonthSelector({ month, year, onChange }: MonthSelectorProps) {
 // ── Hours Tab ──────────────────────────────────────────────────────────────
 
 interface HoursTabProps {
-  member: TeamMember
+  member: Profile
 }
 
 function HoursTab({ member }: HoursTabProps) {
@@ -131,7 +131,7 @@ function HoursTab({ member }: HoursTabProps) {
       const { data, error } = await supabase
         .from('hours_log')
         .select('*')
-        .eq('team_member_id', member.id)
+        .eq('profile_id', member.id)
         .eq('month', month)
         .eq('year', year)
         .order('visit_date', { ascending: true })
@@ -143,7 +143,7 @@ function HoursTab({ member }: HoursTabProps) {
   const addMutation = useMutation({
     mutationFn: async () => {
       const payload: Record<string, unknown> = {
-        team_member_id: member.id,
+        profile_id: member.id,
         visit_date: formDate,
         hours: Number(formHours),
         description: formDesc || null,
@@ -339,7 +339,7 @@ function HoursTab({ member }: HoursTabProps) {
 // ── Bonus Tab ──────────────────────────────────────────────────────────────
 
 interface BonusTabProps {
-  member: TeamMember
+  member: Profile
 }
 
 function BonusTab({ member }: BonusTabProps) {
@@ -505,17 +505,17 @@ export default function Portal() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token') ?? ''
 
-  const { data: member, isLoading, isError } = useQuery<TeamMember | null>({
+  const { data: member, isLoading, isError } = useQuery<Profile | null>({
     queryKey: ['portal-member', token],
     queryFn: async () => {
       if (!token) return null
       const { data, error } = await supabase
-        .from('team_members')
+        .from('profiles')
         .select('*')
         .eq('portal_token', token)
         .maybeSingle()
       if (error) throw error
-      return data as TeamMember | null
+      return data as Profile | null
     },
     enabled: !!token,
   })
@@ -563,7 +563,7 @@ export default function Portal() {
         <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
           <div>
             <p className="text-xs text-muted-foreground">פורטל עובד</p>
-            <h1 className="text-xl font-bold text-purple-700">{member.name}</h1>
+            <h1 className="text-xl font-bold text-purple-700">{member.full_name}</h1>
           </div>
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-purple-100">
             <Clock size={20} className="text-purple-600" />
