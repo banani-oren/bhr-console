@@ -53,15 +53,6 @@ const emptyInviteForm: InviteForm = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function generateTempPassword(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#'
-  let password = ''
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length))
-  }
-  return password
-}
-
 // ---------------------------------------------------------------------------
 // Data hooks
 // ---------------------------------------------------------------------------
@@ -111,6 +102,7 @@ function useDeleteProfile() {
 // ---------------------------------------------------------------------------
 
 export default function Users() {
+  const queryClient = useQueryClient()
   const { data: profiles = [], isLoading } = useProfiles()
   const updateRole = useUpdateRole()
   const deleteProfile = useDeleteProfile()
@@ -119,7 +111,7 @@ export default function Users() {
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteForm, setInviteForm] = useState<InviteForm>(emptyInviteForm)
   const [isInviting, setIsInviting] = useState(false)
-  const [tempPassword, setTempPassword] = useState<string | null>(null)
+  const [inviteSuccess, setInviteSuccess] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
 
   // Delete dialog
@@ -137,7 +129,7 @@ export default function Users() {
 
   function openInviteDialog() {
     setInviteForm(emptyInviteForm)
-    setTempPassword(null)
+    setInviteSuccess(false)
     setInviteError(null)
     setInviteOpen(true)
   }
@@ -145,7 +137,7 @@ export default function Users() {
   function closeInviteDialog() {
     setInviteOpen(false)
     setInviteForm(emptyInviteForm)
-    setTempPassword(null)
+    setInviteSuccess(false)
     setInviteError(null)
   }
 
@@ -155,40 +147,25 @@ export default function Users() {
     setIsInviting(true)
     setInviteError(null)
 
-    const password = generateTempPassword()
-
     try {
-      // Create auth user with a temporary password
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: inviteForm.email.trim(),
-        password,
-        options: {
-          data: {
-            full_name: inviteForm.full_name.trim(),
-          },
+      // Call edge function — uses service role to invite user via Supabase Auth
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: {
+          email: inviteForm.email.trim(),
+          full_name: inviteForm.full_name.trim(),
+          role: inviteForm.role,
         },
       })
 
-      if (authError) throw authError
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
 
-      const userId = authData.user?.id
-      if (!userId) throw new Error('לא ניתן ליצור משתמש')
-
-      // Upsert profile row
-      const { error: profileError } = await supabase.from('profiles').upsert({
-        id: userId,
-        full_name: inviteForm.full_name.trim(),
-        role: inviteForm.role,
-        email: inviteForm.email.trim(),
-        portal_token: crypto.randomUUID(),
-      })
-
-      if (profileError) throw profileError
-
-      setTempPassword(password)
+      // Auth trigger auto-creates profile row; refresh the list
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      setInviteSuccess(true)
     } catch (err: unknown) {
       const message =
-        err instanceof Error ? err.message : 'אירעה שגיאה בעת יצירת המשתמש'
+        err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש'
       setInviteError(message)
     } finally {
       setIsInviting(false)
@@ -358,21 +335,15 @@ export default function Users() {
             <DialogTitle>הזמנת משתמש חדש</DialogTitle>
           </DialogHeader>
 
-          {/* Show temp password after successful invite */}
-          {tempPassword ? (
+          {/* Show success after invite */}
+          {inviteSuccess ? (
             <div className="space-y-4 py-2">
               <div className="rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 p-4 space-y-2">
                 <p className="text-sm font-semibold text-green-800 dark:text-green-300">
-                  המשתמש נוצר בהצלחה
+                  ההזמנה נשלחה בהצלחה ✓
                 </p>
                 <p className="text-sm text-green-700 dark:text-green-400">
-                  העבר למשתמש את הסיסמה הזמנית הבאה:
-                </p>
-                <div className="rounded bg-white dark:bg-background border px-3 py-2 font-mono text-base tracking-widest select-all text-center">
-                  {tempPassword}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  המשתמש יתבקש לשנות את הסיסמה בכניסה הראשונה.
+                  נשלח אימייל הזמנה ל-{inviteForm.email}. המשתמש יוכל להגדיר סיסמה דרך הקישור באימייל.
                 </p>
               </div>
 
