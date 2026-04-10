@@ -32,18 +32,23 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 // ---------------------------------------------------------------------------
 
 async function fetchProfile(userId: string): Promise<Profile | null> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single()
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single()
 
-  if (error) {
-    console.error('Error fetching profile:', error.message)
+    if (error) {
+      console.error('Error fetching profile:', error.message)
+      return null
+    }
+
+    return data as Profile
+  } catch (err) {
+    console.error('Profile fetch exception:', err)
     return null
   }
-
-  return data as Profile
 }
 
 // ---------------------------------------------------------------------------
@@ -56,35 +61,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true)
 
   useEffect(() => {
-    // Retrieve the current session on mount
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      const currentUser = session?.user ?? null
-      setUser(currentUser)
-      if (currentUser) {
-        const p = await fetchProfile(currentUser.id)
-        setProfile(p)
-      }
-      setLoading(false)
-    })
+    let cancelled = false
 
-    // Subscribe to auth state changes
+    // Use onAuthStateChange ONLY — it fires INITIAL_SESSION on mount,
+    // which replaces the need for a separate getSession() call.
+    // This avoids the race condition that causes auth lock conflicts.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (cancelled) return
+
       const currentUser = session?.user ?? null
       setUser(currentUser)
 
       if (currentUser) {
         const p = await fetchProfile(currentUser.id)
-        setProfile(p)
+        if (!cancelled) {
+          setProfile(p)
+        }
       } else {
         setProfile(null)
       }
 
-      setLoading(false)
+      if (!cancelled) {
+        setLoading(false)
+      }
     })
 
+    // Safety timeout — if auth never resolves (network issue, stale token),
+    // stop showing the loading screen after 5 seconds
+    const timeout = setTimeout(() => {
+      if (!cancelled) {
+        setLoading(false)
+      }
+    }, 5000)
+
     return () => {
+      cancelled = true
+      clearTimeout(timeout)
       subscription.unsubscribe()
     }
   }, [])
@@ -92,11 +106,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string): Promise<void> => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+    // Don't manually set user/profile here — onAuthStateChange handles it
   }
 
   const signOut = async (): Promise<void> => {
     const { error } = await supabase.auth.signOut()
     if (error) throw error
+    // Don't manually clear state — onAuthStateChange handles it
   }
 
   return (

@@ -27,7 +27,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" dir="rtl">
-        <p className="text-muted-foreground">טוען...</p>
+        <div className="text-center space-y-2">
+          <p className="text-muted-foreground">טוען...</p>
+        </div>
       </div>
     )
   }

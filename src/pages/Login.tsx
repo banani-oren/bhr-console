@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,8 +12,12 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const { signIn } = useAuth()
-  const navigate = useNavigate()
+  const { user, signIn } = useAuth()
+
+  // If already logged in, redirect to dashboard
+  if (user) {
+    return <Navigate to="/" replace />
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -21,7 +25,8 @@ export default function Login() {
     setLoading(true)
     try {
       await signIn(email, password)
-      navigate('/')
+      // Don't navigate — onAuthStateChange updates user state,
+      // then the `if (user)` check above triggers redirect
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'שגיאה בהתחברות')
     } finally {
