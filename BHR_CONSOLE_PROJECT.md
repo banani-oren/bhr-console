@@ -1,8 +1,8 @@
-# BHR Console — Project Brief for Claude Code
+# BHR Console — Project Brief
 
 ## Overview
-**BHR Console** is an HR consulting financial management system for Banani HR.  
-Migration from BASE44 to a professional stack. Build from scratch — no data migration needed.
+**BHR Console** is an HR consulting financial management system for Banani HR.
+Migration from BASE44 to a professional stack. Built from scratch — no data migration.
 
 ---
 
@@ -13,30 +13,57 @@ Migration from BASE44 to a professional stack. Build from scratch — no data mi
 | Frontend | React + Vite + TypeScript + TailwindCSS + shadcn/ui |
 | State / Data | @tanstack/react-query + Supabase client |
 | Router | react-router-dom v6 |
-| Database | Supabase (Postgres) |
-| Auth | Supabase Auth — email/password |
-| Email | Resend (invite + password reset only) |
-| Hosting | Vercel (auto-deploy from GitHub) |
+| Database | Supabase (Postgres) — project `szunbwkmldepkwpxojma` (Frankfurt) |
+| Auth | Supabase Auth — email/password + invite via edge function |
+| Email | Resend (invite emails via HTTP API) |
+| Edge Functions | Supabase Edge Functions (Deno) |
+| Hosting | Vercel — https://bhr-console.vercel.app |
 | Repo | github.com/banani-oren/bhr-console |
 
 ---
 
 ## Environment Variables
 
+### `.env.local` (frontend, gitignored)
 ```env
 VITE_SUPABASE_URL=https://szunbwkmldepkwpxojma.supabase.co
-VITE_SUPABASE_ANON_KEY=<from Supabase Legacy API Keys tab>
-RESEND_API_KEY=<from Resend dashboard>
+VITE_SUPABASE_ANON_KEY=<from Supabase API Settings>
+SUPABASE_ACCESS_TOKEN=sbp_<...>   # Management API (for CLI)
+SUPABASE_SERVICE_ROLE_KEY=<...>   # Server-side only, never in frontend
+VERCEL_TOKEN=vcp_<...>
+RESEND_API_KEY=re_<...>
 ```
+
+### Vercel Environment Variables (set via API)
+- `VITE_SUPABASE_URL` — production, preview, development
+- `VITE_SUPABASE_ANON_KEY` — production, preview, development
+- `RESEND_API_KEY` — production, preview (sensitive)
+
+### Supabase Edge Function Secrets
+- `RESEND_API_KEY` — set via `supabase secrets set`
+
+---
+
+## Architecture — Unified User Model
+
+**`profiles` is the single source of truth** for all users (admin + employee).  
+There is no separate `team_members` table — all employee data lives on `profiles`.
+
+- `profiles.id` references `auth.users.id` (1:1)
+- A database trigger (`handle_new_user`) auto-creates a `profiles` row when a new auth user is created
+- `/team` page queries `profiles WHERE role = 'employee'`
+- `/users` page queries all `profiles`
+- Portal lookups use `profiles.portal_token`
 
 ---
 
 ## User Roles
 
-### Admin
+### Admin (`bananioren@gmail.com`)
 - Full access to all pages and data
 - Manage users (invite, reset password, delete)
 - Configure bonus models for each employee
+- Auth user ID: `03b73b4f-8f09-4bf1-9c22-f49b2b05f363`
 
 ### Employee
 - Access to personal portal only (`/portal`)
@@ -48,14 +75,17 @@ RESEND_API_KEY=<from Resend dashboard>
 ## Database Schema
 
 ```sql
--- Users managed by Supabase Auth
--- profiles table extends auth.users
+-- profiles: single source of truth for all users
 create table profiles (
   id uuid references auth.users primary key,
   full_name text not null,
+  email text,
   role text not null check (role in ('admin', 'employee')),
-  bonus_model jsonb, -- null = no bonus tab shown
-  hours_category_enabled boolean default false, -- show BHR/איגוד select (for Nadia)
+  bonus_model jsonb,                                    -- null = no bonus tab
+  hours_category_enabled boolean default false,         -- BHR/איגוד toggle
+  portal_token text unique default gen_random_uuid()::text,
+  phone text,
+  status text default 'פעיל',
   created_at timestamptz default now()
 );
 
@@ -107,31 +137,55 @@ create table transactions (
   created_at timestamptz default now()
 );
 
-create table team_members (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  role text,
-  email text,
-  status text default 'פעיל',
-  bonus_model jsonb,
-  hours_category_enabled boolean default false,
-  portal_token text unique default gen_random_uuid()::text,
-  created_at timestamptz default now()
-);
-
 create table hours_log (
   id uuid primary key default gen_random_uuid(),
-  team_member_id uuid references team_members(id),
+  profile_id uuid references profiles(id),        -- links to profiles (unified)
+  team_member_id uuid,                             -- legacy, kept for migration
   client_name text,
   visit_date date,
   hours numeric,
   description text,
-  hours_category text, -- 'BHR' or 'איגוד' (only for Nadia)
+  hours_category text,                             -- 'BHR' or 'איגוד'
   month integer,
   year integer,
   created_at timestamptz default now()
 );
 ```
+
+### Database Trigger — Auto-create Profile on Signup
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name, email, role)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email),
+    NEW.email,
+    COALESCE(NEW.raw_user_meta_data->>'role', 'employee')
+  )
+  ON CONFLICT (id) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+### RLS Policies (current)
+| Table | Policy | Role | Access |
+|-------|--------|------|--------|
+| profiles | auth_full_profiles | authenticated | ALL |
+| profiles | service_role_profiles | service_role | ALL |
+| profiles | anon_read_profiles | anon | SELECT |
+| clients | Authenticated full access | authenticated | ALL |
+| agreements | Authenticated full access | authenticated | ALL |
+| transactions | Authenticated full access | authenticated | ALL |
+| hours_log | auth_full_hours | authenticated | ALL |
+| hours_log | anon_read_hours | anon | SELECT |
+| hours_log | anon_insert_hours | anon | INSERT |
 
 ---
 
@@ -149,40 +203,46 @@ create table hours_log (
 #### 2. `/clients` — Clients
 - Searchable table: name, contact, phone, status
 - Add / Edit / Delete client
-- **Import button**: upload Excel (.xlsx/.csv) or PDF → preview → confirm → save
+- **Import button**: upload Excel (.xlsx/.csv) → preview → confirm → save
+- Save handler: try-catch, success/error toast
 
 #### 3. `/agreements` — Agreements
 - Table: client, type, commission %, monthly fee, dates
 - Add / Edit / Delete
-- **Import button**: same Excel/PDF import flow
+- **Import button**: same Excel import flow
+- Save handler: try-catch with `formError` state
 
 #### 4. `/transactions` — Transactions
 - Table columns: client, position, candidate, salary, commission %, service lead, entry date, closing date, net amount, supplier commission, billable toggle, invoice badge
 - **6 filters**: entry month, closing month, service type, service lead, billable status, closing year
-- Per-row billable toggle (✓/✗)
+- Per-row billable toggle (immediate mutation with `.select()`)
 - Green badge if invoice number set
-- Add / Edit (full details in dialog, not in table)
-- **Import button**: Excel/PDF import
+- Add / Edit (full details in dialog)
+- **Import button**: Excel import
+- Save handler: try-catch, success/error toast
 
 #### 5. `/hours` — Hours Log
 - Tabs per client (retainer clients)
 - Month/year selector
 - Table: date, hours, description, category (if applicable)
-- Add visit form
-- **סגור חודש** button: creates/updates Transaction record for that client/month
+- Add visit form with save feedback
+- **סגור חודש** button: upserts Transaction record for client/month
+- Close month has confirmation dialog with success/error feedback
 
-#### 6. `/team` — Team
-- Cards per employee: name, role, email
-- Portal link with copy button
-- Edit employee (name, role, email, bonus model, hours_category toggle)
-- Bonus model config (see Bonus section below)
+#### 6. `/team` — Team (employees only)
+- Queries `profiles WHERE role = 'employee'`
+- Cards per employee: name, email, portal link
+- Edit dialog: employee-specific fields only — bonus_model, hours_category_enabled
+- No add/delete — employees are managed via `/users` (invite flow)
+- Save goes to `profiles` table with success/error toast
+- Portal link copy button
 
-#### 7. `/users` — User Management (Admin only)
-- Table: email, name, role, last login
-- Invite user (send email via Resend)
-- Reset password (send email via Resend)
-- Delete user
-- Change role (admin ↔ employee)
+#### 7. `/users` — User Management (Admin only, behind AdminRoute)
+- Table: email, name, role
+- **Invite user**: calls `invite-user` edge function → sends email via Resend
+- Reset password (via Supabase Auth `resetPasswordForEmail`)
+- Delete user (deletes profile row)
+- Toggle role (admin ↔ employee)
 
 ---
 
@@ -190,7 +250,7 @@ create table hours_log (
 
 #### `/portal` — Entry point
 - Reads `?token=<portal_token>` from URL
-- Finds matching team_member by portal_token
+- Finds matching `profiles` row by `portal_token`
 - No login required — token IS the identity
 - If token invalid: show "קישור לא תקין" error
 
@@ -198,8 +258,8 @@ create table hours_log (
 - **שעות** (all employees):
   - Month/year selector (default: current month)
   - Table: date, hours, category (if hours_category_enabled), description, total footer
-  - "+ הוסף דיווח" button → inline form: date + hours (step 0.5) + description + category (if enabled)
-  - On save: create hours_log record
+  - "+ הוסף דיווח" button → inline form
+  - On save: creates `hours_log` record with `profile_id`
 - **בונוס** (only if bonus_model is configured):
   - Shows current month revenue and calculated bonus
   - See Bonus section below
@@ -208,7 +268,7 @@ create table hours_log (
 
 ## Bonus Model
 
-### Data structure (stored in `team_members.bonus_model` as JSONB)
+### Data structure (stored in `profiles.bonus_model` as JSONB)
 
 ```json
 {
@@ -251,26 +311,59 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 - "עוד ₪X למדרגה הבאה" (if not at max tier)
 - Tiers table showing ₪ min and ₪ bonus columns (NO percentages) — highlight current tier
 
-### Admin configures bonus model for any employee via `/team` edit dialog.
+### Admin configures bonus model via `/team` edit dialog.
 - Form shows only 2 columns per tier row: **מינימום (₪)** and **בונוס (₪)**
 - No max, no percentage, no rate fields
 - emptyTier: `{ min: 0, bonus: 0 }`
 
 ---
 
-## Import Flow (Excel / PDF)
+## Edge Functions
 
-For each entity (clients, agreements, transactions):
-1. Admin clicks "ייבוא" button
-2. Upload dialog opens: drag & drop or file picker (.xlsx, .csv, .pdf)
-3. System parses file → shows preview table with mapped columns
-4. Admin can map/correct column names
-5. Admin clicks "אשר ייבוא" → rows inserted to DB
-6. Show success/error summary
+### `invite-user` (deployed)
+**Path**: `supabase/functions/invite-user/index.ts`
+**URL**: `https://szunbwkmldepkwpxojma.supabase.co/functions/v1/invite-user`
 
-Libraries:
-- Excel: `xlsx` (SheetJS)
-- PDF: `pdf-parse` or `pdfjs-dist`
+Flow:
+1. Receives `{ email, full_name, role }` from frontend
+2. Calls `auth.admin.generateLink({ type: 'invite' })` — creates auth user + invite link
+3. Auth trigger (`handle_new_user`) auto-creates the `profiles` row
+4. Updates profile with `portal_token`
+5. Sends custom Hebrew RTL invite email via Resend HTTP API
+6. Returns `{ success: true, user_id, email_id }`
+
+**Resend limitation**: Using `onboarding@resend.dev` (free tier), emails only deliver to the Resend account owner (`bananioren@gmail.com`). To send to any email, verify a domain at https://resend.com/domains and update the `from` address in the edge function.
+
+---
+
+## Auth Flow
+
+### Admin login (`/login`):
+- Email + password form
+- On success: `onAuthStateChange` updates user state → declarative redirect via `<Navigate>`
+- On fail: show error
+- Already logged in: auto-redirect to `/`
+
+### Auth context (`src/lib/auth.tsx`):
+- Uses `onAuthStateChange(INITIAL_SESSION)` only — no separate `getSession()` call (avoids race condition)
+- Fetches profile from `profiles` table on auth state change
+- 5-second safety timeout prevents infinite loading screen
+- Cancellation flag prevents state updates after unmount
+
+### Employee portal:
+- No login — accessed via `?token=<portal_token>`
+- Token stored in `profiles.portal_token`
+- Admin copies portal link from `/team` page
+
+### Password Reset:
+- Admin-initiated from `/users` page
+- Uses `supabase.auth.resetPasswordForEmail(email)`
+
+### User Invite:
+- Admin clicks "הזמן משתמש" in `/users`
+- Frontend calls `supabase.functions.invoke('invite-user', { body: { email, full_name, role } })`
+- Edge function creates user + sends invite email via Resend
+- Auth trigger auto-creates profile row
 
 ---
 
@@ -283,13 +376,11 @@ Libraries:
 - **Component style**: Clean cards with shadows, shadcn/ui components
 - **Layout**: Sidebar navigation (dark) on the **RIGHT** side of the screen — main content on the LEFT
   ```tsx
-  // Layout.tsx — correct RTL structure:
   <div className="flex flex-row-reverse min-h-screen">
     <Sidebar />          {/* appears on RIGHT */}
-    <main className="flex-1 pr-[sidebar-width]">...</main>
+    <main className="flex-1">...</main>
   </div>
   ```
-- All padding offsets use `pr-` (not `pl-`) to account for right-side sidebar
 
 ### Sidebar nav items (admin):
 - דשבורד
@@ -302,50 +393,31 @@ Libraries:
 
 ---
 
-## Auth Flow
-
-### Admin login (`/login`):
-- Email + password form
-- On success → redirect to `/`
-- On fail → show error
-
-### Employee portal:
-- No login — accessed via `?token=<portal_token>`
-- Token stored in `team_members.portal_token`
-- Admin copies portal link from `/team` page
-
-### Password Reset:
-- Admin-initiated from `/users` page
-- Sends reset email via Resend + Supabase Auth
-
-### User Invite:
-- Admin enters email + name + role in `/users`
-- Supabase sends invite email
-- User sets password on first login
-
----
-
 ## Key Implementation Notes
 
 1. **Re-render bug prevention**: Never put `useQuery` inside a Dialog/Modal component. Always hoist queries to parent and pass as props.
 
-2. **Supabase RLS**: Enable Row Level Security on all tables. Admin role = full access. Employee role = read own hours_log only.
+2. **Supabase RLS**: RLS enabled on all tables. Authenticated users get full access. Anon users get read access to profiles (portal lookup) and hours_log. No recursive policies on profiles (causes infinite recursion).
 
-3. **Portal token**: `portal_token` in `team_members` is a UUID string. The `/portal` route must be excluded from auth middleware.
+3. **Portal token**: `portal_token` in `profiles` is a UUID string. The `/portal` route is excluded from auth middleware (no `ProtectedRoute` wrapper).
 
-4. **Billable toggle**: Per-row toggle in transactions table. Immediate mutation on click, no dialog needed.
+4. **Billable toggle**: Per-row toggle in transactions table. Immediate mutation on click with `.select()`.
 
 5. **Hours → Transaction**: When "סגור חודש" is clicked, upsert a Transaction record: check if exists for `client_name + month + year`, update or create.
 
-6. **Employee = User (unified identity)**: Every employee is also a system user. `team_members` is the single source of truth for employee data (bonus model, hours category, portal token). The `profiles` table links to `auth.users` for login. When an employee is created in `/team`, a corresponding user invite must be sent so they can log in to `/portal`. The `team_members.portal_token` is used for passwordless portal access.
+6. **Unified identity**: `profiles` is the single table for all user data. The `team_members` table is deprecated — all frontend queries use `profiles`. hours_log uses `profile_id` (not `team_member_id`).
 
 7. **Data persistence — save handlers**: Every form save must:
-   - Call `supabase.from(...).insert()` or `.update().eq('id', id)` with `.select()` at the end
-   - Await the result and check for `error`
+   - Use try-catch around the mutation
+   - Show "שומר..." while saving (button disabled)
+   - Show "המידע נשמר ✓" (green, 2 seconds) on success, then close dialog
+   - Show "שגיאה בשמירה, נסה שנית" (red) on failure, keep dialog open
+   - Call `queryClient.invalidateQueries()` on success
    - Log errors with `console.error`
-   - Show "המידע נשמר ✓" (green, 2 seconds) on success, then close dialog and call `queryClient.invalidateQueries()`
-   - Show "שגיאה בשמירה" (red) on failure, keep dialog open
-   - Never assume save succeeded without checking the Supabase response
+
+8. **Auth flow — no race condition**: Use `onAuthStateChange` only (not `getSession()`). The `INITIAL_SESSION` event provides the session on mount. A 5-second safety timeout prevents the loading screen from hanging forever.
+
+9. **Supabase client singleton**: Only one `createClient()` call exists in `src/lib/supabase.ts`. All files import the shared instance.
 
 ---
 
@@ -355,44 +427,66 @@ Libraries:
 bhr-console/
 ├── src/
 │   ├── components/
-│   │   ├── ui/          # shadcn components
-│   │   ├── Layout.tsx   # sidebar + header
-│   │   └── shared/      # reusable components
+│   │   ├── ui/              # shadcn components
+│   │   └── Layout.tsx       # sidebar + header (RTL, flex-row-reverse)
 │   ├── pages/
 │   │   ├── Dashboard.tsx
 │   │   ├── Clients.tsx
 │   │   ├── Agreements.tsx
 │   │   ├── Transactions.tsx
 │   │   ├── HoursLog.tsx
-│   │   ├── Team.tsx
-│   │   ├── Users.tsx
+│   │   ├── Team.tsx         # queries profiles WHERE role='employee'
+│   │   ├── Users.tsx        # invite via edge function
 │   │   ├── Login.tsx
-│   │   └── Portal.tsx
+│   │   └── Portal.tsx       # queries profiles by portal_token
 │   ├── lib/
-│   │   ├── supabase.ts  # supabase client
-│   │   ├── auth.tsx     # auth context
+│   │   ├── supabase.ts      # singleton client
+│   │   ├── auth.tsx          # AuthProvider (onAuthStateChange only)
+│   │   ├── types.ts          # Profile, Client, Agreement, Transaction, HoursLog, BonusTier, BonusModel
 │   │   └── utils.ts
-│   ├── hooks/           # custom hooks
-│   ├── App.tsx
+│   ├── hooks/
+│   │   └── useSupabaseQuery.ts  # useTable, useInsert, useUpdate, useDelete
+│   ├── App.tsx               # routes, ProtectedRoute, AdminRoute
 │   └── main.tsx
-├── .env.local           # env variables (gitignored)
+├── supabase/
+│   └── functions/
+│       └── invite-user/
+│           └── index.ts      # edge function: invite + Resend email
+├── .env.local                # env variables (gitignored)
+├── vercel.json               # SPA rewrites for client-side routing
+├── supabase-schema.sql       # original schema (reference only)
+├── index.html                # lang="he" dir="rtl"
 ├── vite.config.ts
-├── tailwind.config.ts
-└── BHR_CONSOLE_PROJECT.md  # this file
+└── BHR_CONSOLE_PROJECT.md    # this file
 ```
 
 ---
 
-## Resend API Key
-Stored in Vercel environment as `RESEND_API_KEY`.  
-Used only for:
-- `invite-user` edge function → sends invite email
-- `reset-password` edge function → sends reset email
+## Deployment
 
-Sender: `noreply@banani-hr.com` (or `onboarding@resend.dev` until domain is configured)
+### Vercel
+- Project: `bhr-console` (team: `banani-orens-projects`)
+- Live URL: https://bhr-console.vercel.app
+- Framework: Vite
+- SPA routing via `vercel.json` rewrites
+- Deploy: `npx vercel --prod` or push to GitHub
+
+### Supabase Edge Functions
+- Deploy: `SUPABASE_ACCESS_TOKEN=sbp_... npx supabase functions deploy invite-user --project-ref szunbwkmldepkwpxojma --no-verify-jwt`
+
+### Supabase SMTP Configuration
+- Configured via Management API to use Resend SMTP (smtp.resend.com:465)
+- Sender: `BHR Console <onboarding@resend.dev>` (until custom domain is verified)
 
 ---
 
-*Last updated: April 2026 — v2 (flat bonus tiers, RTL sidebar right, employee=user unification, save persistence)*
+## Pending / TODO
+
+- **Resend domain verification**: Verify `banani-hr.com` at https://resend.com/domains to send invite emails to any address (not just account owner)
+- **GitHub → Vercel auto-deploy**: Install the Vercel GitHub App at https://github.com/apps/vercel to enable auto-deploys on push
+
+---
+
+*Last updated: April 2026 — v3*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*
