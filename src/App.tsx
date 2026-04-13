@@ -5,7 +5,6 @@ import Layout from '@/components/Layout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Clients from '@/pages/Clients'
-import Agreements from '@/pages/Agreements'
 import Transactions from '@/pages/Transactions'
 import HoursLog from '@/pages/HoursLog'
 import Team from '@/pages/Team'
@@ -75,14 +74,7 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/agreements"
-              element={
-                <ProtectedRoute>
-                  <Agreements />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/agreements" element={<Navigate to="/clients" replace />} />
             <Route
               path="/transactions"
               element={

@@ -14,24 +14,40 @@ export type Profile = {
 export type Client = {
   id: string
   name: string
-  contact_name: string
-  phone: string
-  email: string
+  tax_id: string | null
+  group_name: string | null
+  address: string | null
+  contact_name: string | null
+  phone: string | null
+  email: string | null
   status: string
+  notes: string | null
   created_at: string
 }
 
 export type Agreement = {
   id: string
   client_id: string
-  client_name: string
-  agreement_type: string
-  commission_rate: number
-  monthly_fee: number
-  start_date: string
-  end_date: string | null
+  agreement_type: string | null
+  commission_pct: number | null
+  salary_base: number | null
+  payment_split: string | null
+  warranty_days: number | null
+  payment_terms: string | null
+  advance: string | null
+  exclusivity: boolean
+  contact_name: string | null
+  contact_email: string | null
+  contact_phone: string | null
+  contract_file: string | null
+  status: string
   notes: string | null
   created_at: string
+  updated_at: string
+}
+
+export type ClientWithAgreement = Client & {
+  agreements: Agreement[]
 }
 
 export type Transaction = {

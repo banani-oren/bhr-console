@@ -2,7 +2,6 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   Users,
-  FileText,
   Receipt,
   Clock,
   UserCog,
@@ -21,7 +20,6 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'דשבורד', to: '/', icon: <LayoutDashboard size={18} /> },
   { label: 'לקוחות', to: '/clients', icon: <Users size={18} /> },
-  { label: 'הסכמים', to: '/agreements', icon: <FileText size={18} /> },
   { label: 'עסקאות', to: '/transactions', icon: <Receipt size={18} /> },
   { label: 'יומן שעות', to: '/hours', icon: <Clock size={18} /> },
   { label: 'צוות', to: '/team', icon: <UserCog size={18} /> },
