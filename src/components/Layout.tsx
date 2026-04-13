@@ -40,7 +40,7 @@ export default function Layout({ children }: LayoutProps) {
   }
 
   return (
-    <div className="flex flex-row-reverse min-h-screen bg-background" dir="rtl">
+    <div className="flex min-h-screen bg-background">
       {/* Sidebar — rendered on the right in RTL */}
       <aside className="w-64 flex flex-col bg-sidebar text-sidebar-foreground shrink-0">
         {/* Logo / App title */}

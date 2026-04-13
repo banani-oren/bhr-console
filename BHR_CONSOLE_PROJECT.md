@@ -1,8 +1,58 @@
 # BHR Console — Project Brief
 
+> **Claude Code Instructions**: Before making any changes, read this entire file.
+> After every change, follow the **Mandatory Development Workflow** section — build, QA, commit, push, verify deployment.
+
 ## Overview
 **BHR Console** is an HR consulting financial management system for Banani HR.
 Migration from BASE44 to a professional stack. Built from scratch — no data migration.
+
+---
+
+## ⚠️ Mandatory Development Workflow — Every Change Without Exception
+
+After **every** code change, Claude Code MUST complete all steps below in order.
+**Skipping any step is not permitted.** Changes that are not pushed to GitHub are not deployed and have no effect.
+
+### Step 1 — Build & Type Check
+```bash
+npm run build
+```
+- Must complete with **zero errors**
+- TypeScript errors are blocking — fix before proceeding
+- Warnings are acceptable but should be noted
+
+### Step 2 — QA Checklist
+Before committing, verify the following manually or via dev server (`npm run dev`):
+
+| Area | Check |
+|------|-------|
+| **Changed feature** | Does it behave as expected? |
+| **Adjacent features** | Did the change break anything nearby? |
+| **RTL layout** | Is Hebrew text and layout direction intact? |
+| **Auth** | Admin login still works |
+| **Console errors** | No new errors in browser console |
+| **Supabase queries** | No RLS errors, data loads correctly |
+
+If any check fails → **fix the issue and restart from Step 1**.
+
+### Step 3 — Commit & Push to GitHub
+```bash
+git add .
+git commit -m "<concise description of what changed>"
+git push origin main
+```
+- Commit message must describe the actual change (not "fix" or "update")
+- Example: `"Add closing month filter to transactions table"`
+
+### Step 4 — Verify Deployment on Vercel
+- GitHub → Vercel auto-deploy **is active** (confirmed). Every push to `main` triggers a deploy automatically.
+- Wait ~60 seconds after push, then open https://bhr-console.vercel.app
+- Navigate to the specific page/feature that was changed and confirm it works correctly in production
+- **Do not report the task as complete until the live URL has been verified**
+
+> ⚠️ A task is only DONE when: (1) build passes, (2) QA passes locally, (3) code is on GitHub, (4) Vercel shows the change live.
+> Stopping after step 1 or 2 means the user sees nothing. All 4 steps are mandatory.
 
 ---
 
@@ -75,39 +125,69 @@ There is no separate `team_members` table — all employee data lives on `profil
 ## Database Schema
 
 ```sql
--- profiles: single source of truth for all users
+-- profiles: single source of truth for all users (admin + employee)
+-- bonus_model stores the full tiered bonus structure as JSONB (see Bonus Model section)
 create table profiles (
   id uuid references auth.users primary key,
   full_name text not null,
   email text,
   role text not null check (role in ('admin', 'employee')),
-  bonus_model jsonb,                                    -- null = no bonus tab
-  hours_category_enabled boolean default false,         -- BHR/איגוד toggle
+  bonus_model jsonb,                                    -- null = no bonus configured
+  -- bonus_model shape: { type: 'flat', filter: { field, contains }, tiers: [{ min, bonus }] }
+  hours_category_enabled boolean default false,         -- enables BHR/איגוד category split
   portal_token text unique default gen_random_uuid()::text,
   phone text,
   status text default 'פעיל',
   created_at timestamptz default now()
 );
 
+-- clients: unified table — client details AND agreement terms in one place.
+-- ⚠️ There is no separate agreements page or nav item. All data lives on the client record.
+-- Source sheets: 'פרטי לקוחות' + 'תנאי הסכמים' + 'כרטיסי לקוחות' from the Excel file.
 create table clients (
   id uuid primary key default gen_random_uuid(),
-  name text not null,
-  contact_name text,
-  phone text,
-  email text,
-  status text default 'פעיל',
+
+  -- Basic identity (from 'פרטי לקוחות'):
+  name text not null,                                -- שם העסק
+  company_id text,                                   -- ח.פ. / מספר עסק
+  address text,                                      -- כתובת
+  status text default 'פעיל',                        -- פעיל / לא פעיל
+
+  -- Single contact per client (name, phone, email — one set only):
+  contact_name text,                                 -- שם איש הקשר
+  phone text,                                        -- נייד
+  email text,                                        -- דואל
+
+  -- Agreement terms (from 'תנאי הסכמים' — managed in client edit dialog):
+  agreement_type text,                               -- סוג הסכם: 'השמה', 'הד האנטינג', 'גיוס מסה', 'הדרכה'
+  commission_percent numeric,                        -- אחוז עמלה: 90, 100
+  salary_basis text,                                 -- בסיס משכורות: e.g. '1 משכורות', '1.5 משכורות'
+  warranty_days integer,                             -- תקופת אחריות: 30, 45, 60, 90
+  payment_terms text,                                -- תנאי תשלום: e.g. 'שוטף+30'
+  payment_split text,                                -- חלוקת תשלום: e.g. '30/70', null if not applicable
+  advance text,                                      -- מקדמה: e.g. '30% מקדמה', '1,500 ₪'
+  exclusivity boolean default false,                 -- בלעדיות
+  agreement_file text,                               -- שם קובץ הסכם (PDF filename)
+
   created_at timestamptz default now()
 );
 
+-- agreements table: DEPRECATED — kept in DB for legacy reference only.
+-- All new agreement data is stored on the clients table above.
+-- Do not write new code that reads from or writes to this table.
 create table agreements (
   id uuid primary key default gen_random_uuid(),
   client_id uuid references clients(id),
   client_name text,
   agreement_type text,
-  commission_rate numeric,
-  monthly_fee numeric,
-  start_date date,
-  end_date date,
+  commission_percent numeric,                        -- was incorrectly named commission_rate in older versions
+  warranty_days integer,
+  payment_terms text,
+  payment_split text,
+  advance numeric,
+  exclusivity boolean default false,
+  contact_name text,
+  contact_email text,
   notes text,
   created_at timestamptz default now()
 );
@@ -122,7 +202,7 @@ create table transactions (
   commission_percent numeric,
   net_invoice_amount numeric,
   commission_amount numeric,
-  service_lead text,
+  service_lead text,                                 -- references profiles.full_name (employee)
   entry_date date,
   billing_month integer,
   billing_year integer,
@@ -139,13 +219,13 @@ create table transactions (
 
 create table hours_log (
   id uuid primary key default gen_random_uuid(),
-  profile_id uuid references profiles(id),        -- links to profiles (unified)
-  team_member_id uuid,                             -- legacy, kept for migration
+  profile_id uuid references profiles(id),          -- unified: links to profiles table
+  team_member_id uuid,                               -- legacy column, ignore
   client_name text,
   visit_date date,
   hours numeric,
   description text,
-  hours_category text,                             -- 'BHR' or 'איגוד'
+  hours_category text,                               -- 'BHR' or 'איגוד' (only if hours_category_enabled)
   month integer,
   year integer,
   created_at timestamptz default now()
@@ -200,19 +280,23 @@ CREATE TRIGGER on_auth_user_created
 - Bar chart: revenue by service lead
 - Table: recent transactions (last 10)
 
-#### 2. `/clients` — Clients
+#### 2. `/clients` — Clients + Agreements (unified page)
+
+> ⚠️ **DESIGN DECISION — DO NOT CHANGE**: There is NO separate `/agreements` page and NO "הסכמים" sidebar nav item.
+> Clients and their agreement terms are managed together on this single page. This is intentional.
+
+**Client table:**
 - Searchable table: name, contact, phone, status
 - Add / Edit / Delete client
 - **Import button**: upload Excel (.xlsx/.csv) → preview → confirm → save
 - Save handler: try-catch, success/error toast
 
-#### 3. `/agreements` — Agreements
-- Table: client, type, commission %, monthly fee, dates
-- Add / Edit / Delete
-- **Import button**: same Excel import flow
-- Save handler: try-catch with `formError` state
+**Agreement terms live inside the client edit dialog (not a separate page):**
+- All fields: agreement type, commission %, salary basis, warranty days, payment terms, payment split, advance, exclusivity, agreement file
+- Contact (single contact per client): name, phone, email — shown in the main client section of the dialog
+- When a client is selected in a Transaction dialog → auto-fill: commission_percent, warranty_days, payment_terms, payment_split from the client record
 
-#### 4. `/transactions` — Transactions
+#### 3. `/transactions` — Transactions
 - Table columns: client, position, candidate, salary, commission %, service lead, entry date, closing date, net amount, supplier commission, billable toggle, invoice badge
 - **6 filters**: entry month, closing month, service type, service lead, billable status, closing year
 - Per-row billable toggle (immediate mutation with `.select()`)
@@ -221,7 +305,7 @@ CREATE TRIGGER on_auth_user_created
 - **Import button**: Excel import
 - Save handler: try-catch, success/error toast
 
-#### 5. `/hours` — Hours Log
+#### 4. `/hours` — Hours Log
 - Tabs per client (retainer clients)
 - Month/year selector
 - Table: date, hours, description, category (if applicable)
@@ -229,7 +313,7 @@ CREATE TRIGGER on_auth_user_created
 - **סגור חודש** button: upserts Transaction record for client/month
 - Close month has confirmation dialog with success/error feedback
 
-#### 6. `/team` — Team (employees only)
+#### 5. `/team` — Team (employees only)
 - Queries `profiles WHERE role = 'employee'`
 - Cards per employee: name, email, portal link
 - Edit dialog: employee-specific fields only — bonus_model, hours_category_enabled
@@ -237,7 +321,7 @@ CREATE TRIGGER on_auth_user_created
 - Save goes to `profiles` table with success/error toast
 - Portal link copy button
 
-#### 7. `/users` — User Management (Admin only, behind AdminRoute)
+#### 6. `/users` — User Management (Admin only, behind AdminRoute)
 - Table: email, name, role
 - **Invite user**: calls `invite-user` edge function → sends email via Resend
 - Reset password (via Supabase Auth `resetPasswordForEmail`)
@@ -384,12 +468,13 @@ Flow:
 
 ### Sidebar nav items (admin):
 - דשבורד
-- לקוחות
-- הסכמים
+- לקוחות (includes agreement terms — no separate הסכמים item)
 - עסקאות
 - יומן שעות
 - צוות
 - ניהול משתמשים
+
+> ⚠️ "הסכמים" is NOT a standalone nav item. Agreements are embedded inside the Clients page.
 
 ---
 
@@ -431,8 +516,7 @@ bhr-console/
 │   │   └── Layout.tsx       # sidebar + header (RTL, flex-row-reverse)
 │   ├── pages/
 │   │   ├── Dashboard.tsx
-│   │   ├── Clients.tsx
-│   │   ├── Agreements.tsx
+│   │   ├── Clients.tsx          # includes agreement fields — no separate Agreements page
 │   │   ├── Transactions.tsx
 │   │   ├── HoursLog.tsx
 │   │   ├── Team.tsx         # queries profiles WHERE role='employee'
@@ -442,7 +526,8 @@ bhr-console/
 │   ├── lib/
 │   │   ├── supabase.ts      # singleton client
 │   │   ├── auth.tsx          # AuthProvider (onAuthStateChange only)
-│   │   ├── types.ts          # Profile, Client, Agreement, Transaction, HoursLog, BonusTier, BonusModel
+│   │   ├── types.ts          # Profile, Client (includes agreement fields), Transaction, HoursLog, BonusTier, BonusModel
+│   │   │                        # Note: Agreement type is deprecated — agreement fields live on Client
 │   │   └── utils.ts
 │   ├── hooks/
 │   │   └── useSupabaseQuery.ts  # useTable, useInsert, useUpdate, useDelete
@@ -469,7 +554,8 @@ bhr-console/
 - Live URL: https://bhr-console.vercel.app
 - Framework: Vite
 - SPA routing via `vercel.json` rewrites
-- Deploy: `npx vercel --prod` or push to GitHub
+- Deploy: push to `main` branch → Vercel auto-deploys (GitHub App connected ✅)
+- Manual deploy (fallback only): `npx vercel --prod`
 
 ### Supabase Edge Functions
 - Deploy: `SUPABASE_ACCESS_TOKEN=sbp_... npx supabase functions deploy invite-user --project-ref szunbwkmldepkwpxojma --no-verify-jwt`
@@ -483,10 +569,13 @@ bhr-console/
 ## Pending / TODO
 
 - **Resend domain verification**: Verify `banani-hr.com` at https://resend.com/domains to send invite emails to any address (not just account owner)
-- **GitHub → Vercel auto-deploy**: Install the Vercel GitHub App at https://github.com/apps/vercel to enable auto-deploys on push
+
+## ✅ Completed Infrastructure
+
+- **GitHub → Vercel auto-deploy**: ✅ DONE — `banani-oren/bhr-console` is connected to Vercel. Every `git push origin main` triggers an automatic deploy. No manual `vercel --prod` needed.
 
 ---
 
-*Last updated: April 2026 — v3*
+*Last updated: April 2026 — v5 (full schema audit: unified client+agreement fields, single contact, renumbered pages, corrected deployment status)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*

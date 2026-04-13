@@ -14,6 +14,7 @@ export type Profile = {
 export type Client = {
   id: string
   name: string
+  company_id: string | null
   tax_id: string | null
   group_name: string | null
   address: string | null
@@ -22,6 +23,15 @@ export type Client = {
   email: string | null
   status: string
   notes: string | null
+  agreement_type: string | null
+  commission_percent: number | null
+  salary_basis: string | null
+  warranty_days: number | null
+  payment_terms: string | null
+  payment_split: string | null
+  advance: string | null
+  exclusivity: boolean
+  agreement_file: string | null
   created_at: string
 }
 

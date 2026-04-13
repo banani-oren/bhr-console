@@ -28,30 +28,6 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 // ---------------------------------------------------------------------------
-// Helper – fetch profile row for a given user id
-// ---------------------------------------------------------------------------
-
-async function fetchProfile(userId: string): Promise<Profile | null> {
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-
-    if (error) {
-      console.error('Error fetching profile:', error.message)
-      return null
-    }
-
-    return data as Profile
-  } catch (err) {
-    console.error('Profile fetch exception:', err)
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
@@ -66,35 +42,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Use onAuthStateChange ONLY — it fires INITIAL_SESSION on mount,
     // which replaces the need for a separate getSession() call.
     // This avoids the race condition that causes auth lock conflicts.
+    const timeout = setTimeout(() => {
+      if (!cancelled) setLoading(false)
+    }, 5000)
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (cancelled) return
 
-      const currentUser = session?.user ?? null
-      setUser(currentUser)
-
-      if (currentUser) {
-        const p = await fetchProfile(currentUser.id)
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
         if (!cancelled) {
-          setProfile(p)
+          setUser(session.user)
+          setProfile(profile as Profile | null)
         }
       } else {
-        setProfile(null)
+        if (!cancelled) {
+          setUser(null)
+          setProfile(null)
+        }
       }
 
-      if (!cancelled) {
-        setLoading(false)
-      }
+      if (!cancelled) setLoading(false)
+      clearTimeout(timeout)
     })
-
-    // Safety timeout — if auth never resolves (network issue, stale token),
-    // stop showing the loading screen after 5 seconds
-    const timeout = setTimeout(() => {
-      if (!cancelled) {
-        setLoading(false)
-      }
-    }, 5000)
 
     return () => {
       cancelled = true
