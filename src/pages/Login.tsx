@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
+import { supabase } from '@/lib/supabase'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -10,26 +11,35 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState('')
 
-  const { user, signIn } = useAuth()
+  const { user } = useAuth()
 
   // If already logged in, redirect to dashboard
   if (user) {
     return <Navigate to="/" replace />
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
-    setError(null)
     setLoading(true)
+    setError('')
     try {
-      await signIn(email, password)
-      // Don't navigate — onAuthStateChange updates user state,
-      // then the `if (user)` check above triggers redirect
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'שגיאה בהתחברות')
-    } finally {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) {
+        console.error('Login error:', error)
+        setError(error.message)
+        setLoading(false)
+        return
+      }
+      // On success: do NOT setLoading(false) here.
+      // onAuthStateChange in auth.tsx fires, sets user state, and the `if (user)`
+      // check above triggers <Navigate to="/" /> which unmounts this component.
+      // Add a 10-second safety timeout to reset loading if redirect never happens:
+      setTimeout(() => setLoading(false), 10000)
+    } catch (err) {
+      console.error('Login exception:', err)
+      setError('שגיאה בהתחברות, נסה שנית')
       setLoading(false)
     }
   }
@@ -48,7 +58,7 @@ export default function Login() {
         </CardHeader>
 
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleLogin} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="email">אימייל</Label>
               <Input
