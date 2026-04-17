@@ -513,11 +513,12 @@ export default function Portal() {
         .from('profiles')
         .select('*')
         .eq('portal_token', token)
-        .maybeSingle()
+        .limit(1)
       if (error) throw error
-      return data as Profile | null
+      return (data?.[0] ?? null) as Profile | null
     },
     enabled: !!token,
+    retry: false,
   })
 
   // ── loading state ──────────────────────────────────────────────────────
