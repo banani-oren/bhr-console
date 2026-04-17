@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { supabase } from '@/lib/supabase'
+import { supabasePublic as supabase } from '@/lib/supabasePublic'
 import type { Profile, HoursLog, Transaction, BonusTier } from '@/lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
@@ -505,27 +505,21 @@ export default function Portal() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token') ?? ''
 
-  console.log('[Portal] mount', { token, hasToken: !!token })
-
-  const { data: member, isLoading, isError, status, fetchStatus } = useQuery<Profile | null>({
+  const { data: member, isLoading, isError } = useQuery<Profile | null>({
     queryKey: ['portal-member', token],
     queryFn: async () => {
-      console.log('[Portal] queryFn running', { token })
       if (!token) return null
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('portal_token', token)
         .limit(1)
-      console.log('[Portal] queryFn result', { error, count: data?.length })
       if (error) throw error
       return (data?.[0] ?? null) as Profile | null
     },
     enabled: !!token,
     retry: false,
   })
-
-  console.log('[Portal] render', { isLoading, isError, status, fetchStatus, hasMember: !!member })
 
   // ── loading state ──────────────────────────────────────────────────────
   if (isLoading) {
