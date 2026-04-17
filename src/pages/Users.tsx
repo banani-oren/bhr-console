@@ -113,6 +113,7 @@ export default function Users() {
   const [isInviting, setIsInviting] = useState(false)
   const [inviteSuccess, setInviteSuccess] = useState(false)
   const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteWarning, setInviteWarning] = useState<string | null>(null)
 
   // Delete dialog
   const [deleteTarget, setDeleteTarget] = useState<UserProfile | null>(null)
@@ -131,6 +132,7 @@ export default function Users() {
     setInviteForm(emptyInviteForm)
     setInviteSuccess(false)
     setInviteError(null)
+    setInviteWarning(null)
     setInviteOpen(true)
   }
 
@@ -139,6 +141,7 @@ export default function Users() {
     setInviteForm(emptyInviteForm)
     setInviteSuccess(false)
     setInviteError(null)
+    setInviteWarning(null)
   }
 
   async function handleInvite() {
@@ -163,6 +166,12 @@ export default function Users() {
       // Auth trigger auto-creates profile row; refresh the list
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
       setInviteSuccess(true)
+      if (data?.email_warning) {
+        setInviteWarning(
+          `המשתמש נוצר, אך שליחת האימייל נכשלה (${data.email_warning}). ` +
+            `ניתן להעתיק את קישור הפורטל מדף הצוות או להפעיל איפוס סיסמה.`,
+        )
+      }
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש'
@@ -340,12 +349,22 @@ export default function Users() {
             <div className="space-y-4 py-2">
               <div className="rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 p-4 space-y-2">
                 <p className="text-sm font-semibold text-green-800 dark:text-green-300">
-                  ההזמנה נשלחה בהצלחה ✓
+                  המשתמש נוצר בהצלחה ✓
                 </p>
                 <p className="text-sm text-green-700 dark:text-green-400">
-                  נשלח אימייל הזמנה ל-{inviteForm.email}. המשתמש יוכל להגדיר סיסמה דרך הקישור באימייל.
+                  {inviteWarning
+                    ? `המשתמש ${inviteForm.email} נוצר במערכת.`
+                    : `נשלח אימייל הזמנה ל-${inviteForm.email}. המשתמש יוכל להגדיר סיסמה דרך הקישור באימייל.`}
                 </p>
               </div>
+
+              {inviteWarning && (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4">
+                  <p className="text-sm text-amber-800 dark:text-amber-300">
+                    {inviteWarning}
+                  </p>
+                </div>
+              )}
 
               <DialogFooter className="flex gap-2 flex-row-reverse">
                 <Button

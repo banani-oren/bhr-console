@@ -81,35 +81,51 @@ serve(async (req) => {
       </html>
     `
 
-    const resendRes = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${resendKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: 'BHR Console <onboarding@resend.dev>',
-        to: email,
-        subject: 'הוזמנת להצטרף ל-BHR Console',
-        html: emailHtml,
-      }),
-    })
+    // The user + profile are now created. The invite is considered successful
+    // at this point — email delivery is a secondary concern because the Resend
+    // free tier (onboarding@resend.dev sender) only reaches the Resend account
+    // owner. We treat a send failure as a warning, not a hard error, so the
+    // admin UI still advances (user appears in /users and /team immediately),
+    // and the admin can copy the portal link or trigger password reset manually.
+    let emailSent = false
+    let emailError: string | null = null
+    let emailId: string | null = null
 
-    const resendData = await resendRes.json()
-
-    if (!resendRes.ok) {
-      return new Response(
-        JSON.stringify({
-          error: `Email send failed: ${resendData.message || 'unknown'}`,
-          user_created: true,
-          user_id: userId,
+    try {
+      const resendRes = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${resendKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'BHR Console <onboarding@resend.dev>',
+          to: email,
+          subject: 'הוזמנת להצטרף ל-BHR Console',
+          html: emailHtml,
         }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+      })
+
+      const resendData = await resendRes.json()
+      if (resendRes.ok) {
+        emailSent = true
+        emailId = resendData.id ?? null
+      } else {
+        emailError = resendData?.message || resendData?.error || `HTTP ${resendRes.status}`
+      }
+    } catch (err) {
+      emailError = err instanceof Error ? err.message : 'Unknown email send error'
     }
 
     return new Response(
-      JSON.stringify({ success: true, user_id: userId, email_id: resendData.id }),
+      JSON.stringify({
+        success: true,
+        user_id: userId,
+        email_sent: emailSent,
+        email_id: emailId,
+        email_warning: emailError,
+        action_link: actionLink,
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (err) {
