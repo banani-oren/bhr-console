@@ -505,21 +505,27 @@ export default function Portal() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token') ?? ''
 
-  const { data: member, isLoading, isError } = useQuery<Profile | null>({
+  console.log('[Portal] mount', { token, hasToken: !!token })
+
+  const { data: member, isLoading, isError, status, fetchStatus } = useQuery<Profile | null>({
     queryKey: ['portal-member', token],
     queryFn: async () => {
+      console.log('[Portal] queryFn running', { token })
       if (!token) return null
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('portal_token', token)
         .limit(1)
+      console.log('[Portal] queryFn result', { error, count: data?.length })
       if (error) throw error
       return (data?.[0] ?? null) as Profile | null
     },
     enabled: !!token,
     retry: false,
   })
+
+  console.log('[Portal] render', { isLoading, isError, status, fetchStatus, hasMember: !!member })
 
   // ── loading state ──────────────────────────────────────────────────────
   if (isLoading) {
