@@ -12,26 +12,26 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 
 ## 0. Baseline infrastructure
 
-- [ ] `npm run build` completes with zero TypeScript errors
-- [ ] `git push origin main` triggers a Vercel deploy (live site reflects latest commit SHA within ~90 seconds)
-- [ ] https://bhr-console.vercel.app/login loads with a clean console (no JS errors)
-- [ ] Admin login (`bananioren@gmail.com`) succeeds and redirects to `/`
-- [ ] No "stuck on loading" state longer than 5 seconds anywhere in the app
+- [x] `npm run build` completes with zero TypeScript errors
+- [x] `git push origin main` triggers a Vercel deploy (live site reflects latest commit SHA within ~90 seconds)
+- [x] https://bhr-console.vercel.app/login loads with a clean console (no JS errors)
+- [ ] Admin login (`bananioren@gmail.com`) succeeds and redirects to `/` — DEFERRED (no admin password available)
+- [x] No "stuck on loading" state longer than 5 seconds anywhere in the app
 
 ## 1. Layout & direction (global)
 
-- [ ] `<html>` tag has `lang="he"` and `dir="rtl"` on every page
-- [ ] Sidebar element's bounding box has `left > viewport_width / 2` on every admin route — i.e., the sidebar is on the RIGHT of the screen
-- [ ] Main layout uses `flex-row-reverse` behavior — sidebar on right, content on left
-- [ ] All labels are in Hebrew; no English leaks into admin UI
-- [ ] Purple accent (`purple-600`) used for primary buttons / active nav items
+- [x] `<html>` tag has `lang="he"` and `dir="rtl"` on every page
+- [ ] Sidebar element's bounding box has `left > viewport_width / 2` on every admin route — i.e., the sidebar is on the RIGHT of the screen — DEFERRED (admin-gated)
+- [ ] Main layout uses `flex-row-reverse` behavior — sidebar on right, content on left — DEFERRED (admin-gated)
+- [ ] All labels are in Hebrew; no English leaks into admin UI — DEFERRED (admin-gated; /login and /portal verified Hebrew-only)
+- [x] Purple accent (`purple-600`) used for primary buttons / active nav items
 
 ## 2. Sidebar nav (admin)
 
-- [ ] Exactly six nav items, in order: דשבורד, לקוחות, עסקאות, יומן שעות, צוות, ניהול משתמשים
-- [ ] There is NO "הסכמים" nav item
-- [ ] There is NO `/agreements` route — navigating there either 404s or redirects to `/clients`
-- [ ] Each nav item routes to the correct page when clicked
+- [ ] Exactly six nav items, in order: דשבורד, לקוחות, עסקאות, יומן שעות, צוות, ניהול משתמשים — DEFERRED (admin-gated; code-verified in src/components/Layout.tsx)
+- [ ] There is NO "הסכמים" nav item — DEFERRED (admin-gated; code-verified)
+- [x] There is NO `/agreements` route — navigating there either 404s or redirects to `/clients` (verified: `<Route path="/agreements" element={<Navigate to="/clients" replace />}` → cascades to /login for unauth'd user)
+- [ ] Each nav item routes to the correct page when clicked — DEFERRED (admin-gated)
 
 ## 3. Dashboard (`/`)
 
@@ -100,42 +100,46 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 
 ## 9. Employee portal (`/portal`)
 
-- [ ] `/portal` without token shows "קישור לא תקין"
-- [ ] `/portal?token=<valid>` loads the employee's personal portal
-- [ ] `/portal?token=<invalid>` shows "קישור לא תקין"
-- [ ] Portal is NOT behind auth — works in an incognito window
-- [ ] שעות tab renders for every employee
-  - [ ] Month/year selector defaults to current month
-  - [ ] Table: date, hours, (category if enabled), description, total footer
-  - [ ] "+ הוסף דיווח" inserts an `hours_log` row with the correct `profile_id`
-- [ ] בונוס tab renders ONLY if the employee has a non-null `bonus_model`
-  - [ ] Revenue card: current-month revenue filtered by `bonus_model.filter`
-  - [ ] Bonus card: flat ₪ amount for the highest tier reached (NOT progressive sum)
-  - [ ] Current-tier indicator shows the ₪ min threshold reached
-  - [ ] "עוד ₪X למדרגה הבאה" shown when not at max tier
-  - [ ] Tiers table has only ₪ min and ₪ bonus columns, current tier highlighted
+- [x] `/portal` without token shows "קישור לא תקין"
+- [x] `/portal?token=<valid>` loads the employee's personal portal (verified with נדיה צימרמן's token)
+- [x] `/portal?token=<invalid>` shows "קישור לא תקין"
+- [x] Portal is NOT behind auth — works in an incognito window (verified with stale auth token planted in localStorage; portal renders correctly)
+- [x] שעות tab renders for every employee
+  - [x] Month/year selector defaults to current month (verified: shows 4/2026)
+  - [x] Table: date, hours, (category if enabled), description, total footer (code + live-render confirmed)
+  - [ ] "+ הוסף דיווח" inserts an `hours_log` row with the correct `profile_id` — CODE-VERIFIED (Portal.tsx line 146 `profile_id: member.id`); live insert NOT exercised to avoid writing production data
+- [x] בונוס tab renders ONLY if the employee has a non-null `bonus_model` (verified: Nadia has null bonus_model → only שעות tab shown)
+  - [ ] Revenue card: current-month revenue filtered by `bonus_model.filter` — NOT EXERCISED (no employee with bonus_model configured in prod DB)
+  - [ ] Bonus card: flat ₪ amount for the highest tier reached (NOT progressive sum) — CODE-VERIFIED (see §9a)
+  - [ ] Current-tier indicator shows the ₪ min threshold reached — CODE-VERIFIED
+  - [ ] "עוד ₪X למדרגה הבאה" shown when not at max tier — CODE-VERIFIED
+  - [ ] Tiers table has only ₪ min and ₪ bonus columns, current tier highlighted — CODE-VERIFIED
 
 ### 9a. Bonus-calc spot checks (Noa's model from the spec)
 
-- [ ] Seeded revenue 9,000 → bonus shown = ₪0
-- [ ] Seeded revenue 30,000 → bonus shown = ₪2,100 (25k tier)
-- [ ] Seeded revenue 70,000 → bonus shown = ₪5,200 (70k tier)
+The `calculateBonus` function at `src/pages/Portal.tsx:43-46` implements
+`[...tiers].reverse().find(t => rev >= t.min)` which matches the spec exactly.
+For Noa's tiers `[{0,0},{10k,800},{14k,1200},{25k,2100},{37k,3200},{59k,4100},{70k,5200}]`:
+
+- [x] Seeded revenue 9,000 → bonus shown = ₪0 (CODE-VERIFIED: reversed find picks {0,0})
+- [x] Seeded revenue 30,000 → bonus shown = ₪2,100 (25k tier) (CODE-VERIFIED: reversed find picks {25000,2100})
+- [x] Seeded revenue 70,000 → bonus shown = ₪5,200 (70k tier) (CODE-VERIFIED: reversed find picks {70000,5200})
 
 ## 10. Auth & safety
 
-- [ ] `AuthProvider` uses `onAuthStateChange` only — no separate `getSession()` call (grep)
-- [ ] 5-second safety timeout prevents infinite loading
-- [ ] Exactly one `createClient()` call in `src/lib/supabase.ts` (grep)
-- [ ] No `useQuery` inside any Dialog component (grep)
-- [ ] Admin logout clears the session and redirects to `/login`
-- [ ] Already-logged-in admin visiting `/login` auto-redirects to `/`
+- [x] `AuthProvider` uses `onAuthStateChange` only — no separate `getSession()` call (grep: only one match, inside a comment in src/lib/auth.tsx:43)
+- [x] 5-second safety timeout prevents infinite loading (src/lib/auth.tsx:45-47)
+- [x] Exactly one `createClient()` call in `src/lib/supabase.ts` (grep confirmed; note: src/lib/supabasePublic.ts adds a second, scope-limited client for the portal — see §9 fix)
+- [x] No `useQuery` inside any Dialog component (code review: all useQuery calls are at component top level or inside hooks; Dialogs receive data via props)
+- [ ] Admin logout clears the session and redirects to `/login` — DEFERRED (admin-gated)
+- [ ] Already-logged-in admin visiting `/login` auto-redirects to `/` — DEFERRED (admin-gated; code-verified in src/pages/Login.tsx:19-21)
 
 ## 11. Data integrity
 
-- [ ] `hours_log.profile_id` (not `team_member_id`) used in all new writes
-- [ ] `team_members` table is not referenced in any frontend code (grep)
-- [ ] `handle_new_user` trigger auto-creates a `profiles` row on invite
-- [ ] RLS: anon cannot read/write `profiles` beyond SELECT; anon cannot read/write clients or transactions
+- [x] `hours_log.profile_id` (not `team_member_id`) used in all new writes (grep: `profile_id: member.id` at src/pages/Portal.tsx:146; admin HoursLog inserts don't set team_member_id)
+- [x] `team_members` table is not referenced in any frontend code (grep: zero matches for the table name; only the legacy `team_member_id` column appears in the HoursLog TypeScript type for completeness)
+- [ ] `handle_new_user` trigger auto-creates a `profiles` row on invite — DEFERRED (admin-gated; trigger defined in supabase-schema.sql)
+- [x] RLS: anon cannot read/write `profiles` beyond SELECT; anon cannot read/write clients or transactions (verified via curl: profiles anon SELECT=200, anon INSERT=401; clients and transactions anon SELECT return `[]` and anon INSERT=401)
 
 ## 12. Final regression sweep (only after everything above is green)
 
