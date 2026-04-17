@@ -1,7 +1,11 @@
-# BHR Console — Project Brief
+# BHR Console — Project Brief (v7)
 
 > **Claude Code Instructions**: Before making any changes, read this entire file.
 > After every change, follow the **Mandatory Development Workflow** section — build, QA, commit, push, verify deployment.
+>
+> Admin authentication uses the **magic-link flow** (see Auth Flow below). There is no
+> shared admin password. Autonomous runs generate a one-shot link via the Supabase
+> Admin API — see `CLAUDE_CODE_AUTONOMOUS.md`.
 
 ## Overview
 **BHR Console** is an HR consulting financial management system for Banani HR.
@@ -423,7 +427,22 @@ Flow:
 ## Auth Flow
 
 ### Admin login (`/login`):
-- Email + password form
+
+The UI still renders an email+password form (`src/pages/Login.tsx`) for day-to-day
+use, but the **canonical admin-authentication flow is magic link** — used by Oren
+interactively and by any autonomous run per `CLAUDE_CODE_AUTONOMOUS.md`.
+
+**Magic-link flow (canonical):**
+1. Generate a one-shot link via the Supabase Admin API using `SUPABASE_SERVICE_ROLE_KEY`:
+   ```
+   POST $VITE_SUPABASE_URL/auth/v1/admin/generate_link
+   { "type": "magiclink", "email": "bananioren@gmail.com" }
+   ```
+2. Open `action_link` from the response. Supabase consumes the token, sets the
+   session, and redirects into the app at `/`.
+3. Session expires after ~1 hour; generate a fresh link and re-enter if needed.
+
+**Password flow (fallback, Login.tsx):**
 - Calls `supabase.auth.signInWithPassword()` directly (not through useAuth wrapper)
 - On success: do NOT call `setLoading(false)` — let `onAuthStateChange` update user state, which triggers `if (user) return <Navigate to="/" />` in Login.tsx
 - On error: `setError(error.message)` + `setLoading(false)` immediately, `console.error` for debugging
@@ -506,7 +525,22 @@ Flow:
 
 8. **Auth flow — no race condition**: Use `onAuthStateChange` only (not `getSession()`). The `INITIAL_SESSION` event provides the session on mount. A 5-second safety timeout prevents the loading screen from hanging forever.
 
-9. **Supabase client singleton**: Only one `createClient()` call exists in `src/lib/supabase.ts`. All files import the shared instance. The file validates that `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` exist at startup — throws if missing.
+9. **Supabase clients — two-client architecture**:
+   - `src/lib/supabase.ts` — the **admin/authenticated client**. Single `createClient()`
+     call with default auth options (persists session to `localStorage`, auto-refreshes).
+     Every admin page imports this. The file validates that `VITE_SUPABASE_URL` and
+     `VITE_SUPABASE_ANON_KEY` exist at startup — throws if missing.
+   - `src/lib/supabasePublic.ts` — the **token-only portal client**. Separate
+     `createClient()` call with `persistSession:false`, `autoRefreshToken:false`,
+     `detectSessionInUrl:false`. Imported ONLY by `src/pages/Portal.tsx`.
+   - **Why two clients.** The employee portal is accessed via `?token=...` on devices
+     that may also have an admin's stale auth token in `localStorage`. If the portal
+     used the shared admin client, GoTrue's session-recovery flow would block every
+     `.from(...)` call while trying to refresh the stale admin session, and the portal
+     would hang on `טוען פורטל...` indefinitely. The scope-limited public client
+     never touches auth state, so portal queries never queue behind session recovery.
+   - **Rule.** Do NOT import `supabasePublic` anywhere except `src/pages/Portal.tsx`.
+     Do NOT add a third `createClient()` call without updating this section.
 
 10. **Login pattern**: Login.tsx calls `supabase.auth.signInWithPassword()` directly. On success, leaves `loading=true` and relies on `onAuthStateChange` → `setUser` → `<Navigate to="/" />` to redirect. On error, resets loading immediately with the error message. A 10-second safety timeout resets loading if the redirect never fires.
 
@@ -530,12 +564,13 @@ bhr-console/
 │   │   ├── Team.tsx         # queries profiles WHERE role='employee'
 │   │   ├── Users.tsx        # invite via edge function
 │   │   ├── Login.tsx
-│   │   └── Portal.tsx       # queries profiles by portal_token
+│   │   └── Portal.tsx       # queries profiles by portal_token — uses supabasePublic
 │   ├── lib/
-│   │   ├── supabase.ts      # singleton client
-│   │   ├── auth.tsx          # AuthProvider (onAuthStateChange only)
-│   │   ├── types.ts          # Profile, Client (includes agreement fields), Transaction, HoursLog, BonusTier, BonusModel
-│   │   │                        # Note: Agreement type is deprecated — agreement fields live on Client
+│   │   ├── supabase.ts        # admin/authenticated client (persistSession:true)
+│   │   ├── supabasePublic.ts  # token-only portal client (persistSession:false) — see Key Implementation Notes #9
+│   │   ├── auth.tsx           # AuthProvider (onAuthStateChange only)
+│   │   ├── types.ts           # Profile, Client (includes agreement fields), Transaction, HoursLog, BonusTier, BonusModel
+│   │   │                          # Note: Agreement type is deprecated — agreement fields live on Client
 │   │   └── utils.ts
 │   ├── hooks/
 │   │   └── useSupabaseQuery.ts  # useTable, useInsert, useUpdate, useDelete
@@ -584,6 +619,6 @@ bhr-console/
 
 ---
 
-*Last updated: April 17 2026 — v6 (login fix, sidebar RTL fix, env validation, auth pattern update)*
+*Last updated: April 17 2026 — v7 (magic-link admin auth, two-client architecture for portal stale-session fix)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*
