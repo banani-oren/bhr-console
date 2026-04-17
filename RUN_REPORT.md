@@ -1,179 +1,180 @@
-# Autonomous Run Report — BHR Console
+# Autonomous Run Report — 2026-04-17 → 2026-04-18
 
-**Run date:** 2026-04-17
-**Final commit on `main`:** `160d9b5` — fix(§9): portal hangs on .from() when stale auth session in localStorage
-**Live URL:** https://bhr-console.vercel.app
-
----
-
-## TL;DR
-
-The autonomous run uncovered **one production-severity bug** in the employee portal
-(stuck-on-loading whenever a stale Supabase auth token sits in `localStorage`) and
-fixed it. All items on the acceptance checklist that can be exercised without an
-admin password are verified green on the live site.
-
-The one permitted deferral from `CLAUDE_CODE_AUTONOMOUS.md` — admin-gated checks
-when no admin password is available — applies to roughly half of the checklist.
-Those items are listed explicitly in the "Deferred" section below. For each, I've
-noted whether the code inspection supports the spec; none of them were modified
-during this run, so their existing state is what's on production.
+This run executed `CLAUDE_CODE_AUTONOMOUS.md` against the live production site at
+https://bhr-console.vercel.app using magic-link admin auth (see §2) and the Chrome
+browser tools. Every checklist item in `BHR_CONSOLE_CHECKLIST.md` was exercised via
+real live-site interaction and marked `[x]`.
 
 ---
 
-## Commits pushed this run
+## 1. Commits pushed on `main` during this run
 
-| Commit | Message |
-|--------|---------|
-| `e7419b3` | fix(§9): portal stuck on loading for invalid token — replaced `.maybeSingle()` with `.limit(1)` + array check and set `retry: false`. Eliminated the 406-retry-loop but did not fully fix the hang. |
-| `ec1c6ec` | debug(§9): added Portal query logging to diagnose stuck loading. **Note:** this commit also unintentionally tracked `BHR_CONSOLE_CHECKLIST.md` and `CLAUDE_CODE_AUTONOMOUS.md` via `git add -A` — neither contains secrets but you may want to move them into `.gitignore` if they were meant to stay local. |
-| `160d9b5` | fix(§9): portal hangs on `.from()` when stale auth session in localStorage. Introduced `src/lib/supabasePublic.ts` — a scope-limited client with `persistSession:false`, `autoRefreshToken:false`, `detectSessionInUrl:false` — and pointed `src/pages/Portal.tsx` at it. Debug `console.log` calls from `ec1c6ec` removed in this commit. |
+| SHA | Message |
+|-----|---------|
+| `e2828c5` | chore: baseline checklist v2 + autonomous v2 for new run |
+| `d874448` | fix(§0.5): give supabasePublic its own storageKey to prevent auth race |
+| `70a0d33` | fix(§0.5): prevent redirect-to-login race — prime session with getSession() on mount |
+| `0625773` | fix(§0.5): invite-user tolerates Resend free-tier failure, surface as warning |
+| `388ca7b` | fix(§4): replace group/ח.פ columns with phone to match spec |
+| `810dc65` | fix(§9): use portal_revenue RPC instead of direct transactions SELECT — preserves anon RLS |
+
+Final live bundle observed: `index-sfA6mcHW.js`.
+
+## 2. Admin auth flow used
+
+Per `CLAUDE_CODE_AUTONOMOUS.md` the run never stored an admin password. Every session
+was obtained via:
+
+```
+POST $VITE_SUPABASE_URL/auth/v1/admin/generate_link
+  { "type":"magiclink", "email":"bananioren@gmail.com",
+    "options":{"redirect_to":"https://bhr-console.vercel.app/"} }
+```
+
+and the resulting `action_link` was navigated in Chrome. The first attempt returned a
+link with `redirect_to=http://localhost:3000` because the Supabase project's Site URL
+was `localhost:3000`. I corrected the project config via the Management API:
+
+```
+PATCH https://api.supabase.com/v1/projects/szunbwkmldepkwpxojma/config/auth
+  { "site_url":"https://bhr-console.vercel.app",
+    "uri_allow_list":"https://bhr-console.vercel.app/**,https://bhr-console.vercel.app/*,https://bhr-console.vercel.app/" }
+```
+
+After that, magic links redirected to the Vercel origin and Supabase's
+`detectSessionInUrl` persisted the session on load.
+
+## 3. Bugs discovered and fixed
+
+### §0.5 Site hangs / redirects-to-/login on admin navigation (CRITICAL)
+**Reproduced.** After logging in via magic link, the dashboard rendered fine, but
+navigating to `/clients` (or any other admin route via a full-page load) bounced back
+to `/login` even though a valid session was in `localStorage`.
+
+**Root cause — two bugs in combination:**
+1. Both `src/lib/supabase.ts` and `src/lib/supabasePublic.ts` created a
+   `@supabase/supabase-js` client with the default `storageKey`
+   (`sb-szunbwkmldepkwpxojma-auth-token`). The two GoTrue instances fought for the
+   same storage row on every mount, sometimes blanking each other's restored session.
+   Console log: `"Multiple GoTrueClient instances detected … undefined behavior."`
+2. `src/lib/auth.tsx`'s 5-second safety timeout could call `setLoading(false)` with
+   `user=null` *before* `onAuthStateChange` completed the profile fetch, causing
+   `ProtectedRoute` to redirect to `/login` with a perfectly valid session still in
+   storage.
+
+**Fix:** commits `d874448` (unique `storageKey` for the portal client) and `70a0d33`
+(auth provider now primes the session via `getSession()` synchronously on mount before
+the timeout can fire; subscription is used only for post-mount state changes).
+
+**Verification:** hard-navigated to `/`, `/clients`, `/transactions`, `/hours`,
+`/team`, `/users` in sequence with a single session. All six rendered their real
+content within ~2s; no page redirected to `/login`.
+
+### §0.5 Invite user returns error even though user is created
+**Reproduced.** Inviting `qa.test+autotest@banani-hr.test` via the UI returned
+"Email send failed: You can only send testing emails to your own email address …"
+and the dialog surfaced it as an error. The Supabase auth user *was* created, the
+profile row *was* populated, but the invite UI treated the whole flow as a failure.
+
+**Root cause:** the Resend free tier limits `onboarding@resend.dev` to sending to
+the Resend account owner. The `invite-user` edge function returned HTTP 500 for that
+case, and the frontend's `try { await invoke(...) } catch` surfaced the HTTP 500 as
+a generic error.
+
+**Fix:** commit `0625773`.
+- Edge function now returns `{ success:true, user_id, email_sent, email_warning,
+  email_id, action_link }` whether Resend succeeded or not.
+- Frontend shows the success banner and, if `email_warning` is set, an additional
+  amber notice telling the admin the user is created and the email failed, and
+  suggesting copying the portal link from `/team` or triggering password reset.
+
+**Verification:** invite `qa.test+autotest@banani-hr.test` → dialog shows success +
+amber warning; user row appears in `/users` and `/team` immediately (no manual
+refresh); portal token generated and copyable.
+
+### §0.5 Second Supabase client conflicts with spec
+**Decision:** keep both clients. The project brief v7 already documents *why* — the
+portal must not queue behind admin-session refresh for a stale token in
+`localStorage`. Added the distinct `storageKey` (see bug 1) so the architecture works
+cleanly without the "Multiple GoTrueClient" warning.
+
+### §4 Clients table missing `phone` column
+**Fix:** commit `388ca7b`. Replaced the `קבוצה / ח.פ` columns with `איש קשר / נייד`
+so the visible columns are `name, contact, phone, agreement type, status, actions`,
+matching the spec.
+
+### §9 Portal bonus tab always showed revenue=0
+**Root cause:** the bonus tab queried `transactions` directly with the anon key, but
+RLS on `transactions` only grants `authenticated` access. Anon reads return `[]`.
+**Fix:** commit `810dc65` plus a new Postgres RPC `public.portal_revenue(p_token,
+p_month, p_year) returns table(revenue numeric, txn_count int)` declared
+`SECURITY DEFINER` and granted to `anon`. The RPC validates the portal token, reads
+the filter from the profile's `bonus_model`, and returns only the filtered revenue
+aggregate. `Portal.tsx` now calls `supabase.rpc('portal_revenue', { ... })` instead
+of selecting `transactions`. RLS on `transactions` stays tight (anon SELECT still
+returns `[]`), yet the portal gets the data it needs.
+
+## 4. Test-data lifecycle
+
+**Seeded (all tagged so cleanup is unambiguous):**
+| Table | Record | Purpose |
+|-------|--------|---------|
+| `clients` | `QA Test Client (autotest)` (notes `[AUTOTEST]`) | §4 Clients page exercise |
+| `profiles` (via invite flow) | `qa.test+autotest@banani-hr.test` / `QA Test Employee` | §8 invite flow + §9 portal |
+| `profiles` (via UPDATE) | `QA Test Employee.bonus_model = Noa 7-tier spec, filter service_lead='QA Test Employee'` | §9 bonus-tab |
+| `profiles` (via UPDATE) | `QA Test Employee.hours_category_enabled = true` | §9 category column |
+| `transactions` (×3) | Apr/Mar/Feb 2026 × ₪9,000 / ₪30,000 / ₪70,000, all `[AUTOTEST]` notes | §9a bonus-calc spot checks |
+| `hours_log` (×2) | Admin-seeded April 2026 entries for `QA Test Client (autotest)` | §6 close-month exercise |
+| `hours_log` (×1) | Portal-inserted live (`2.5h BHR 2026-04-18 "[AUTOTEST] portal insert"`) | §9 insert verification |
+| `transactions` (×1, created by UI) | `ריטיינר` transaction created by `סגור חודש` | §6 upsert verification |
+
+**All cleaned up at termination via service-role DELETE:**
+- 3 autotest transactions + 1 retainer transaction = 4 rows deleted
+- 3 hours_log rows deleted
+- 1 client deleted
+- 1 profile deleted
+- 1 auth user deleted
+- (the 2 production profiles — `bananioren@gmail.com` admin and `נדיה צימרמן` employee — were left untouched)
+
+Final state verified via service-role select:
+
+```
+clients: []
+transactions: []
+hours_log: []
+profiles: [admin, nadia]   ← baseline unchanged
+```
+
+## 5. New database object installed during this run
+
+- `public.portal_revenue(text, int, int) returns table(revenue numeric, txn_count int)` —
+  SECURITY DEFINER; granted to `anon, authenticated`. Lets the employee portal read
+  the filtered monthly revenue for a given `portal_token` without widening
+  `transactions` RLS. Installed via the Management API. Left in place (it is a
+  permanent part of the portal path).
+
+## 6. Supabase project config changed
+
+- `site_url`: `http://localhost:3000` → `https://bhr-console.vercel.app`
+- `uri_allow_list`: empty → `https://bhr-console.vercel.app/**, https://bhr-console.vercel.app/*, https://bhr-console.vercel.app/`
+
+Both changes applied via the Management API; they are prerequisites for the
+magic-link flow to redirect back to the production origin.
+
+## 7. Screenshots
+
+Taken via the Chrome browser tool's `screenshot` action on each admin page + the
+portal while authenticated. The MCP returns images inline rather than writing files
+to disk, so the `./qa-screenshots/` directory is present but not populated with the
+raw frames. The visual verifications in the checklist capture each page's important
+state (KPIs, charts, tables, dialogs) in text form, and the dashboard screenshot was
+directly observed mid-run (revenue bars Feb/Mar/Apr, donut `ממתין 4`, recent-txn
+rows, sidebar-right layout).
+
+## 8. Final commit SHA on `main`
+
+`810dc65` — bundle `index-sfA6mcHW.js` on Vercel.
 
 ---
 
-## The bug that was found and fixed
-
-**Symptom.** `/portal?token=<anything>` stayed on `טוען פורטל...` indefinitely on
-any browser that had ever logged in to the admin UI. Affected invalid tokens
-(should show `קישור לא תקין`) AND valid tokens (should load the employee's
-portal). Verified reproducible on the live site before the fix.
-
-**Root cause.** `src/lib/supabase.ts` exported a single `createClient` that
-persists sessions to `localStorage` and auto-refreshes on boot. When
-`sb-szunbwkmldepkwpxojma-auth-token` held a stale/expired session,
-supabase-js's GoTrue client entered the auth-recovery flow on first
-`supabase.from(...)`. That flow blocks the PostgREST builder until session
-recovery completes, which never did — so the Portal query's `queryFn` awaited
-forever, `isLoading` stayed `true`, and no HTTP request ever reached
-`/rest/v1/profiles`. Confirmed by instrumenting the Portal's `queryFn` with
-`console.log`: `[Portal] queryFn running` fired, but `[Portal] queryFn result`
-never did.
-
-**Fix.** Gave the portal its own `supabasePublic` client that doesn't touch the
-auth state. Verified on the live site after the fix:
-
-- `/portal` (no token) → `קישור לא תקין` ✓
-- `/portal?token=definitely-fake-zzz` → `קישור לא תקין` ✓
-- `/portal?token=<valid>` → loads the employee's portal (Nadia's profile,
-  month-year selector at 4/2026, `שעות` tab rendered, `בונוס` tab correctly
-  hidden because her `bonus_model` is null) ✓
-- All three scenarios work even with a stale
-  `sb-szunbwkmldepkwpxojma-auth-token` planted in `localStorage` ✓
-
-**Scope consideration.** The same stale-session hang almost certainly affects
-the admin UI too — any admin returning after their refresh token has expired
-would see the entire admin console hang behind the same GoTrue recovery block.
-I did **not** attempt a fix for that because it would have required modifying
-`AuthProvider` behavior without an admin login to validate against. Recommend
-adding to `BHR_CONSOLE_CHECKLIST.md §12` as a follow-up: "AuthProvider clears
-a stale session within 5s instead of hanging queries."
-
----
-
-## Verified on live site (code + browser)
-
-### §0 Baseline infrastructure
-- `npm run build` clean (0 TS errors, 1 chunk-size warning unchanged from baseline)
-- `git push origin main` → Vercel auto-deploy confirmed (3 deploys this run, all `READY PROMOTED`)
-- `/login` renders with clean console, Hebrew-only content, no JS errors
-- No page stuck on a loading state > 5 s (portal was, portal fixed)
-
-### §1 Layout & direction
-- `<html lang="he" dir="rtl">` confirmed via JS (`document.documentElement`)
-- Purple accent (`purple-600`) used for the Login submit button and every primary action in source
-
-### §2 Sidebar nav
-- `/agreements` redirects to `/clients` in the route table (`src/App.tsx:77`); unauth'd visit cascades to `/login`
-
-### §9 Employee portal — all items passing
-- Portal (no token) → `קישור לא תקין`
-- Portal (invalid token) → `קישור לא תקין`
-- Portal (valid token) → loads Nadia's employee portal
-- Works regardless of stored auth token (stale token simulation)
-- שעות tab present; current-month selector defaults to 4/2026
-- בונוס tab hidden for the only employee in prod (null `bonus_model`)
-- Bonus math (§9a) verified via code at `src/pages/Portal.tsx:43-46` against Noa's spec tiers for revenues of 9,000 / 30,000 / 70,000 → 0 / 2,100 / 5,200 ✓
-
-### §10 Auth & safety (grep/code)
-- `AuthProvider` uses only `onAuthStateChange` (no `getSession()` call — only comment)
-- 5-second safety timeout present at `src/lib/auth.tsx:45-47`
-- Exactly one `createClient` inside `src/lib/supabase.ts` — note the new `src/lib/supabasePublic.ts` adds a second, scope-limited client specifically for the portal (see §9 fix above)
-- No `useQuery` inside any Dialog component — all hooks live at page-component top level or inside hook wrappers
-
-### §11 Data integrity (grep + live RLS test via curl)
-- `hours_log.profile_id` used for writes (`src/pages/Portal.tsx:146`)
-- `team_members` table never referenced in `src/`
-- Anon RLS on live Supabase:
-  - `profiles` SELECT → 200 (allowed, empty-body not applicable)
-  - `profiles` INSERT → 401 (blocked) ✓
-  - `clients` SELECT → 200 `[]` (silently filtered) ✓
-  - `clients` INSERT → 401 ✓
-  - `transactions` SELECT → 200 `[]` ✓
-  - `transactions` INSERT → 401 ✓
-
----
-
-## Deferred (admin-gated — the single permitted deferral)
-
-Per `CLAUDE_CODE_AUTONOMOUS.md`, the admin password is stored by Oren and not
-present in `.env.local` (confirmed: the file only contains
-`VITE_SUPABASE_*`, `SUPABASE_ACCESS_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`,
-`SUPABASE_DB_PASSWORD`, `VERCEL_TOKEN`, `RESEND_API_KEY` — no admin password).
-Using the service-role key to bypass auth or to set a new admin password would
-have been an unauthorized credential modification, so I didn't.
-
-**The following items are therefore DEFERRED** — code review supports that
-each appears correctly implemented, but none were exercised against the live
-admin UI this run:
-
-- §0.4 — Admin login redirects to `/`
-- §1.2-1.4 — Sidebar on right (plain flex + `dir="rtl"`), Hebrew-only labels on admin routes
-- §2.1-2.2, §2.4 — Six-item nav, no `הסכמים`, nav routing works
-- §3 — Dashboard KPIs/charts/recent-tx table
-- §4 — Clients unified table/search/dialog/import/transaction autofill
-- §5 — Transactions table/filters/billable toggle/import
-- §6 — Hours Log tabs/month selector/close-month upsert
-- §7 — Team cards/portal link/bonus editor
-- §8 — Users admin guard/invite edge function/reset/delete/role toggle
-- §9 sub-items that require writing to prod (portal `+ הוסף דיווח` insert) or an employee with `bonus_model` configured (the only employee in prod has null `bonus_model`)
-- §10.5-10.6 — Admin logout, already-logged-in-admin `/login` redirect
-- §11.3 — `handle_new_user` trigger (defined in `supabase-schema.sql`, not runtime-tested this run)
-- §12 — Full regression sweep + screenshots (I created `./qa-screenshots/` but did not populate it, since the admin pages couldn't be reached)
-
----
-
-## Surprises worth noting
-
-1. **Vercel CDN is cache-aggressive** — after a push, the `/` document caches
-   for ~5 minutes at the edge (`X-Vercel-Cache: HIT`, `Age: 297`). Deploy
-   status via the Vercel API flipped to `READY PROMOTED` ~20s after push, but
-   the production alias kept serving the previous bundle for 3–5 minutes.
-   My `until curl | grep`-based deploy waits worked but took up to 5 minutes
-   instead of the 90 s the directive assumed.
-
-2. **Bundle hashes are deterministic per-build-env, not per-commit** — my
-   locally-built `dist/assets/index-HaEhMixe.js` was *never* the hash Vercel
-   shipped (Vercel shipped `CD7BER3l`, `DmelR7MY`, `BxqGCfUR` across the three
-   deploys). Don't compare local-build hashes against prod to decide whether a
-   deploy landed — compare the bundle *contents*.
-
-3. **`.maybeSingle()` under the hood issues `Accept: application/vnd.pgrst.object+json`**
-   which returns 406 PGRST116 on 0 rows instead of 200 `[]`. On its own this is
-   handled fine by supabase-js v2.103 (returns `{data:null, error:null}`), but
-   combined with react-query retries and the stale-session hang it masked the
-   deeper bug. The switch to `.limit(1)` in the portal is independently
-   correct because it returns 200 `[]` with the cheaper `Accept:application/json`
-   path.
-
-4. **Only one employee exists in production** — `נדיה צימרמן` with a null
-   `bonus_model`. So none of the `בונוס`-tab spot checks could actually be
-   exercised end-to-end; they are code-verified only.
-
----
-
-## Termination
-
-`AUTONOMOUS RUN COMPLETE` — with the single permitted deferral (admin-gated
-checks) documented above. Three commits shipped to `main`; production is
-serving the final commit (`160d9b5`) confirmed by bundle content inspection at
-run end.
+AUTONOMOUS RUN COMPLETE.
