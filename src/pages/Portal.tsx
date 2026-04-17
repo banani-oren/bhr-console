@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabasePublic as supabase } from '@/lib/supabasePublic'
-import type { Profile, HoursLog, Transaction, BonusTier } from '@/lib/types'
+import type { Profile, HoursLog, BonusTier } from '@/lib/types'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   Card,
@@ -340,35 +340,39 @@ function HoursTab({ member }: HoursTabProps) {
 
 interface BonusTabProps {
   member: Profile
+  token: string
 }
 
-function BonusTab({ member }: BonusTabProps) {
+type PortalRevenue = { revenue: number; txn_count: number }
+
+function BonusTab({ member, token }: BonusTabProps) {
   const now = new Date()
   const [month, setMonth] = useState(now.getMonth() + 1)
   const [year, setYear] = useState(now.getFullYear())
 
   const bonusModel = member.bonus_model!
-  const filter = bonusModel.filter
   const tiers = bonusModel.tiers
 
-  const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
-    queryKey: ['portal-bonus-tx', month, year, filter.field, filter.contains],
+  // Use a SECURITY DEFINER RPC rather than a direct transactions SELECT —
+  // the anon key cannot read `transactions` (RLS blocks it), and we do not
+  // want to widen RLS. The RPC validates the portal token server-side and
+  // returns only the filtered revenue sum for the requested month/year.
+  const { data: revenueData, isLoading } = useQuery<PortalRevenue>({
+    queryKey: ['portal-bonus-rpc', token, month, year],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('billing_month', month)
-        .eq('billing_year', year)
-        .ilike(filter.field, `%${filter.contains}%`)
+      const { data, error } = await supabase.rpc('portal_revenue', {
+        p_token: token,
+        p_month: month,
+        p_year: year,
+      })
       if (error) throw error
-      return data as Transaction[]
+      const row = Array.isArray(data) ? data[0] : data
+      return (row as PortalRevenue | null) ?? { revenue: 0, txn_count: 0 }
     },
   })
 
-  const totalRevenue = transactions.reduce(
-    (sum, t) => sum + (t.net_invoice_amount ?? 0),
-    0,
-  )
+  const totalRevenue = Number(revenueData?.revenue ?? 0)
+  const txnCount = revenueData?.txn_count ?? 0
   const bonusAmount = calculateBonus(totalRevenue, tiers)
   const currentTier = getCurrentTier(totalRevenue, tiers)
   const nextThreshold = getNextTierThreshold(totalRevenue, tiers)
@@ -406,7 +410,7 @@ function BonusTab({ member }: BonusTabProps) {
                   {ILS.format(totalRevenue)}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {transactions.length} עסקאות בחודש
+                  {txnCount} עסקאות בחודש
                 </p>
               </CardContent>
             </Card>
@@ -600,7 +604,7 @@ export default function Portal() {
 
           {hasBonusTab && (
             <TabsContent value="bonus">
-              <BonusTab member={member} />
+              <BonusTab member={member} token={token} />
             </TabsContent>
           )}
         </Tabs>
