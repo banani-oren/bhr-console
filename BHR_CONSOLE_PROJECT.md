@@ -424,9 +424,11 @@ Flow:
 
 ### Admin login (`/login`):
 - Email + password form
-- On success: `onAuthStateChange` updates user state → declarative redirect via `<Navigate>`
-- On fail: show error
-- Already logged in: auto-redirect to `/`
+- Calls `supabase.auth.signInWithPassword()` directly (not through useAuth wrapper)
+- On success: do NOT call `setLoading(false)` — let `onAuthStateChange` update user state, which triggers `if (user) return <Navigate to="/" />` in Login.tsx
+- On error: `setError(error.message)` + `setLoading(false)` immediately, `console.error` for debugging
+- 10-second safety timeout resets loading if redirect never fires
+- Already logged in: auto-redirect to `/` via `if (user) return <Navigate to="/" />`
 
 ### Auth context (`src/lib/auth.tsx`):
 - Uses `onAuthStateChange(INITIAL_SESSION)` only — no separate `getSession()` call (avoids race condition)
@@ -460,8 +462,10 @@ Flow:
 - **Component style**: Clean cards with shadows, shadcn/ui components
 - **Layout**: Sidebar navigation (dark) on the **RIGHT** side of the screen — main content on the LEFT
   ```tsx
-  <div className="flex flex-row-reverse min-h-screen">
-    <Sidebar />          {/* appears on RIGHT */}
+  // With dir="rtl" on <html>, plain flex already renders right-to-left.
+  // Do NOT use flex-row-reverse — it double-reverses and puts sidebar LEFT.
+  <div className="flex min-h-screen">
+    <Sidebar />          {/* first child = RIGHT in RTL */}
     <main className="flex-1">...</main>
   </div>
   ```
@@ -502,7 +506,11 @@ Flow:
 
 8. **Auth flow — no race condition**: Use `onAuthStateChange` only (not `getSession()`). The `INITIAL_SESSION` event provides the session on mount. A 5-second safety timeout prevents the loading screen from hanging forever.
 
-9. **Supabase client singleton**: Only one `createClient()` call exists in `src/lib/supabase.ts`. All files import the shared instance.
+9. **Supabase client singleton**: Only one `createClient()` call exists in `src/lib/supabase.ts`. All files import the shared instance. The file validates that `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` exist at startup — throws if missing.
+
+10. **Login pattern**: Login.tsx calls `supabase.auth.signInWithPassword()` directly. On success, leaves `loading=true` and relies on `onAuthStateChange` → `setUser` → `<Navigate to="/" />` to redirect. On error, resets loading immediately with the error message. A 10-second safety timeout resets loading if the redirect never fires.
+
+11. **RTL sidebar**: Layout.tsx uses `<div className="flex min-h-screen">` — NOT `flex-row-reverse`. With `dir="rtl"` on `<html>`, plain `flex` already renders the first child (sidebar) on the RIGHT. Using `flex-row-reverse` double-reverses it to the LEFT — this was a past bug.
 
 ---
 
@@ -513,7 +521,7 @@ bhr-console/
 ├── src/
 │   ├── components/
 │   │   ├── ui/              # shadcn components
-│   │   └── Layout.tsx       # sidebar + header (RTL, flex-row-reverse)
+│   │   └── Layout.tsx       # sidebar + header (RTL, plain flex — dir="rtl" handles direction)
 │   ├── pages/
 │   │   ├── Dashboard.tsx
 │   │   ├── Clients.tsx          # includes agreement fields — no separate Agreements page
@@ -576,6 +584,6 @@ bhr-console/
 
 ---
 
-*Last updated: April 2026 — v5 (full schema audit: unified client+agreement fields, single contact, renumbered pages, corrected deployment status)*
+*Last updated: April 17 2026 — v6 (login fix, sidebar RTL fix, env validation, auth pattern update)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*
