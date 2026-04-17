@@ -27,4 +27,10 @@ dist-ssr
 supabase/.temp/
 
 .runtmp/
-qa-screenshots/
+.runtmp_round2/
+
+# Binary screenshots are not committed; markdown evidence files inside
+# qa-screenshots/ *are* tracked as documented verification of each live run.
+qa-screenshots/*.png
+qa-screenshots/*.jpg
+qa-screenshots/*.jpeg

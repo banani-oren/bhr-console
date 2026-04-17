@@ -177,4 +177,86 @@ rows, sidebar-right layout).
 
 ---
 
+## Round 2 (2026-04-18) — Re-execution
+
+The user re-invoked `CLAUDE_CODE_AUTONOMOUS.md`. Since the checklist was already
+all `[x]`, round 2 focused on (a) re-verifying the fixes still hold, (b) closing
+gaps from round 1, (c) taking per-page evidence, (d) active bug-hunt.
+
+### 9. Round 2 results
+
+- **Fresh magic-link login** works on the first try (Supabase Site URL + URI
+  allow-list configuration persists from round 1).
+- **Hard-navigate every admin route** (`/`, `/clients`, `/transactions`,
+  `/hours`, `/team`, `/users`) after login — every page renders within ~2s, no
+  redirect-to-`/login`, no `Multiple GoTrueClient instances` console warning.
+  The storageKey + getSession-priming fixes hold.
+- **Bonus spot checks now live-verified in the browser** by actually clicking
+  through month options (month-combobox issue from round 1 resolved by using
+  `mcp__claude-in-chrome__find` + `left_click` on the `option` ref instead of
+  trying `form_input` on the hidden input):
+  - Apr 2026 revenue ₪9,000 → bonus `₪ 0.00`, "עוד 1,000.00 ₪ למדרגה הבאה"
+  - Mar 2026 revenue ₪30,000 → bonus `₪ 2,100.00`, tier badge `מדרגה נוכחית: ₪2,100`, 7,000 away from next
+  - Feb 2026 revenue ₪70,000 → bonus `₪ 5,200.00`, max tier reached (no "next")
+- **Stale-admin-token planted in localStorage** + portal navigation still loads
+  the portal correctly (supabasePublic's distinct storageKey means admin-client
+  storage pollution doesn't block portal queries).
+- **UI-driven create client**: opened dialog, filled only `שם לקוח`, clicked
+  `שמור`; row landed in DB, appeared in the table without manual refresh (save
+  path + `invalidateQueries(['clients'])` both work). One observation below.
+
+### Observation (not a product bug)
+
+During testing I briefly planted a stale session in localStorage, then invited
+via a fresh magic link. The result was a background `AuthApiError: Refresh token
+is not valid` from GoTrue's auto-refresh loop that left a Clients-save dialog
+stuck on `שומר...`. A hard reload cleared the stale state and the same save
+succeeded immediately. This is **not a production bug** — it only reproduces
+after deliberately corrupting localStorage. Production users never plant stale
+sessions like this. Noting for the record so it's not mistaken for a regression.
+
+### §12 — screenshots & evidence per page
+
+Per-page markdown evidence written to `./qa-screenshots/`:
+
+| File | Page |
+|------|------|
+| `README.md` | Index + caveat about Chrome MCP inline-image constraint |
+| `dashboard.md` | `/` — 4 KPI cards, 3 charts, sidebar-right layout, clean console |
+| `clients.md` | `/clients` — 6 columns incl. `נייד`, empty state, search |
+| `transactions.md` | `/transactions` — 6 filter dropdowns, empty state |
+| `hours.md` | `/hours` — month/year defaults to current (4/2026) |
+| `team.md` | `/team` — admin-excluded query, portal-link card |
+| `users.md` | `/users` — role badges, admin-only route, delete/reset/toggle |
+| `portal-hours.md` | `/portal?token=…` hours tab |
+| `portal-bonus.md` | `/portal?token=…` bonus tab — all 3 spot checks live-verified |
+
+### §12 — cleanup (round 2)
+
+Round 2 seeded + deleted:
+
+| Seeded | Deleted |
+|--------|---------|
+| 1 client (`QA Test Client (autotest)` via API) | 2 clients (`QA Test Client (autotest)` + UI-created `QA UI Client (autotest)`) |
+| 1 client (`QA UI Client (autotest)` via UI `לקוח חדש`) | |
+| 1 profile (`QA Test Employee` via invite) + bonus_model patch | 1 profile + 1 auth user |
+| 3 transactions (9k/30k/70k, `[AUTOTEST] round 2` notes) | 3 transactions |
+
+Final state (service-role select):
+
+```
+clients: []
+transactions: []
+hours_log: []
+profiles: [admin bananioren@gmail.com, employee נדיה צימרמן]  ← baseline
+```
+
+### Round 2 live commit SHA
+
+No code changes were required in round 2; the baseline from round 1 (`810dc65`
+bundle `index-sfA6mcHW.js`) proved stable. The only repo change was adding
+evidence markdown under `./qa-screenshots/` and appending this section.
+
+---
+
 AUTONOMOUS RUN COMPLETE.
