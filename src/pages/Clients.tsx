@@ -388,10 +388,9 @@ export default function Clients() {
             <TableHeader>
               <TableRow>
                 <TableHead className="text-right">שם לקוח</TableHead>
-                <TableHead className="text-right">קבוצה</TableHead>
-                <TableHead className="text-right">ח.פ</TableHead>
-                <TableHead className="text-right">סוג הסכם</TableHead>
                 <TableHead className="text-right">איש קשר</TableHead>
+                <TableHead className="text-right">נייד</TableHead>
+                <TableHead className="text-right">סוג הסכם</TableHead>
                 <TableHead className="text-right">סטטוס</TableHead>
                 <TableHead className="text-right">פעולות</TableHead>
               </TableRow>
@@ -399,7 +398,7 @@ export default function Clients() {
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                     לא נמצאו לקוחות
                   </TableCell>
                 </TableRow>
@@ -407,10 +406,9 @@ export default function Clients() {
                 filtered.map((client) => (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-purple-50/50" onClick={() => openEdit(client)}>
                     <TableCell className="font-medium">{client.name}</TableCell>
-                    <TableCell>{client.group_name ?? '—'}</TableCell>
-                    <TableCell className="font-mono text-sm">{client.company_id ?? '—'}</TableCell>
-                    <TableCell>{client.agreement_type ?? '—'}</TableCell>
                     <TableCell>{client.contact_name ?? '—'}</TableCell>
+                    <TableCell dir="ltr" className="text-right">{client.phone ?? '—'}</TableCell>
+                    <TableCell>{client.agreement_type ?? '—'}</TableCell>
                     <TableCell>
                       <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
                     </TableCell>
