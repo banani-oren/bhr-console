@@ -1,4 +1,4 @@
-# Autonomous Completion — BHR Console
+# Autonomous Completion — BHR Console (v2)
 
 You are running in autonomous mode. Chrome browser tools are available via the `--chrome`
 integration. Your single job: make every item in `BHR_CONSOLE_CHECKLIST.md` pass on the
@@ -8,74 +8,119 @@ live production site at https://bhr-console.vercel.app, then stop.
 
 1. **Read `BHR_CONSOLE_PROJECT.md` and `BHR_CONSOLE_CHECKLIST.md` in full before any action.**
    They are the source of truth. Re-read `BHR_CONSOLE_PROJECT.md` at the start of every
-   implementation cycle in case it has changed.
+   new implementation cycle.
 2. **English only** for reasoning and commit messages. Hebrew is only for user-facing UI.
-3. **Do not ask questions. Do not wait for input. Do not summarize progress mid-run.**
-   Run until every box in the checklist is `[x]` and the final regression sweep is green.
-4. **A task is DONE only when four gates all pass:**
-   (1) `npm run build` completes with zero errors,
-   (2) local QA (per `BHR_CONSOLE_PROJECT.md`) passes,
-   (3) the commit is pushed to `origin/main`,
+3. **Do not ask questions. Do not wait for input. Do not summarize mid-run.** Run until
+   every box in the checklist is `[x]` and the regression sweep is green, then stop.
+4. **NO DEFERRALS.** Every item must be verified by real interaction on the live site.
+   "Code-verified", "grep-verified", "not exercised to avoid writing data" are NOT
+   acceptable outcomes. If a check requires logging in as admin, log in as admin
+   (see Admin authentication below). If a check requires a configured bonus model,
+   configure one on a test employee. If a check requires production data, seed it
+   under a clearly-named test record and clean it up at the end.
+5. **A task is DONE only when four gates all pass:** (1) `npm run build` completes with
+   zero errors, (2) local QA passes, (3) the commit is pushed to `origin/main`,
    (4) the live URL, observed via Chrome, exhibits the expected behavior.
-5. **Verification is browser-observable only.** "Looks right in the code" is not acceptance.
-   Open the live URL in Chrome, perform the checklist action, observe the result.
+6. **Verification is browser-observable only.** Open the live URL in Chrome, perform the
+   action, observe the outcome. No exceptions.
+
+## Admin authentication — REQUIRED
+
+You must log in as admin for every admin-gated check. Do NOT ask Oren for a password.
+Do NOT store a password anywhere. Use the magic-link flow:
+
+1. Read `VITE_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` from `.env.local`.
+2. Generate a one-shot magic link for the admin:
+   ```bash
+   curl -s -X POST "$VITE_SUPABASE_URL/auth/v1/admin/generate_link" \
+     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+     -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"type":"magiclink","email":"bananioren@gmail.com"}'
+   ```
+3. Extract `properties.action_link` (or `action_link`) from the JSON response.
+4. In Chrome, navigate to that link. Supabase consumes the token, sets the session
+   cookie on the site origin, and redirects you into the app as admin.
+5. Proceed with admin-gated checks.
+
+If the session expires mid-run (likely after ~1 hour), generate a fresh link and re-enter.
+If magic-link generation fails, diagnose and fix it — it is a prerequisite for the run.
+
+## Seeding & cleaning up test data
+
+Some checks require data that isn't in production. Use clearly-named test records so
+cleanup is unambiguous:
+
+- Test admin-side employee: `QA Test Employee` / `qa.test+autotest@banani-hr.test`
+- Test client: `QA Test Client (autotest)`
+- Test bonus model: configure the 6-tier spec model from `BHR_CONSOLE_PROJECT.md` on `QA Test Employee`
+- Test transaction: description / notes include the tag `[AUTOTEST]`
+
+At termination, delete every record whose name/email/notes contains `autotest` or `AUTOTEST`.
+Log every seed + delete in `RUN_REPORT.md`.
+
+## Priority order
+
+Work items in this order, not checklist order:
+
+1. **§0.5 Known bugs first** — reproduce each, fix, push, verify gone.
+2. **§0 Baseline + §1 Layout + §2 Sidebar** — establishes the foundation.
+3. **Admin login (§0.5 magic link)** — unlocks everything else.
+4. **§3 → §8 page by page** — for each page: load it, click every button,
+   fill every form, submit, observe; fix each failure before moving on.
+5. **§9 Portal** — re-exercise live (no more "code-verified").
+6. **§10 Auth & safety, §11 Data integrity** — live-exercise the admin-gated ones.
+7. **§12 Final regression sweep** — screenshots, console-clean, network-clean.
 
 ## The loop
 
-Repeat until the checklist is all green:
+Repeat until the checklist is all `[x]`:
 
-1. Read `BHR_CONSOLE_CHECKLIST.md`. Pick the first unchecked `[ ]` item.
-2. If the item requires code changes:
+1. Read `BHR_CONSOLE_CHECKLIST.md`. Pick the first unchecked item per the priority order above.
+2. If it requires code changes:
    a. Read the relevant files in `src/` to understand the current state.
-   b. Implement the minimal change that satisfies the item.
-   c. Run `npm run build`. If errors, fix and re-run until clean.
-   d. Stage, commit with a message that names the section and what changed. Example:
-      `feat(§2): remove /agreements route and הסכמים nav item`
+   b. Implement the minimal change.
+   c. `npm run build` — fix errors, repeat until clean.
+   d. `git add` + `git commit -m "<section>: <what changed>"`.
    e. `git push origin main`.
-   f. Wait 90 seconds for Vercel to finish deploying.
-3. Open https://bhr-console.vercel.app in Chrome. Perform the check. Observe the result.
-   If it matches the pass criterion, edit `BHR_CONSOLE_CHECKLIST.md` to change `[ ]` to
-   `[x]` on that line, commit (`chore: check off §N.X`), push.
-4. If it does not match, diagnose:
-   - Read the browser console for JS errors.
-   - Read the network tab for 4xx/5xx responses.
-   - Read the relevant `src/` files.
-   Then fix and restart step 2c for the same item. Do not move to a new item until the
-   current one is green on the live site.
-5. Loop.
+   f. Wait 90 seconds for Vercel.
+3. Open the live URL in Chrome. Perform the check. Observe.
+4. If it passes, edit `BHR_CONSOLE_CHECKLIST.md`: flip `[ ]` → `[x]`, append a short
+   live-evidence note (what you clicked, what you saw). Commit + push.
+5. If it fails, diagnose via browser console + network + source. Fix. Return to 2c.
+   Do not move on.
+6. Loop.
 
-## Chrome usage
+## Active bug-hunt mode (not just checklist items)
 
-- The ONLY valid verification target is https://bhr-console.vercel.app. Never verify
-  against localhost, `npm run dev`, or the `dist/` build output — deployment is ground truth.
-- For admin-only checks: log in at `/login`. Admin email is `bananioren@gmail.com`; the
-  password is stored by Oren (not in `.env.local`). If a password is required and not
-  available, add a note to `RUN_REPORT.md`, defer only the admin-gated checks, and keep
-  working on everything else — this is the ONE permitted deferral.
-- For portal checks: use the portal link shown on `/team` for a test employee.
-- If the browser tool errors or disconnects, retry up to 3 times (reopening Chrome if
-  needed). If still failing after 3 tries, log it in `RUN_REPORT.md` and continue with
-  code-only items.
+While executing §3–§8, act as a QA engineer:
+- Load every page. Wait 10 seconds observing for hangs, spinners that never resolve,
+  or UI freezes. If a page is unresponsive > 5s, treat as a failure — diagnose and fix.
+- Click every button. Open every dialog. Submit every form with realistic data.
+- Watch the browser console and network tab continuously. Any red console error,
+  any 4xx/5xx request, any React warning → add a new `[ ]` line under §0.5 describing
+  the bug, then fix it before continuing.
+- Test edge cases: empty states (no clients, no transactions), long text, RTL/LTR mixed
+  data, missing optional fields.
 
 ## Git & safety
 
-- Never commit `.env.local` or anything ignored by `.gitignore`.
-- If `git push` is rejected as non-fast-forward: `git pull --rebase origin main`, resolve,
-  then push.
-- Never `git commit --amend` a commit that has already been pushed.
-- Never `git reset --hard` anything that has been pushed.
-- If a check surfaces a real bug that isn't covered by any existing item, add a new `[ ]`
-  line under §12 and fix it before final sign-off.
+- Never commit `.env.local` or anything in `.gitignore`.
+- If `git push` is rejected non-fast-forward: `git pull --rebase origin main`, resolve, push.
+- Never `git commit --amend` a pushed commit. Never `git reset --hard` a pushed commit.
+- Never store or print `SUPABASE_SERVICE_ROLE_KEY`, `VERCEL_TOKEN`, `RESEND_API_KEY`,
+  `SUPABASE_ACCESS_TOKEN`, or the admin password.
 
 ## Termination
 
 When every `[ ]` in `BHR_CONSOLE_CHECKLIST.md` is `[x]` and §12 is green:
 
 1. Run the full regression sweep (§12).
-2. Save screenshots of every admin page and the portal to `./qa-screenshots/`.
-3. Write `./RUN_REPORT.md` summarizing: commits made, items completed, any surprises
-   found, anything that was deferred or blocked, and the final live commit SHA.
-4. Print `AUTONOMOUS RUN COMPLETE` and stop.
+2. Screenshots of every admin page + portal to `./qa-screenshots/`.
+3. Delete all `autotest` / `AUTOTEST` seeded data.
+4. Write `./RUN_REPORT.md` summarizing: commits made, items completed, bugs discovered
+   and fixed (with file/line), test data seeded + cleaned, final live commit SHA.
+5. Print `AUTONOMOUS RUN COMPLETE` and stop.
 
 Start now. Read `BHR_CONSOLE_PROJECT.md`, then `BHR_CONSOLE_CHECKLIST.md`, then execute
 the loop.

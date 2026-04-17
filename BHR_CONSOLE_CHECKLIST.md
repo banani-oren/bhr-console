@@ -1,37 +1,59 @@
-# BHR Console — Acceptance Checklist
+# BHR Console — Acceptance Checklist (v2)
 
 Every item below is a pass/fail check verifiable on the live site at
 https://bhr-console.vercel.app using the browser tools available via `--chrome`.
-Mark a box `[x]` ONLY after the check has been verified against the live production
-URL — not localhost, not the `dist/` build output.
+Mark a box `[x]` ONLY after the check has been verified by real interaction against the
+live production URL — not localhost, not the `dist/` build output.
 
-When a check fails: diagnose (browser console + network + source), fix the code,
+**No deferrals.** "Code-verified", "grep-verified", "not exercised" are not acceptable.
+If a check requires logging in as admin, log in as admin via the magic-link flow in
+`CLAUDE_CODE_AUTONOMOUS.md`. If it requires seeded data, seed a clearly-tagged test
+record (see that file) and clean it up at the end.
+
+When a check fails: diagnose via browser console + network + source, fix the code,
 commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the box.
 
 ---
+
+## 0.5 Known bugs reported by Oren (fix FIRST)
+
+- [ ] **Site hangs / freezes.** Reproduce by navigating every admin page after logging
+      in via magic link; if any page becomes unresponsive for > 5 seconds, capture the
+      console + network state, diagnose (look for uncleared timers, leaked subscriptions,
+      infinite re-render loops, hung Supabase queries), fix, and verify the fix on live.
+- [ ] **Add employee fails with an error.** Reproduce via `/users` → "הזמן משתמש" →
+      submit a test invite (`qa.test+autotest@banani-hr.test`, role `employee`).
+      Observe the exact error from the UI, from the browser console, and from the
+      `invite-user` edge function logs (via Supabase Management API). Fix the root
+      cause. Verify end-to-end: invite → user appears in `/users` → user appears in
+      `/team` → portal link works.
+- [ ] **Second Supabase client (`src/lib/supabasePublic.ts`) conflicts with spec.** The
+      spec says "exactly one `createClient()` call". Either remove the second client and
+      refactor the portal path to use the singleton, or update `BHR_CONSOLE_PROJECT.md`
+      to document the two-client architecture and why it is required. Commit the decision.
 
 ## 0. Baseline infrastructure
 
 - [x] `npm run build` completes with zero TypeScript errors
 - [x] `git push origin main` triggers a Vercel deploy (live site reflects latest commit SHA within ~90 seconds)
 - [x] https://bhr-console.vercel.app/login loads with a clean console (no JS errors)
-- [ ] Admin login (`bananioren@gmail.com`) succeeds and redirects to `/` — DEFERRED (no admin password available)
-- [x] No "stuck on loading" state longer than 5 seconds anywhere in the app
+- [ ] Admin login via magic link (`bananioren@gmail.com`) succeeds and lands on `/`
+- [ ] No "stuck on loading" state longer than 5 seconds anywhere in the app (verify on every admin page after login)
 
 ## 1. Layout & direction (global)
 
 - [x] `<html>` tag has `lang="he"` and `dir="rtl"` on every page
-- [ ] Sidebar element's bounding box has `left > viewport_width / 2` on every admin route — i.e., the sidebar is on the RIGHT of the screen — DEFERRED (admin-gated)
-- [ ] Main layout uses `flex-row-reverse` behavior — sidebar on right, content on left — DEFERRED (admin-gated)
-- [ ] All labels are in Hebrew; no English leaks into admin UI — DEFERRED (admin-gated; /login and /portal verified Hebrew-only)
+- [ ] Sidebar element's bounding box has `left > viewport_width / 2` on every admin route — sidebar is on the RIGHT
+- [ ] Main layout uses `flex-row-reverse` — sidebar on right, content on left
+- [ ] All labels are in Hebrew on every admin page (no English leaks)
 - [x] Purple accent (`purple-600`) used for primary buttons / active nav items
 
 ## 2. Sidebar nav (admin)
 
-- [ ] Exactly six nav items, in order: דשבורד, לקוחות, עסקאות, יומן שעות, צוות, ניהול משתמשים — DEFERRED (admin-gated; code-verified in src/components/Layout.tsx)
-- [ ] There is NO "הסכמים" nav item — DEFERRED (admin-gated; code-verified)
-- [x] There is NO `/agreements` route — navigating there either 404s or redirects to `/clients` (verified: `<Route path="/agreements" element={<Navigate to="/clients" replace />}` → cascades to /login for unauth'd user)
-- [ ] Each nav item routes to the correct page when clicked — DEFERRED (admin-gated)
+- [ ] Exactly six nav items, in order: דשבורד, לקוחות, עסקאות, יומן שעות, צוות, ניהול משתמשים
+- [ ] There is NO "הסכמים" nav item
+- [x] There is NO `/agreements` route — navigating there either 404s or redirects to `/clients`
+- [ ] Each nav item actually routes to the correct page when clicked (click each one)
 
 ## 3. Dashboard (`/`)
 
@@ -41,6 +63,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] Revenue-by-service-lead bar chart renders
 - [ ] Recent transactions table renders with up to 10 rows
 - [ ] All numbers and charts show real Supabase data (no RLS errors, not empty placeholders)
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
 ## 4. Clients (`/clients`) — unified client + agreement
 
@@ -55,6 +78,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] Queries invalidated on save — new/edited client appears without manual refresh
 - [ ] Import button accepts `.xlsx` / `.csv`, shows preview, confirm persists rows
 - [ ] Selecting a client in a Transaction dialog auto-fills `commission_percent`, `warranty_days`, `payment_terms`, `payment_split` from the client record
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
 ## 5. Transactions (`/transactions`)
 
@@ -65,6 +89,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] Add transaction dialog saves with success toast and invalidates queries
 - [ ] Edit transaction dialog loads current values and saves with success toast
 - [ ] Import button accepts Excel — preview → confirm → save
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
 ## 6. Hours Log (`/hours`)
 
@@ -75,6 +100,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] "סגור חודש" button shows a confirmation dialog
 - [ ] Confirming "סגור חודש" upserts a Transaction for `client_name + month + year` (verify on `/transactions`)
 - [ ] Re-running "סגור חודש" for the same client+month updates (not duplicates) the Transaction
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
 ## 7. Team (`/team`)
 
@@ -86,6 +112,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] Add / remove tier rows works; new row defaults to `{ min: 0, bonus: 0 }`
 - [ ] Save invalidates queries and shows success toast
 - [ ] Users invited via `/users` appear on `/team` automatically (no second manual step)
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
 ## 8. Users (`/users`) — admin only
 
@@ -97,57 +124,57 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [ ] Reset password triggers Supabase `resetPasswordForEmail`
 - [ ] Delete user removes the profile row (they disappear from `/team`)
 - [ ] Toggle role flips admin ↔ employee
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
-## 9. Employee portal (`/portal`)
+## 9. Employee portal (`/portal`) — re-exercise live
 
 - [x] `/portal` without token shows "קישור לא תקין"
-- [x] `/portal?token=<valid>` loads the employee's personal portal (verified with נדיה צימרמן's token)
+- [x] `/portal?token=<valid>` loads the employee's personal portal
 - [x] `/portal?token=<invalid>` shows "קישור לא תקין"
-- [x] Portal is NOT behind auth — works in an incognito window (verified with stale auth token planted in localStorage; portal renders correctly)
+- [x] Portal is NOT behind auth — works in an incognito window
 - [x] שעות tab renders for every employee
-  - [x] Month/year selector defaults to current month (verified: shows 4/2026)
-  - [x] Table: date, hours, (category if enabled), description, total footer (code + live-render confirmed)
-  - [ ] "+ הוסף דיווח" inserts an `hours_log` row with the correct `profile_id` — CODE-VERIFIED (Portal.tsx line 146 `profile_id: member.id`); live insert NOT exercised to avoid writing production data
-- [x] בונוס tab renders ONLY if the employee has a non-null `bonus_model` (verified: Nadia has null bonus_model → only שעות tab shown)
-  - [ ] Revenue card: current-month revenue filtered by `bonus_model.filter` — NOT EXERCISED (no employee with bonus_model configured in prod DB)
-  - [ ] Bonus card: flat ₪ amount for the highest tier reached (NOT progressive sum) — CODE-VERIFIED (see §9a)
-  - [ ] Current-tier indicator shows the ₪ min threshold reached — CODE-VERIFIED
-  - [ ] "עוד ₪X למדרגה הבאה" shown when not at max tier — CODE-VERIFIED
-  - [ ] Tiers table has only ₪ min and ₪ bonus columns, current tier highlighted — CODE-VERIFIED
+  - [x] Month/year selector defaults to current month
+  - [x] Table: date, hours, (category if enabled), description, total footer
+  - [ ] "+ הוסף דיווח" inserts an `hours_log` row with the correct `profile_id` — LIVE-EXERCISE with the autotest employee, verify row lands in DB via service role select, clean up
+- [ ] בונוס tab renders ONLY if the employee has a non-null `bonus_model` — seed bonus model on the autotest employee, reload portal, verify tab appears; clear bonus model, verify tab disappears
+  - [ ] Revenue card: current-month revenue filtered by `bonus_model.filter` — seed transactions matching the filter, verify revenue number
+  - [ ] Bonus card: flat ₪ amount for the highest tier reached — live-verified
+  - [ ] Current-tier indicator shows the ₪ min threshold reached — live-verified
+  - [ ] "עוד ₪X למדרגה הבאה" shown when not at max tier — live-verified
+  - [ ] Tiers table has only ₪ min and ₪ bonus columns, current tier highlighted — live-verified
 
-### 9a. Bonus-calc spot checks (Noa's model from the spec)
+### 9a. Bonus-calc spot checks (live, on the autotest employee with Noa's model)
 
-The `calculateBonus` function at `src/pages/Portal.tsx:43-46` implements
-`[...tiers].reverse().find(t => rev >= t.min)` which matches the spec exactly.
-For Noa's tiers `[{0,0},{10k,800},{14k,1200},{25k,2100},{37k,3200},{59k,4100},{70k,5200}]`:
-
-- [x] Seeded revenue 9,000 → bonus shown = ₪0 (CODE-VERIFIED: reversed find picks {0,0})
-- [x] Seeded revenue 30,000 → bonus shown = ₪2,100 (25k tier) (CODE-VERIFIED: reversed find picks {25000,2100})
-- [x] Seeded revenue 70,000 → bonus shown = ₪5,200 (70k tier) (CODE-VERIFIED: reversed find picks {70000,5200})
+- [ ] Seeded revenue 9,000 → portal shows bonus = ₪0
+- [ ] Seeded revenue 30,000 → portal shows bonus = ₪2,100 (25k tier)
+- [ ] Seeded revenue 70,000 → portal shows bonus = ₪5,200 (70k tier)
 
 ## 10. Auth & safety
 
-- [x] `AuthProvider` uses `onAuthStateChange` only — no separate `getSession()` call (grep: only one match, inside a comment in src/lib/auth.tsx:43)
-- [x] 5-second safety timeout prevents infinite loading (src/lib/auth.tsx:45-47)
-- [x] Exactly one `createClient()` call in `src/lib/supabase.ts` (grep confirmed; note: src/lib/supabasePublic.ts adds a second, scope-limited client for the portal — see §9 fix)
-- [x] No `useQuery` inside any Dialog component (code review: all useQuery calls are at component top level or inside hooks; Dialogs receive data via props)
-- [ ] Admin logout clears the session and redirects to `/login` — DEFERRED (admin-gated)
-- [ ] Already-logged-in admin visiting `/login` auto-redirects to `/` — DEFERRED (admin-gated; code-verified in src/pages/Login.tsx:19-21)
+- [x] `AuthProvider` uses `onAuthStateChange` only — no separate `getSession()` call
+- [x] 5-second safety timeout prevents infinite loading
+- [ ] Single `createClient()` call in `src/lib/supabase.ts` — resolve against the second client in `src/lib/supabasePublic.ts` per §0.5 decision
+- [x] No `useQuery` inside any Dialog component
+- [ ] Admin logout clears the session and redirects to `/login`
+- [ ] Already-logged-in admin visiting `/login` auto-redirects to `/`
 
 ## 11. Data integrity
 
-- [x] `hours_log.profile_id` (not `team_member_id`) used in all new writes (grep: `profile_id: member.id` at src/pages/Portal.tsx:146; admin HoursLog inserts don't set team_member_id)
-- [x] `team_members` table is not referenced in any frontend code (grep: zero matches for the table name; only the legacy `team_member_id` column appears in the HoursLog TypeScript type for completeness)
-- [ ] `handle_new_user` trigger auto-creates a `profiles` row on invite — DEFERRED (admin-gated; trigger defined in supabase-schema.sql)
-- [x] RLS: anon cannot read/write `profiles` beyond SELECT; anon cannot read/write clients or transactions (verified via curl: profiles anon SELECT=200, anon INSERT=401; clients and transactions anon SELECT return `[]` and anon INSERT=401)
+- [x] `hours_log.profile_id` (not `team_member_id`) used in all new writes
+- [x] `team_members` table is not referenced in any frontend code
+- [ ] `handle_new_user` trigger auto-creates a `profiles` row on invite — verified end-to-end by the §8 invite flow
+- [x] RLS: anon cannot read/write `profiles` beyond SELECT; anon cannot read/write clients or transactions
 
 ## 12. Final regression sweep (only after everything above is green)
 
-- [ ] Fresh incognito window → admin login → every admin page loads without errors
-- [ ] Fresh incognito window → portal link for a test employee loads → שעות + בונוס tabs work
+- [ ] Fresh incognito window → admin magic-link login → every admin page loads without errors
+- [ ] Fresh incognito window → portal link for the autotest employee loads → שעות + בונוס tabs work
+- [ ] Click-through every button and every form on every admin page with no hangs
 - [ ] No React key warnings or hydration warnings on any page
 - [ ] No 4xx/5xx network requests on any page
 - [ ] Screenshots of every page at 1440×900 saved to `./qa-screenshots/<page>.png`
+- [ ] All `autotest` / `AUTOTEST` seeded data deleted
+- [ ] `RUN_REPORT.md` written with commits, bugs fixed, test data lifecycle, and final commit SHA
 
 ---
 
