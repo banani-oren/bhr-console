@@ -38,18 +38,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
+    let initialResolved = false
 
-    // Use onAuthStateChange ONLY — it fires INITIAL_SESSION on mount,
-    // which replaces the need for a separate getSession() call.
-    // This avoids the race condition that causes auth lock conflicts.
+    // 1. Prime the session synchronously from storage (or a short-lived
+    //    background refresh for near-expiry tokens). getSession() reads the
+    //    persisted session from localStorage and returns it WITHOUT a network
+    //    round-trip in the normal case — exactly what we need to avoid the
+    //    "no session → redirect to /login" flicker when a route changes.
+    ;(async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (cancelled) return
+        if (data.session?.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.session.user.id)
+            .single()
+          if (cancelled) return
+          setUser(data.session.user)
+          setProfile(profile as Profile | null)
+        } else {
+          setUser(null)
+          setProfile(null)
+        }
+      } finally {
+        if (!cancelled) {
+          initialResolved = true
+          setLoading(false)
+        }
+      }
+    })()
+
+    // 10s safety timeout — well above any normal latency, only trips if
+    // getSession() above truly never resolves (network hang).
     const timeout = setTimeout(() => {
-      if (!cancelled) setLoading(false)
-    }, 5000)
+      if (!cancelled && !initialResolved) setLoading(false)
+    }, 10000)
 
+    // 2. Subscribe for subsequent auth state changes (sign-in / sign-out /
+    //    token-refresh). Do NOT touch `loading` here — only the initial
+    //    resolution above controls the loading flag. This prevents a
+    //    transient null-session event from toggling loading back on and
+    //    triggering a premature redirect.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (cancelled) return
+      if (!initialResolved) return // let the initial resolution handle mount
 
       if (session?.user) {
         const { data: profile } = await supabase
@@ -67,9 +103,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(null)
         }
       }
-
-      if (!cancelled) setLoading(false)
-      clearTimeout(timeout)
     })
 
     return () => {
