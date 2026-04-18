@@ -192,3 +192,31 @@ If there are requests from past conversations that aren't captured above, add th
 as new pass/fail checklist items BEFORE starting the autonomous run.
 
 _(empty — fill in with any outstanding requests)_
+
+---
+
+## 14. Security & role-based access (v8 — 2026-04-18)
+
+### Role matrix (enforced in route guards AND Postgres RLS)
+
+| Page / resource | admin | administration | recruiter |
+|-----------------|:-----:|:--------------:|:---------:|
+| `/` (Dashboard) | ✅ | ❌ | ❌ |
+| `/clients` | ✅ | ✅ | ❌ |
+| `/transactions` | ✅ (all) | ✅ (all) | ✅ (own only: `service_lead = full_name`) |
+| `/hours` | ✅ (all, tabs) | ✅ (own only) | ✅ (own only) |
+| `/team` | ✅ | ❌ | ❌ |
+| `/users` | ✅ | ❌ | ❌ |
+| `/portal*` | ❌ (removed) | ❌ | ❌ |
+
+### Regression tests (live-verified 2026-04-18)
+
+- [x] **A. Invite-link bypass (hotfix).** Non-admin session attempting `/`, `/users`, etc. is immediately signed out and redirected to `/login` (`NonAdminBlocker`). Verified with `qa.hotfix+A@banani-hr.test` via magic-link redirected straight to `/users` — session wiped, login form rendered.
+- [x] **D.1 Admin.** `qa.admin+rolefix@banani-hr.test` lands on `/`, sees all six nav items, and every admin route renders.
+- [x] **D.2 Administration.** `qa.admin+admnfix@banani-hr.test` lands on `/transactions`. Nav shows exactly `[לקוחות, עסקאות, יומן שעות]`. `/transactions` returned 2 rows (unfiltered). `/hours` returned 1 row (own only, single-view — no tabs). `/clients` loads. Direct visits to `/`, `/team`, `/users` each redirected to `/transactions`. Browser-console `GET /rest/v1/profiles?select=*` returned only this user's row.
+- [x] **D.3 Recruiter.** `qa.recruiter+rolefix@banani-hr.test` lands on `/transactions`. Nav shows `[עסקאות, יומן שעות]`. `/transactions` returned exactly 1 row (own, `service_lead = QA Recruiter Rolefix` — the `Someone Else`-led row was NOT returned). `/hours` returned 1 row (own). `GET /rest/v1/clients` returned `[]`. Direct visits to `/`, `/clients`, `/team`, `/users` each redirected to `/transactions`.
+- [x] **D.4 Invite-bypass regression.** New invitee (`qa.invitee+bypass@banani-hr.test`, role=recruiter) opened a fresh invite link — landed on `/set-password`. Pre-password attempts to visit `/transactions` and `/users` redirected back to `/set-password`. After setting a password, the user signed out and re-logged in with email + password, landing on `/transactions` with recruiter-only nav.
+- [x] **D.5 Portal regression.** Both `/portal` and `/portal?token=x` redirect to `/login`. The `Portal.tsx` page, `supabasePublic.ts` client, and every `portal_token` read have been removed from the repo.
+- [x] **D.6 Cleanup.** All four `qa.*` test auth users and their profile rows deleted; `[ROLEFIX]` hours_log + transactions rows deleted. Follow-up queries return zero remaining test rows/users.
+
+Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 3452b14 + two migrations in `supabase/migrations/`).

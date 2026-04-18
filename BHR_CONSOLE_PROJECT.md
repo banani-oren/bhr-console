@@ -111,18 +111,47 @@ There is no separate `team_members` table — all employee data lives on `profil
 
 ---
 
-## User Roles
+## User Roles (three-role model — v8)
+
+Roles are persisted in `profiles.role`, constrained to `{admin, administration, recruiter}`.
+Route access is enforced by `<RequireRole allow={...}>` in the frontend AND by role-aware
+RLS at the database level (defense in depth).
+
+| Page / resource | admin | administration | recruiter |
+|-----------------|:-----:|:--------------:|:---------:|
+| `/` (Dashboard) | ✅ | ❌ | ❌ |
+| `/clients` | ✅ | ✅ | ❌ |
+| `/transactions` | ✅ (all) | ✅ (all) | ✅ (own only — `service_lead = my full_name`) |
+| `/hours` | ✅ (all, per-client tabs) | ✅ (own only, personal view) | ✅ (own only, personal view) |
+| `/team` | ✅ | ❌ | ❌ |
+| `/users` (invite / reset / delete) | ✅ | ❌ | ❌ |
+
+Default landing after `/login`:
+- `admin` → `/`
+- `administration` → `/transactions`
+- `recruiter` → `/transactions`
 
 ### Admin (`bananioren@gmail.com`)
-- Full access to all pages and data
-- Manage users (invite, reset password, delete)
-- Configure bonus models for each employee
-- Auth user ID: `03b73b4f-8f09-4bf1-9c22-f49b2b05f363`
+- Full access to all pages and data.
+- Manages users (invite, reset password, delete) and configures bonus models.
+- Auth user ID: `03b73b4f-8f09-4bf1-9c22-f49b2b05f363`.
 
-### Employee
-- Access to personal portal only (`/portal`)
-- Log hours
-- View personal bonus (if configured)
+### Administration
+- Manages clients (full) and sees the full transactions list.
+- Logs personal hours (own `hours_log` rows only, personal view — no admin tabs layout).
+
+### Recruiter
+- Sees only the transactions where `service_lead = profiles.full_name`.
+- Logs personal hours (own `hours_log` rows only).
+- Has no access to clients, team, users, or the dashboard.
+
+**The `/portal` route and `profiles.portal_token` are removed.** Non-admin users
+now log in with email + password like any other user. The previous invite-link
+bypass (a Supabase invite URL silently set an authenticated session that all
+`ProtectedRoute`-wrapped admin pages honored) is closed by: (a) routing invite
+links to `/set-password` instead of the app, (b) requiring `profiles.password_set = true`
+before `RequireRole` will render any authenticated page, and (c) role-aware RLS
+ensuring that even a compromised frontend cannot read rows the role should not see.
 
 ---
 
@@ -135,11 +164,12 @@ create table profiles (
   id uuid references auth.users primary key,
   full_name text not null,
   email text,
-  role text not null check (role in ('admin', 'employee')),
+  role text not null check (role in ('admin', 'administration', 'recruiter')),
+  password_set boolean not null default false,          -- must be true before any app chrome renders
   bonus_model jsonb,                                    -- null = no bonus configured
   -- bonus_model shape: { type: 'flat', filter: { field, contains }, tiers: [{ min, bonus }] }
   hours_category_enabled boolean default false,         -- enables BHR/איגוד category split
-  portal_token text unique default gen_random_uuid()::text,
+  portal_token text unique default gen_random_uuid()::text, -- DEPRECATED (portal removed); column kept only so legacy data is not dropped
   phone text,
   status text default 'פעיל',
   created_at timestamptz default now()
@@ -241,12 +271,13 @@ create table hours_log (
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$
 BEGIN
-  INSERT INTO public.profiles (id, full_name, email, role)
+  INSERT INTO public.profiles (id, full_name, email, role, password_set)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email),
     NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'role', 'employee')
+    COALESCE(NEW.raw_user_meta_data->>'role', 'recruiter'),
+    false
   )
   ON CONFLICT (id) DO NOTHING;
   RETURN NEW;
@@ -258,18 +289,37 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 ```
 
-### RLS Policies (current)
-| Table | Policy | Role | Access |
-|-------|--------|------|--------|
-| profiles | auth_full_profiles | authenticated | ALL |
-| profiles | service_role_profiles | service_role | ALL |
-| profiles | anon_read_profiles | anon | SELECT |
-| clients | Authenticated full access | authenticated | ALL |
-| agreements | Authenticated full access | authenticated | ALL |
-| transactions | Authenticated full access | authenticated | ALL |
-| hours_log | auth_full_hours | authenticated | ALL |
-| hours_log | anon_read_hours | anon | SELECT |
-| hours_log | anon_insert_hours | anon | INSERT |
+### RLS helpers
+
+Two SECURITY DEFINER helpers are installed so that role-aware policies can read the
+caller's `profiles.role`/`profiles.full_name` without re-triggering RLS on `profiles`
+(which previously caused `42P17 infinite recursion`).
+
+```sql
+create or replace function public.current_user_role() returns text
+  language sql security definer stable set search_path = public
+  as $$ select role from public.profiles where id = auth.uid() $$;
+
+create or replace function public.current_user_full_name() returns text
+  language sql security definer stable set search_path = public
+  as $$ select full_name from public.profiles where id = auth.uid() $$;
+```
+
+### RLS Policies (v8)
+
+All policies target the `authenticated` role. No `anon` policies remain on any
+domain table — the employee portal has been removed.
+
+| Table | Policy | cmd | Predicate |
+|-------|--------|-----|-----------|
+| profiles | profiles_self_read | SELECT | `id = auth.uid() or current_user_role() = 'admin'` |
+| profiles | profiles_self_update | UPDATE | `id = auth.uid() or current_user_role() = 'admin'` |
+| profiles | profiles_admin_insert | INSERT | `current_user_role() = 'admin'` |
+| profiles | profiles_admin_delete | DELETE | `current_user_role() = 'admin'` |
+| clients | clients_admin_admin_full | ALL | `current_user_role() in ('admin','administration')` |
+| agreements | agreements_admin_admin_full | ALL | `current_user_role() in ('admin','administration')` |
+| transactions | transactions_full_access | ALL | `current_user_role() in ('admin','administration') or service_lead = current_user_full_name()` |
+| hours_log | hours_self_access | ALL | `profile_id = auth.uid() or current_user_role() = 'admin'` |
 
 ---
 
@@ -464,11 +514,13 @@ interactively and by any autonomous run per `CLAUDE_CODE_AUTONOMOUS.md`.
 - Admin-initiated from `/users` page
 - Uses `supabase.auth.resetPasswordForEmail(email)`
 
-### User Invite:
-- Admin clicks "הזמן משתמש" in `/users`
-- Frontend calls `supabase.functions.invoke('invite-user', { body: { email, full_name, role } })`
-- Edge function creates user + sends invite email via Resend
-- Auth trigger auto-creates profile row
+### User Invite (bypass-safe — v8):
+- Admin clicks "הזמן משתמש" in `/users`.
+- Frontend calls `supabase.functions.invoke('invite-user', { body: { email, full_name, role } })`.
+- Edge function creates the auth user via `auth.admin.generateLink({ type: 'invite' })` and sets `redirect_to = <site>/set-password`.
+- The auth trigger auto-creates the `profiles` row with `password_set = false`.
+- The Resend email contains the action link; when the invitee opens it, Supabase sets a session and redirects to `/set-password`. `RequireRole` refuses to render any admin page while `profile.password_set = false` — it force-redirects back to `/set-password`.
+- The invitee picks a password. `SetPassword.tsx` calls `supabase.auth.updateUser({ password })` + updates `profiles.password_set = true` + `supabase.auth.signOut()` + navigates to `/login`. The user must now log in with email + password.
 
 ---
 
@@ -619,6 +671,6 @@ _(none — Resend domain `banani-hr.com` is verified and wired into both the edg
 
 ---
 
-*Last updated: April 17 2026 — v7 (magic-link admin auth, two-client architecture for portal stale-session fix)*
+*Last updated: April 18 2026 — v8 (three-role access control, role-aware RLS, `/set-password` invite flow, `/portal` + `portal_token` removed)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*
