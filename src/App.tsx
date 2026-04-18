@@ -21,7 +21,7 @@ const queryClient = new QueryClient({
 })
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth()
+  const { user, profile, loading } = useAuth()
 
   if (loading) {
     return (
@@ -37,6 +37,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />
   }
 
+  // Security hotfix (step A): every non-portal admin page requires
+  // role='admin'. An invited employee holding a magic-link session
+  // must NOT reach any admin route even though Supabase has granted
+  // them a valid authenticated JWT.
+  if (profile?.role !== 'admin') {
+    return <Navigate to="/login" replace />
+  }
+
   return <Layout>{children}</Layout>
 }
 
@@ -44,7 +52,7 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   const { profile } = useAuth()
 
   if (profile?.role !== 'admin') {
-    return <Navigate to="/" replace />
+    return <Navigate to="/login" replace />
   }
 
   return <>{children}</>
