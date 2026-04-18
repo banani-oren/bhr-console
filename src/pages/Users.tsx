@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
 import type { Profile, UserRole } from '@/lib/types'
 import {
   Dialog,
@@ -20,7 +21,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import {
   Select,
@@ -34,14 +34,10 @@ import { Plus, Trash2, KeyRound } from 'lucide-react'
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'מנהל',
   administration: 'מנהלה',
-  recruiter: 'גיוס',
+  recruiter: 'רכז/ת גיוס',
 }
 
 const ROLE_ORDER: UserRole[] = ['admin', 'administration', 'recruiter']
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 type UserProfile = Profile & { email: string }
 
@@ -56,14 +52,6 @@ const emptyInviteForm: InviteForm = {
   full_name: '',
   role: 'recruiter',
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Data hooks
-// ---------------------------------------------------------------------------
 
 function useProfiles() {
   return useQuery<UserProfile[]>({
@@ -92,28 +80,11 @@ function useUpdateRole() {
   })
 }
 
-function useDeleteProfile() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('profiles').delete().eq('id', id)
-      if (error) throw error
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['profiles'] })
-    },
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
 export default function Users() {
   const queryClient = useQueryClient()
+  const { user: authUser } = useAuth()
   const { data: profiles = [], isLoading } = useProfiles()
   const updateRole = useUpdateRole()
-  const deleteProfile = useDeleteProfile()
 
   // Invite dialog
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -125,16 +96,14 @@ export default function Users() {
 
   // Delete dialog
   const [deleteTarget, setDeleteTarget] = useState<UserProfile | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  // Reset password feedback
-  const [resetSentFor, setResetSentFor] = useState<string | null>(null)
+  // Reset-password transient
+  const [resetStatus, setResetStatus] = useState<{ email: string; ok: boolean } | null>(null)
 
-  // Role change loading
+  // Role-change transient
   const [togglingRoleId, setTogglingRoleId] = useState<string | null>(null)
-
-  // -------------------------------------------------------------------------
-  // Invite user
-  // -------------------------------------------------------------------------
 
   function openInviteDialog() {
     setInviteForm(emptyInviteForm)
@@ -154,12 +123,9 @@ export default function Users() {
 
   async function handleInvite() {
     if (!inviteForm.email.trim() || !inviteForm.full_name.trim()) return
-
     setIsInviting(true)
     setInviteError(null)
-
     try {
-      // Call edge function — uses service role to invite user via Supabase Auth
       const { data, error } = await supabase.functions.invoke('invite-user', {
         body: {
           email: inviteForm.email.trim(),
@@ -167,72 +133,63 @@ export default function Users() {
           role: inviteForm.role,
         },
       })
-
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
-
-      // Auth trigger auto-creates profile row; refresh the list
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
       setInviteSuccess(true)
       if (data?.email_warning) {
         setInviteWarning(
-          `המשתמש נוצר, אך שליחת האימייל נכשלה (${data.email_warning}). ` +
-            `ניתן להעתיק את קישור הפורטל מדף הצוות או להפעיל איפוס סיסמה.`,
+          `המשתמש נוצר, אך שליחת האימייל נכשלה (${data.email_warning}).`,
         )
       }
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש'
+      const message = err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש'
       setInviteError(message)
     } finally {
       setIsInviting(false)
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Reset password
-  // -------------------------------------------------------------------------
-
   async function handleResetPassword(email: string) {
-    setResetSentFor(null)
+    setResetStatus(null)
     const { error } = await supabase.auth.resetPasswordForEmail(email)
-    if (!error) {
-      setResetSentFor(email)
-      setTimeout(() => setResetSentFor(null), 4000)
-    }
+    setResetStatus({ email, ok: !error })
+    setTimeout(() => setResetStatus(null), 4000)
   }
-
-  // -------------------------------------------------------------------------
-  // Delete user
-  // -------------------------------------------------------------------------
 
   async function handleDelete() {
     if (!deleteTarget) return
-    await deleteProfile.mutateAsync(deleteTarget.id)
-    setDeleteTarget(null)
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-user', {
+        body: { user_id: deleteTarget.id },
+      })
+      if (error) throw new Error(error.message)
+      if (data?.error) throw new Error(data.error)
+      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      setDeleteTarget(null)
+    } catch (err) {
+      console.error('Delete user error:', err)
+      const message = err instanceof Error ? err.message : 'שגיאה במחיקת המשתמש'
+      setDeleteError(message)
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
-  // -------------------------------------------------------------------------
-  // Toggle role
-  // -------------------------------------------------------------------------
-
-  async function handleChangeRole(user: UserProfile, newRole: UserRole) {
-    if (newRole === user.role) return
-    setTogglingRoleId(user.id)
+  async function handleChangeRole(userProfile: UserProfile, newRole: UserRole) {
+    if (newRole === userProfile.role) return
+    setTogglingRoleId(userProfile.id)
     try {
-      await updateRole.mutateAsync({ id: user.id, role: newRole })
+      await updateRole.mutateAsync({ id: userProfile.id, role: newRole })
     } finally {
       setTogglingRoleId(null)
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
   return (
     <div dir="rtl" className="p-6 space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">ניהול משתמשים</h1>
         <Button
@@ -244,7 +201,6 @@ export default function Users() {
         </Button>
       </div>
 
-      {/* Users Table */}
       <Card>
         {isLoading ? (
           <div className="p-8 text-center text-muted-foreground">טוען...</div>
@@ -255,7 +211,7 @@ export default function Users() {
                 <TableHead className="text-right">אימייל</TableHead>
                 <TableHead className="text-right">שם</TableHead>
                 <TableHead className="text-right">תפקיד</TableHead>
-                <TableHead className="text-right">פעולות</TableHead>
+                <TableHead className="text-right w-32"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -269,80 +225,72 @@ export default function Users() {
                   </TableCell>
                 </TableRow>
               ) : (
-                profiles.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell className="font-mono text-sm">
-                      {user.email ?? '—'}
-                    </TableCell>
-                    <TableCell className="font-medium">{user.full_name}</TableCell>
-                    <TableCell>
-                      {user.role === 'admin' ? (
-                        <Badge className="bg-purple-600 hover:bg-purple-700 text-white">
-                          {ROLE_LABELS.admin}
-                        </Badge>
-                      ) : user.role === 'administration' ? (
-                        <Badge variant="secondary">{ROLE_LABELS.administration}</Badge>
-                      ) : (
-                        <Badge variant="outline">{ROLE_LABELS.recruiter}</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        {/* Change role */}
+                profiles.map((row) => {
+                  const isSelf = authUser?.id === row.id
+                  return (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-mono text-sm">
+                        {row.email ?? '—'}
+                      </TableCell>
+                      <TableCell className="font-medium">{row.full_name}</TableCell>
+                      <TableCell>
                         <Select
-                          value={user.role}
-                          disabled={togglingRoleId === user.id}
-                          onValueChange={(val) => handleChangeRole(user, val as UserRole)}
+                          value={row.role}
+                          disabled={isSelf || togglingRoleId === row.id}
+                          onValueChange={(val) => handleChangeRole(row, val as UserRole)}
                         >
-                          <SelectTrigger className="h-8 w-28 text-xs">
+                          <SelectTrigger className="h-8 w-32 text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             {ROLE_ORDER.map((r) => (
-                              <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
+                              <SelectItem key={r} value={r}>
+                                {ROLE_LABELS[r]}
+                              </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
-
-                        {/* Reset password */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title="איפוס סיסמה"
-                          disabled={!user.email}
-                          onClick={() => handleResetPassword(user.email)}
-                          className={
-                            resetSentFor === user.email
-                              ? 'text-green-600'
-                              : ''
-                          }
-                        >
-                          <KeyRound className="h-4 w-4" />
-                        </Button>
-
-                        {/* Delete */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title="מחק משתמש"
-                          onClick={() => setDeleteTarget(user)}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="איפוס סיסמה"
+                            disabled={!row.email}
+                            onClick={() => handleResetPassword(row.email)}
+                            className={
+                              resetStatus?.email === row.email && resetStatus.ok
+                                ? 'text-green-600'
+                                : ''
+                            }
+                          >
+                            <KeyRound className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title={isSelf ? 'לא ניתן למחוק את עצמך' : 'מחק משתמש'}
+                            disabled={isSelf}
+                            onClick={() => {
+                              setDeleteError(null)
+                              setDeleteTarget(row)
+                            }}
+                            className="text-destructive hover:text-destructive disabled:text-muted-foreground"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
               )}
             </TableBody>
           </Table>
         )}
       </Card>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Invite User Dialog                                                   */}
-      {/* ------------------------------------------------------------------ */}
       <Dialog
         open={inviteOpen}
         onOpenChange={(open) => {
@@ -353,29 +301,21 @@ export default function Users() {
           <DialogHeader>
             <DialogTitle>הזמנת משתמש חדש</DialogTitle>
           </DialogHeader>
-
-          {/* Show success after invite */}
           {inviteSuccess ? (
             <div className="space-y-4 py-2">
-              <div className="rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 p-4 space-y-2">
-                <p className="text-sm font-semibold text-green-800 dark:text-green-300">
-                  המשתמש נוצר בהצלחה ✓
-                </p>
-                <p className="text-sm text-green-700 dark:text-green-400">
+              <div className="rounded-lg bg-green-50 border border-green-200 p-4 space-y-2">
+                <p className="text-sm font-semibold text-green-800">המשתמש נוצר בהצלחה ✓</p>
+                <p className="text-sm text-green-700">
                   {inviteWarning
                     ? `המשתמש ${inviteForm.email} נוצר במערכת.`
-                    : `נשלח אימייל הזמנה ל-${inviteForm.email}. המשתמש יוכל להגדיר סיסמה דרך הקישור באימייל.`}
+                    : `נשלח אימייל הזמנה ל-${inviteForm.email}.`}
                 </p>
               </div>
-
               {inviteWarning && (
-                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-4">
-                  <p className="text-sm text-amber-800 dark:text-amber-300">
-                    {inviteWarning}
-                  </p>
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-4">
+                  <p className="text-sm text-amber-800">{inviteWarning}</p>
                 </div>
               )}
-
               <DialogFooter className="flex gap-2 flex-row-reverse">
                 <Button
                   onClick={closeInviteDialog}
@@ -395,33 +335,24 @@ export default function Users() {
                   dir="ltr"
                   placeholder="user@example.com"
                   value={inviteForm.email}
-                  onChange={(e) =>
-                    setInviteForm((f) => ({ ...f, email: e.target.value }))
-                  }
+                  onChange={(e) => setInviteForm((f) => ({ ...f, email: e.target.value }))}
                 />
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="invite-name">שם מלא</Label>
                 <Input
                   id="invite-name"
                   placeholder="ישראל ישראלי"
                   value={inviteForm.full_name}
-                  onChange={(e) =>
-                    setInviteForm((f) => ({ ...f, full_name: e.target.value }))
-                  }
+                  onChange={(e) => setInviteForm((f) => ({ ...f, full_name: e.target.value }))}
                 />
               </div>
-
               <div className="space-y-1.5">
                 <Label htmlFor="invite-role">תפקיד</Label>
                 <Select
                   value={inviteForm.role}
                   onValueChange={(val) =>
-                    setInviteForm((f) => ({
-                      ...f,
-                      role: val as UserRole,
-                    }))
+                    setInviteForm((f) => ({ ...f, role: val as UserRole }))
                   }
                 >
                   <SelectTrigger id="invite-role">
@@ -434,11 +365,7 @@ export default function Users() {
                   </SelectContent>
                 </Select>
               </div>
-
-              {inviteError && (
-                <p className="text-sm text-destructive">{inviteError}</p>
-              )}
-
+              {inviteError && <p className="text-sm text-destructive">{inviteError}</p>}
               <DialogFooter className="flex gap-2 flex-row-reverse">
                 <Button
                   onClick={handleInvite}
@@ -451,22 +378,20 @@ export default function Users() {
                 >
                   {isInviting ? 'יוצר משתמש...' : 'צור משתמש'}
                 </Button>
-                <Button variant="outline" onClick={closeInviteDialog}>
-                  ביטול
-                </Button>
+                <Button variant="outline" onClick={closeInviteDialog}>ביטול</Button>
               </DialogFooter>
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Delete Confirmation Dialog                                           */}
-      {/* ------------------------------------------------------------------ */}
       <Dialog
         open={!!deleteTarget}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null)
+          if (!open) {
+            setDeleteTarget(null)
+            setDeleteError(null)
+          }
         }}
       >
         <DialogContent dir="rtl" className="max-w-sm">
@@ -475,23 +400,22 @@ export default function Users() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             האם אתה בטוח שברצונך למחוק את המשתמש{' '}
-            <span className="font-semibold text-foreground">
-              {deleteTarget?.full_name}
-            </span>
-            ?{' '}
+            <span className="font-semibold text-foreground">{deleteTarget?.full_name}</span>?
             <br />
-            הפרופיל יימחק, אך חשבון האימות ישאר פעיל ויש למחקו דרך לוח הניהול
-            של Supabase.
+            הפעולה מוחקת גם את חשבון האימות ואינה ניתנת לביטול.
           </p>
+          {deleteError && <p className="text-sm text-destructive mt-2">{deleteError}</p>}
           <DialogFooter className="flex gap-2 flex-row-reverse">
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleteProfile.isPending}
-            >
-              {deleteProfile.isPending ? 'מוחק...' : 'מחק'}
+            <Button variant="destructive" onClick={handleDelete} disabled={isDeleting}>
+              {isDeleting ? 'מוחק...' : 'מחק'}
             </Button>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteTarget(null)
+                setDeleteError(null)
+              }}
+            >
               ביטול
             </Button>
           </DialogFooter>

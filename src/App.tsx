@@ -10,6 +10,7 @@ import Transactions from '@/pages/Transactions'
 import HoursLog from '@/pages/HoursLog'
 import Team from '@/pages/Team'
 import Users from '@/pages/Users'
+import Profile from '@/pages/Profile'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,7 +32,7 @@ export default function App() {
             <Route
               path="/"
               element={
-                <RequireRole allow={['admin']}>
+                <RequireRole allow={['admin', 'administration', 'recruiter']}>
                   <Dashboard />
                 </RequireRole>
               }
@@ -74,6 +75,14 @@ export default function App() {
               element={
                 <RequireRole allow={['admin']}>
                   <Users />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/profile"
+              element={
+                <RequireRole allow={['admin', 'administration', 'recruiter']}>
+                  <Profile />
                 </RequireRole>
               }
             />

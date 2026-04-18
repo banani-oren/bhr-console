@@ -19,6 +19,7 @@ type AuthContextValue = {
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
+  refreshProfile: () => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -124,8 +125,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Don't manually clear state — onAuthStateChange handles it
   }
 
+  const refreshProfile = async (): Promise<void> => {
+    const { data: sessionData } = await supabase.auth.getSession()
+    const currentUser = sessionData.session?.user ?? null
+    if (!currentUser) {
+      setProfile(null)
+      return
+    }
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', currentUser.id)
+      .single()
+    if (error) {
+      console.error('refreshProfile error', error)
+      return
+    }
+    setProfile(data as Profile | null)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   )

@@ -181,11 +181,32 @@ export default function Clients() {
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
 
   // ---- Import dialog state ----
+  type ImportNewRow = {
+    name: string
+    company_id: string | null
+    address: string | null
+    contact_name: string | null
+    phone: string | null
+    email: string | null
+  }
+  type ImportUpdateRow = {
+    existing: Client
+    updates: Partial<ImportNewRow>
+    incoming: ImportNewRow
+  }
+  type ImportSkipRow = { rowIndex: number; reason: string }
+  type ImportAnalysis = {
+    newRows: ImportNewRow[]
+    updateRows: ImportUpdateRow[]
+    skippedRows: ImportSkipRow[]
+    fileName: string
+  }
+
   const [importOpen, setImportOpen] = useState(false)
-  const [importRows, setImportRows] = useState<ClientForm[]>([])
-  const [importFileName, setImportFileName] = useState('')
+  const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null)
   const [isImporting, setIsImporting] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [importSummary, setImportSummary] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function setField<K extends keyof ClientForm>(key: K, value: ClientForm[K]) {
@@ -246,54 +267,197 @@ export default function Clients() {
   }
 
   // ---- Import ----
+  // Field labels for diff preview
+  const FIELD_LABELS: Record<keyof ImportNewRow, string> = {
+    name: 'שם',
+    company_id: 'מספר עסק',
+    address: 'כתובת',
+    contact_name: 'איש קשר',
+    phone: 'נייד',
+    email: 'דואל',
+  }
+
+  function normalizeHeader(h: string): string {
+    return h.replace(/\s+/g, '').trim().toLowerCase()
+  }
+
+  function collapseWs(s: string): string {
+    return s.trim().replace(/\s+/g, ' ')
+  }
+
+  function normName(s: string): string {
+    return collapseWs(s).toLowerCase()
+  }
+
+  function normCompanyId(s: string): string {
+    return s.replace(/\s+/g, '').toLowerCase()
+  }
+
+  function normPhone(raw: string): string | null {
+    const trimmed = String(raw ?? '').trim()
+    if (!trimmed) return null
+    const startsWithZero = trimmed.startsWith('0')
+    const digits = trimmed.replace(/\D/g, '')
+    if (!digits) return null
+    if (startsWithZero && !digits.startsWith('0')) return '0' + digits
+    return digits
+  }
+
   function parseFile(file: File) {
     const reader = new FileReader()
     reader.onload = (e) => {
-      const data = new Uint8Array(e.target?.result as ArrayBuffer)
-      const workbook = XLSX.read(data, { type: 'array' })
-      const clientSheet = workbook.Sheets['פרטי לקוחות'] ?? workbook.Sheets[workbook.SheetNames[0]]
-      const agreementSheet = workbook.Sheets['תנאי הסכמים']
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer)
+        const workbook = XLSX.read(data, { type: 'array' })
 
-      const clientRows: Record<string, string>[] = XLSX.utils.sheet_to_json(clientSheet, { defval: '' })
+        // Prefer 'רשימת לקוחות - קבועים' then 'פרטי לקוחות' then first sheet.
+        const sheet =
+          workbook.Sheets['רשימת לקוחות - קבועים'] ??
+          workbook.Sheets['פרטי לקוחות'] ??
+          workbook.Sheets[workbook.SheetNames[0]]
+        const jsonRows = XLSX.utils.sheet_to_json(sheet, {
+          defval: '',
+          raw: false,
+        }) as Record<string, unknown>[]
 
-      let agreementRows: Record<string, string>[] = []
-      if (agreementSheet) {
-        agreementRows = XLSX.utils.sheet_to_json(agreementSheet, { defval: '' })
-      }
-      const agByName = new Map<string, Record<string, string>>()
-      for (const row of agreementRows) {
-        const name = String(row['שם הלקוח'] ?? '').trim()
-        if (name) agByName.set(name, row)
-      }
+        // Build normalized-header lookup
+        const keyMap = new Map<string, keyof ImportNewRow>()
+        const HEADERS: Array<[string, keyof ImportNewRow]> = [
+          ['שם העסק', 'name'],
+          ['שם איש הקשר', 'contact_name'],
+          ['דואל', 'email'],
+          ['נייד', 'phone'],
+          ['מספר עסק', 'company_id'],
+          ['כתובת', 'address'],
+        ]
+        for (const [label, field] of HEADERS) {
+          keyMap.set(normalizeHeader(label), field)
+        }
 
-      const rows: ClientForm[] = clientRows
-        .map((row) => {
-          const name = String(row['שם העסק'] ?? row['name'] ?? row['שם'] ?? '').trim()
-          const ag = agByName.get(name)
-          return {
-            name,
-            company_id: String(row['מספר עסק'] ?? row['ח.פ'] ?? ag?.['ח.פ'] ?? ''),
-            address: String(row['כתובת'] ?? ''),
-            contact_name: String(row['שם איש הקשר'] ?? ''),
-            email: String(row['דואל'] ?? row['email'] ?? row['אימייל'] ?? ''),
-            phone: String(row['נייד'] ?? row['phone'] ?? row['טלפון'] ?? ''),
-            status: String(ag?.['סטטוס'] ?? row['סטטוס'] ?? 'פעיל'),
-            notes: '',
-            agreement_type: ag ? String(ag['סוג הסכם'] ?? '') : '',
-            commission_percent: ag?.['אחוז עמלה'] ?? '',
-            salary_basis: ag ? String(ag['בסיס משכורות'] ?? '') : '',
-            warranty_days: ag?.['תקופת אחריות'] ?? '',
-            payment_terms: ag ? String(ag['תנאי תשלום'] ?? '') : '',
-            payment_split: ag ? String(ag['חלוקת תשלום'] ?? '') : '',
-            advance: ag ? String(ag['מקדמה'] ?? '') : '',
-            exclusivity: ag?.['בלעדיות'] === 'כן',
-            agreement_file: ag ? String(ag['שם קובץ הסכם'] ?? '') : '',
-          } as ClientForm
+        const readCell = (row: Record<string, unknown>, field: keyof ImportNewRow): string => {
+          for (const [k, v] of Object.entries(row)) {
+            const normK = normalizeHeader(k)
+            if (keyMap.get(normK) === field) {
+              return v == null ? '' : String(v)
+            }
+          }
+          return ''
+        }
+
+        // Build lookup maps from current clients
+        const byCompanyId = new Map<string, Client>()
+        const byName = new Map<string, Client>()
+        for (const c of clients) {
+          if (c.company_id) {
+            byCompanyId.set(normCompanyId(String(c.company_id)), c)
+          }
+          if (c.name) {
+            byName.set(normName(c.name), c)
+          }
+        }
+
+        const newRows: ImportNewRow[] = []
+        const updateRows: ImportUpdateRow[] = []
+        const skippedRows: ImportSkipRow[] = []
+        const seenInFile = new Set<string>()
+
+        jsonRows.forEach((row, idx) => {
+          const rawName = readCell(row, 'name')
+          const nameTrimmed = collapseWs(rawName)
+          if (!nameTrimmed) {
+            // Skip entirely empty rows silently; otherwise warn.
+            const anyValue = Object.values(row).some((v) => v != null && String(v).trim() !== '')
+            if (anyValue) {
+              skippedRows.push({ rowIndex: idx + 2, reason: 'חסר שם עסק' })
+            }
+            return
+          }
+
+          const companyIdRaw = readCell(row, 'company_id')
+          const companyId = companyIdRaw.replace(/\s+/g, '').trim() || null
+
+          const emailRaw = readCell(row, 'email').trim()
+          const email = emailRaw ? emailRaw.toLowerCase() : null
+
+          const phone = normPhone(readCell(row, 'phone'))
+
+          const contact = readCell(row, 'contact_name').trim() || null
+          const address = readCell(row, 'address').trim() || null
+
+          const incoming: ImportNewRow = {
+            name: nameTrimmed,
+            company_id: companyId,
+            address,
+            contact_name: contact,
+            phone,
+            email,
+          }
+
+          // De-dup within the upload itself: pick the first occurrence only.
+          const fileKey = companyId ? 'cid:' + normCompanyId(companyId) : 'nm:' + normName(nameTrimmed)
+          if (seenInFile.has(fileKey)) {
+            skippedRows.push({ rowIndex: idx + 2, reason: 'שורה כפולה בקובץ' })
+            return
+          }
+          seenInFile.add(fileKey)
+
+          // Match existing
+          let existing: Client | undefined
+          if (companyId) {
+            existing = byCompanyId.get(normCompanyId(companyId))
+          }
+          if (!existing) {
+            existing = byName.get(normName(nameTrimmed))
+          }
+
+          if (!existing) {
+            newRows.push(incoming)
+            return
+          }
+
+          // Build diff: only fields where Excel has a non-empty value and it differs from DB.
+          const updates: Partial<ImportNewRow> = {}
+          const fields: Array<keyof ImportNewRow> = [
+            'name',
+            'company_id',
+            'address',
+            'contact_name',
+            'phone',
+            'email',
+          ]
+          for (const field of fields) {
+            const incomingVal = incoming[field]
+            if (incomingVal == null || incomingVal === '') continue
+            const dbVal = (existing as Record<string, unknown>)[field]
+            const dbStr = dbVal == null ? '' : String(dbVal)
+            if (dbStr !== String(incomingVal)) {
+              (updates as Record<string, unknown>)[field] = incomingVal
+            }
+          }
+
+          if (Object.keys(updates).length === 0) {
+            // No-op update — surface it as "update" with empty diff so the user sees it's a match.
+            updateRows.push({ existing, updates, incoming })
+          } else {
+            updateRows.push({ existing, updates, incoming })
+          }
         })
-        .filter((r) => r.name)
 
-      setImportRows(rows)
-      setImportFileName(file.name)
+        setImportAnalysis({
+          newRows,
+          updateRows,
+          skippedRows,
+          fileName: file.name,
+        })
+      } catch (err) {
+        console.error('parseFile error', err)
+        setImportAnalysis({
+          newRows: [],
+          updateRows: [],
+          skippedRows: [{ rowIndex: 0, reason: 'כשלון בקריאת הקובץ' }],
+          fileName: file.name,
+        })
+      }
     }
     reader.readAsArrayBuffer(file)
   }
@@ -311,17 +475,54 @@ export default function Clients() {
   }
 
   async function handleConfirmImport() {
+    if (!importAnalysis) return
     setIsImporting(true)
+    let inserted = 0
+    let updated = 0
+    let failed = 0
     try {
-      for (const row of importRows) {
-        const payload = formToPayload(row)
+      // Insert new rows
+      for (const row of importAnalysis.newRows) {
+        const payload = {
+          name: row.name,
+          company_id: row.company_id,
+          address: row.address,
+          contact_name: row.contact_name,
+          phone: row.phone,
+          email: row.email,
+          status: 'פעיל',
+        }
         const { error } = await supabase.from('clients').insert(payload)
-        if (error) console.error('Import row error:', error)
+        if (error) {
+          console.error('Import insert error:', error, payload)
+          failed += 1
+        } else {
+          inserted += 1
+        }
       }
-      queryClient.invalidateQueries({ queryKey: ['clients'] })
+
+      // Apply updates — only fields in `updates`; never touches agreement fields.
+      for (const u of importAnalysis.updateRows) {
+        if (Object.keys(u.updates).length === 0) continue
+        const { error } = await supabase
+          .from('clients')
+          .update(u.updates)
+          .eq('id', u.existing.id)
+        if (error) {
+          console.error('Import update error:', error, u)
+          failed += 1
+        } else {
+          updated += 1
+        }
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['clients'] })
+      const skipped = importAnalysis.skippedRows.length
+      const summary = `נוספו ${inserted} • עודכנו ${updated} • דולגו ${skipped}${failed ? ` • שגיאות: ${failed}` : ''}`
+      setImportSummary(summary)
+      setImportAnalysis(null)
       setImportOpen(false)
-      setImportRows([])
-      setImportFileName('')
+      setTimeout(() => setImportSummary(null), 5000)
     } catch (err) {
       console.error('Import error:', err)
     } finally {
@@ -331,8 +532,7 @@ export default function Clients() {
 
   function closeImportDialog() {
     setImportOpen(false)
-    setImportRows([])
-    setImportFileName('')
+    setImportAnalysis(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -568,9 +768,16 @@ export default function Clients() {
         </DialogContent>
       </Dialog>
 
+      {/* Import summary toast */}
+      {importSummary && (
+        <div className="fixed bottom-6 left-6 z-50 rounded-lg bg-foreground text-background px-4 py-3 shadow-lg text-sm">
+          {importSummary}
+        </div>
+      )}
+
       {/* Import Dialog */}
       <Dialog open={importOpen} onOpenChange={(open) => { if (!open) closeImportDialog() }}>
-        <DialogContent dir="rtl" className="max-w-3xl">
+        <DialogContent dir="rtl" className="max-w-4xl max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>ייבוא לקוחות מאקסל</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div
@@ -578,52 +785,152 @@ export default function Clients() {
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
               onDragLeave={() => setIsDragging(false)}
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${isDragging ? 'border-purple-500 bg-purple-50' : 'border-muted-foreground/30 hover:border-purple-400 hover:bg-muted/40'}`}
+              className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${isDragging ? 'border-purple-500 bg-purple-50' : 'border-muted-foreground/30 hover:border-purple-400 hover:bg-muted/40'}`}
             >
               <Upload className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
-              {importFileName ? (
-                <p className="text-sm font-medium">{importFileName}</p>
+              {importAnalysis?.fileName ? (
+                <p className="text-sm font-medium">{importAnalysis.fileName}</p>
               ) : (
                 <>
                   <p className="text-sm font-medium">גרור קובץ לכאן או לחץ לבחירה</p>
-                  <p className="text-xs text-muted-foreground mt-1">קבצי Excel (.xlsx) — תומך בגיליונות "פרטי לקוחות" ו"תנאי הסכמים"</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    קבצי Excel (.xlsx) — כותרות נתמכות: שם העסק, שם איש הקשר, דואל, נייד, מספר עסק, כתובת
+                  </p>
                 </>
               )}
               <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileInput} />
             </div>
-            {importRows.length > 0 && (
-              <>
-                <div className="max-h-64 overflow-y-auto rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-right">שם</TableHead>
-                        <TableHead className="text-right">ח.פ</TableHead>
-                        <TableHead className="text-right">סוג הסכם</TableHead>
-                        <TableHead className="text-right">איש קשר</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {importRows.map((row, i) => (
-                        <TableRow key={i}>
-                          <TableCell>{row.name}</TableCell>
-                          <TableCell className="font-mono text-sm">{row.company_id || '—'}</TableCell>
-                          <TableCell>{row.agreement_type || '—'}</TableCell>
-                          <TableCell>{row.contact_name || '—'}</TableCell>
-                        </TableRow>
+
+            {importAnalysis && (
+              <div className="space-y-4">
+                {/* New rows section */}
+                <section className="rounded-lg border border-green-200 bg-green-50/50">
+                  <header className="flex items-center justify-between px-4 py-2 border-b border-green-200 bg-green-100/50">
+                    <h3 className="text-sm font-semibold text-green-800">
+                      חדשים ({importAnalysis.newRows.length})
+                    </h3>
+                  </header>
+                  {importAnalysis.newRows.length === 0 ? (
+                    <p className="p-4 text-xs text-muted-foreground">אין לקוחות חדשים</p>
+                  ) : (
+                    <div className="max-h-40 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-right">שם</TableHead>
+                            <TableHead className="text-right">איש קשר</TableHead>
+                            <TableHead className="text-right">נייד</TableHead>
+                            <TableHead className="text-right">דואל</TableHead>
+                            <TableHead className="text-right">מספר עסק</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {importAnalysis.newRows.slice(0, 20).map((row, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="font-medium">{row.name}</TableCell>
+                              <TableCell>{row.contact_name ?? '—'}</TableCell>
+                              <TableCell dir="ltr" className="text-right">{row.phone ?? '—'}</TableCell>
+                              <TableCell dir="ltr" className="text-right">{row.email ?? '—'}</TableCell>
+                              <TableCell dir="ltr" className="text-right">{row.company_id ?? '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {importAnalysis.newRows.length > 20 && (
+                        <p className="text-[11px] text-muted-foreground px-4 py-2">
+                          ועוד {importAnalysis.newRows.length - 20} לקוחות חדשים...
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                {/* Update rows section */}
+                <section className="rounded-lg border border-amber-200 bg-amber-50/50">
+                  <header className="flex items-center justify-between px-4 py-2 border-b border-amber-200 bg-amber-100/50">
+                    <h3 className="text-sm font-semibold text-amber-800">
+                      עדכונים ({importAnalysis.updateRows.filter((u) => Object.keys(u.updates).length > 0).length})
+                    </h3>
+                  </header>
+                  {importAnalysis.updateRows.filter((u) => Object.keys(u.updates).length > 0).length === 0 ? (
+                    <p className="p-4 text-xs text-muted-foreground">אין שינויים בלקוחות קיימים</p>
+                  ) : (
+                    <div className="max-h-56 overflow-y-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-right">לקוח קיים</TableHead>
+                            <TableHead className="text-right">שדה</TableHead>
+                            <TableHead className="text-right">ערך במערכת</TableHead>
+                            <TableHead className="text-right">ערך חדש</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {importAnalysis.updateRows
+                            .filter((u) => Object.keys(u.updates).length > 0)
+                            .slice(0, 50)
+                            .flatMap((u) =>
+                              Object.entries(u.updates).map(([field, value]) => (
+                                <TableRow key={u.existing.id + field}>
+                                  <TableCell className="font-medium">{u.existing.name}</TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    {FIELD_LABELS[field as keyof ImportNewRow]}
+                                  </TableCell>
+                                  <TableCell className="text-xs" dir="ltr">
+                                    {((u.existing as Record<string, unknown>)[field] as string) ?? '—'}
+                                  </TableCell>
+                                  <TableCell className="text-xs font-medium text-amber-900" dir="ltr">
+                                    {String(value)}
+                                  </TableCell>
+                                </TableRow>
+                              )),
+                            )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </section>
+
+                {/* Skipped rows section */}
+                {importAnalysis.skippedRows.length > 0 && (
+                  <section className="rounded-lg border border-red-200 bg-red-50/50">
+                    <header className="flex items-center justify-between px-4 py-2 border-b border-red-200 bg-red-100/50">
+                      <h3 className="text-sm font-semibold text-red-800">
+                        שגיאות ({importAnalysis.skippedRows.length})
+                      </h3>
+                    </header>
+                    <div className="max-h-32 overflow-y-auto p-3 text-xs space-y-1">
+                      {importAnalysis.skippedRows.slice(0, 40).map((s, i) => (
+                        <div key={i} className="flex gap-2 text-red-800">
+                          <span className="font-mono">שורה {s.rowIndex}:</span>
+                          <span>{s.reason}</span>
+                        </div>
                       ))}
-                    </TableBody>
-                  </Table>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  נמצאו <span className="font-semibold text-foreground">{importRows.length}</span> רשומות לייבוא
-                </p>
-              </>
+                    </div>
+                  </section>
+                )}
+              </div>
             )}
           </div>
-          <DialogFooter className="flex gap-2 flex-row-reverse">
-            <Button onClick={handleConfirmImport} disabled={importRows.length === 0 || isImporting} className="bg-purple-600 hover:bg-purple-700 text-white">
-              {isImporting ? 'מייבא...' : `אשר ייבוא (${importRows.length})`}
+          <DialogFooter className="flex gap-2 flex-row-reverse pt-2">
+            <Button
+              onClick={handleConfirmImport}
+              disabled={
+                !importAnalysis ||
+                isImporting ||
+                (importAnalysis.newRows.length === 0 &&
+                  importAnalysis.updateRows.filter((u) => Object.keys(u.updates).length > 0).length === 0)
+              }
+              className="bg-purple-600 hover:bg-purple-700 text-white"
+            >
+              {isImporting
+                ? 'מייבא...'
+                : importAnalysis
+                ? `אשר ייבוא של ${
+                    importAnalysis.newRows.length +
+                    importAnalysis.updateRows.filter((u) => Object.keys(u.updates).length > 0).length
+                  } רשומות`
+                : 'אשר ייבוא'}
             </Button>
             <Button variant="outline" onClick={closeImportDialog}>ביטול</Button>
           </DialogFooter>

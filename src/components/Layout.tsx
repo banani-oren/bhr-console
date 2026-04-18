@@ -12,6 +12,12 @@ import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+const ROLE_LABELS_HE: Record<UserRole, string> = {
+  admin: 'מנהל',
+  administration: 'מנהלה',
+  recruiter: 'רכז/ת גיוס',
+}
+
 interface NavItem {
   label: string
   to: string
@@ -20,7 +26,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'דשבורד',        to: '/',             icon: <LayoutDashboard size={18} />, allow: ['admin'] },
+  { label: 'דשבורד',        to: '/',             icon: <LayoutDashboard size={18} />, allow: ['admin', 'administration', 'recruiter'] },
   { label: 'לקוחות',        to: '/clients',      icon: <Users size={18} />,           allow: ['admin', 'administration'] },
   { label: 'עסקאות',        to: '/transactions', icon: <Receipt size={18} />,         allow: ['admin', 'administration', 'recruiter'] },
   { label: 'יומן שעות',     to: '/hours',        icon: <Clock size={18} />,           allow: ['admin', 'administration', 'recruiter'] },
@@ -84,22 +90,27 @@ export default function Layout({ children }: LayoutProps) {
         {/* User info + sign out */}
         <div className="border-t border-sidebar-border px-4 py-4">
           {user && (
-            <div className="flex items-center gap-3 mb-3">
+            <button
+              type="button"
+              onClick={() => navigate('/profile')}
+              className="w-full flex items-center gap-3 mb-3 text-right rounded-lg px-2 py-1.5 -mx-2 hover:bg-sidebar-accent/50 transition-colors"
+              title="הפרופיל שלי"
+            >
               {/* Avatar placeholder */}
               <div className="flex items-center justify-center w-8 h-8 rounded-full bg-sidebar-primary text-sidebar-primary-foreground text-xs font-semibold shrink-0 select-none">
-                {(user.email ?? '?').charAt(0).toUpperCase()}
+                {((profile?.full_name || user.email) ?? '?').charAt(0).toUpperCase()}
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-sidebar-foreground truncate">
-                  {user.email}
+                  {profile?.full_name?.trim() || user.email}
                 </p>
                 {profile?.role && (
-                  <p className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
-                    {profile.role}
+                  <p className="text-[10px] tracking-wider text-sidebar-foreground/60">
+                    {ROLE_LABELS_HE[profile.role]}
                   </p>
                 )}
               </div>
-            </div>
+            </button>
           )}
 
           <button
