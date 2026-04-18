@@ -38,3 +38,4 @@ qa-screenshots/*.jpeg
 
 # One-shot admin magic link artifact — never commit
 magiclink.json
+xlsx_b64.txt
