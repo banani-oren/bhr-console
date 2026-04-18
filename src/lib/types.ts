@@ -34,6 +34,9 @@ export type Client = {
   advance: string | null
   exclusivity: boolean
   agreement_file: string | null
+  agreement_storage_path: string | null
+  hourly_rate: number | null
+  time_log_enabled: boolean
   created_at: string
 }
 

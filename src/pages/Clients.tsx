@@ -57,6 +57,9 @@ type ClientForm = {
   advance: string
   exclusivity: boolean
   agreement_file: string
+  hourly_rate: string
+  time_log_enabled: boolean
+  time_log_permissions: string[]
 }
 
 const emptyForm: ClientForm = {
@@ -77,6 +80,9 @@ const emptyForm: ClientForm = {
   advance: '',
   exclusivity: false,
   agreement_file: '',
+  hourly_rate: '',
+  time_log_enabled: false,
+  time_log_permissions: [],
 }
 
 function clientToForm(c: Client): ClientForm {
@@ -98,6 +104,9 @@ function clientToForm(c: Client): ClientForm {
     advance: c.advance ?? '',
     exclusivity: c.exclusivity ?? false,
     agreement_file: c.agreement_file ?? '',
+    hourly_rate: c.hourly_rate != null ? String(c.hourly_rate) : '',
+    time_log_enabled: c.time_log_enabled ?? false,
+    time_log_permissions: [],
   }
 }
 
@@ -120,6 +129,8 @@ function formToPayload(form: ClientForm) {
     advance: form.advance || null,
     exclusivity: form.exclusivity,
     agreement_file: form.agreement_file || null,
+    hourly_rate: form.hourly_rate ? Number(form.hourly_rate) : null,
+    time_log_enabled: form.time_log_enabled,
   }
 }
 
@@ -188,6 +199,7 @@ export default function Clients() {
     contact_name: string | null
     phone: string | null
     email: string | null
+    hourly_rate: number | null
   }
   type ImportUpdateRow = {
     existing: Client
@@ -275,6 +287,7 @@ export default function Clients() {
     contact_name: 'איש קשר',
     phone: 'נייד',
     email: 'דואל',
+    hourly_rate: 'תעריף שעת עבודה',
   }
 
   function normalizeHeader(h: string): string {
@@ -329,6 +342,7 @@ export default function Clients() {
           ['נייד', 'phone'],
           ['מספר עסק', 'company_id'],
           ['כתובת', 'address'],
+          ['תעריף שעת עבודה', 'hourly_rate'],
         ]
         for (const [label, field] of HEADERS) {
           keyMap.set(normalizeHeader(label), field)
@@ -383,6 +397,8 @@ export default function Clients() {
 
           const contact = readCell(row, 'contact_name').trim() || null
           const address = readCell(row, 'address').trim() || null
+          const hourlyRateRaw = readCell(row, 'hourly_rate').trim()
+          const hourlyRate = hourlyRateRaw ? Number(hourlyRateRaw.replace(/[^0-9.]/g, '')) : null
 
           const incoming: ImportNewRow = {
             name: nameTrimmed,
@@ -391,6 +407,7 @@ export default function Clients() {
             contact_name: contact,
             phone,
             email,
+            hourly_rate: Number.isFinite(hourlyRate) ? hourlyRate : null,
           }
 
           // De-dup within the upload itself: pick the first occurrence only.
@@ -424,6 +441,7 @@ export default function Clients() {
             'contact_name',
             'phone',
             'email',
+            'hourly_rate',
           ]
           for (const field of fields) {
             const incomingVal = incoming[field]
@@ -490,6 +508,7 @@ export default function Clients() {
           contact_name: row.contact_name,
           phone: row.phone,
           email: row.email,
+          hourly_rate: row.hourly_rate,
           status: 'פעיל',
         }
         const { error } = await supabase.from('clients').insert(payload)
@@ -591,6 +610,7 @@ export default function Clients() {
                 <TableHead className="text-right">איש קשר</TableHead>
                 <TableHead className="text-right">נייד</TableHead>
                 <TableHead className="text-right">סוג הסכם</TableHead>
+                <TableHead className="text-right">תעריף/שעה</TableHead>
                 <TableHead className="text-right">סטטוס</TableHead>
                 <TableHead className="text-right">פעולות</TableHead>
               </TableRow>
@@ -598,7 +618,7 @@ export default function Clients() {
             <TableBody>
               {filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     לא נמצאו לקוחות
                   </TableCell>
                 </TableRow>
@@ -609,6 +629,11 @@ export default function Clients() {
                     <TableCell>{client.contact_name ?? '—'}</TableCell>
                     <TableCell dir="ltr" className="text-right">{client.phone ?? '—'}</TableCell>
                     <TableCell>{client.agreement_type ?? '—'}</TableCell>
+                    <TableCell dir="ltr" className="text-right">
+                      {client.hourly_rate != null
+                        ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(client.hourly_rate)
+                        : '—'}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
                     </TableCell>
@@ -728,12 +753,24 @@ export default function Clients() {
                   <Switch checked={form.exclusivity} onCheckedChange={(v) => setField('exclusivity', v)} />
                   <Label>בלעדיות</Label>
                 </div>
+                <div className="space-y-1.5">
+                  <Label>תעריף שעת עבודה (₪)</Label>
+                  <Input
+                    type="number"
+                    dir="ltr"
+                    step={1}
+                    value={form.hourly_rate}
+                    onChange={(e) => setField('hourly_rate', e.target.value)}
+                    placeholder="למשל 200"
+                  />
+                </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label>שם קובץ הסכם</Label>
                   <Input value={form.agreement_file} onChange={(e) => setField('agreement_file', e.target.value)} />
                 </div>
               </div>
             </div>
+
           </div>
 
           <DialogFooter className="flex flex-col gap-2">
