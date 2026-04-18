@@ -81,12 +81,13 @@ serve(async (req) => {
       </html>
     `
 
-    // The user + profile are now created. The invite is considered successful
-    // at this point — email delivery is a secondary concern because the Resend
-    // free tier (onboarding@resend.dev sender) only reaches the Resend account
-    // owner. We treat a send failure as a warning, not a hard error, so the
-    // admin UI still advances (user appears in /users and /team immediately),
-    // and the admin can copy the portal link or trigger password reset manually.
+    // The user + profile are created before the email send. A send failure is
+    // surfaced as a warning so the admin UI still advances (user appears in
+    // /users and /team immediately) and the admin can fall back to the portal
+    // link or a password-reset flow. Sender is on the verified banani-hr.com
+    // Resend domain.
+    const mailFrom = Deno.env.get('INVITE_FROM_EMAIL') ?? 'BHR Console <no-reply@banani-hr.com>'
+
     let emailSent = false
     let emailError: string | null = null
     let emailId: string | null = null
@@ -99,7 +100,7 @@ serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          from: 'BHR Console <onboarding@resend.dev>',
+          from: mailFrom,
           to: email,
           subject: 'הוזמנת להצטרף ל-BHR Console',
           html: emailHtml,

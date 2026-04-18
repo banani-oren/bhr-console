@@ -420,7 +420,7 @@ Flow:
 5. Sends custom Hebrew RTL invite email via Resend HTTP API
 6. Returns `{ success: true, user_id, email_id }`
 
-**Resend limitation**: Using `onboarding@resend.dev` (free tier), emails only deliver to the Resend account owner (`bananioren@gmail.com`). To send to any email, verify a domain at https://resend.com/domains and update the `from` address in the edge function.
+**Resend sender**: `banani-hr.com` is verified in Resend (eu-west-1). The edge function sends from `BHR Console <no-reply@banani-hr.com>` (override with the `INVITE_FROM_EMAIL` secret on the edge function if a different address is desired). Emails deliver to any recipient.
 
 ---
 
@@ -605,13 +605,13 @@ bhr-console/
 
 ### Supabase SMTP Configuration
 - Configured via Management API to use Resend SMTP (smtp.resend.com:465)
-- Sender: `BHR Console <onboarding@resend.dev>` (until custom domain is verified)
+- Sender: `BHR Console <no-reply@banani-hr.com>` (the `banani-hr.com` Resend domain is verified)
 
 ---
 
 ## Pending / TODO
 
-- **Resend domain verification**: Verify `banani-hr.com` at https://resend.com/domains to send invite emails to any address (not just account owner)
+_(none — Resend domain `banani-hr.com` is verified and wired into both the edge function and Supabase Auth SMTP sender)_
 
 ## ✅ Completed Infrastructure
 
