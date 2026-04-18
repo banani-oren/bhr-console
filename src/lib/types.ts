@@ -71,6 +71,8 @@ export type Transaction = {
   position_name: string
   candidate_name: string
   service_type: string
+  service_type_id: string | null
+  custom_fields: Record<string, unknown>
   salary: number
   commission_percent: number
   net_invoice_amount: number
