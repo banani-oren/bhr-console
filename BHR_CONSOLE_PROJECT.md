@@ -100,14 +100,14 @@ RESEND_API_KEY=re_<...>
 
 ## Architecture — Unified User Model
 
-**`profiles` is the single source of truth** for all users (admin + employee).  
-There is no separate `team_members` table — all employee data lives on `profiles`.
+**`profiles` is the single source of truth** for all users (admin, administration, recruiter).
+There is no separate `team_members` table — all non-admin data lives on `profiles`.
 
 - `profiles.id` references `auth.users.id` (1:1)
-- A database trigger (`handle_new_user`) auto-creates a `profiles` row when a new auth user is created
-- `/team` page queries `profiles WHERE role = 'employee'`
-- `/users` page queries all `profiles`
-- Portal lookups use `profiles.portal_token`
+- A database trigger (`handle_new_user`) auto-creates a `profiles` row on auth-user insert, defaulting `role='recruiter'` and `password_set=false`
+- `/team` page queries `profiles WHERE role IN ('recruiter','administration')`
+- `/users` page queries all `profiles` (admin only — RLS blocks non-admins from seeing other rows)
+- There are no portal tokens and no portal route
 
 ---
 
@@ -158,7 +158,7 @@ ensuring that even a compromised frontend cannot read rows the role should not s
 ## Database Schema
 
 ```sql
--- profiles: single source of truth for all users (admin + employee)
+-- profiles: single source of truth for all users (admin, administration, recruiter)
 -- bonus_model stores the full tiered bonus structure as JSONB (see Bonus Model section)
 create table profiles (
   id uuid references auth.users primary key,
@@ -236,7 +236,7 @@ create table transactions (
   commission_percent numeric,
   net_invoice_amount numeric,
   commission_amount numeric,
-  service_lead text,                                 -- references profiles.full_name (employee)
+  service_lead text,                                 -- references profiles.full_name (recruiter/administration)
   entry_date date,
   billing_month integer,
   billing_year integer,
@@ -367,40 +367,29 @@ domain table — the employee portal has been removed.
 - **סגור חודש** button: upserts Transaction record for client/month
 - Close month has confirmation dialog with success/error feedback
 
-#### 5. `/team` — Team (employees only)
-- Queries `profiles WHERE role = 'employee'`
-- Cards per employee: name, email, portal link
-- Edit dialog: employee-specific fields only — bonus_model, hours_category_enabled
-- No add/delete — employees are managed via `/users` (invite flow)
-- Save goes to `profiles` table with success/error toast
-- Portal link copy button
+#### 5. `/team` — Team (non-admin users)
+- Admin-only page. Queries `profiles WHERE role IN ('recruiter','administration')`.
+- Cards per user: name, email, role badge.
+- Edit dialog: non-admin-specific fields only — `bonus_model`, `hours_category_enabled`.
+- No add/delete here — new users are onboarded via `/users` (invite flow).
+- Save goes to `profiles` with success/error toast and query invalidation.
 
-#### 6. `/users` — User Management (Admin only, behind AdminRoute)
-- Table: email, name, role
-- **Invite user**: calls `invite-user` edge function → sends email via Resend
-- Reset password (via Supabase Auth `resetPasswordForEmail`)
-- Delete user (deletes profile row)
-- Toggle role (admin ↔ employee)
+#### 6. `/users` — User Management (Admin only, behind `<RequireRole allow={['admin']}>`)
+- Table: email, name, role.
+- **Invite user**: calls `invite-user` edge function. The invite email links to `/set-password` so the invitee must set a password before `RequireRole` will let them into the app.
+- Reset password (via Supabase Auth `resetPasswordForEmail`).
+- Delete user (deletes the `profiles` row).
+- Change role: 3-way dropdown (`admin` / `administration` / `recruiter`).
 
 ---
 
-### Employee Portal
+### Personal Hours view (recruiter + administration)
 
-#### `/portal` — Entry point
-- Reads `?token=<portal_token>` from URL
-- Finds matching `profiles` row by `portal_token`
-- No login required — token IS the identity
-- If token invalid: show "קישור לא תקין" error
+There is no standalone employee-portal route. Recruiter and administration roles
+log their own hours on `/hours` — the page branches by role:
 
-#### Portal tabs (based on employee config):
-- **שעות** (all employees):
-  - Month/year selector (default: current month)
-  - Table: date, hours, category (if hours_category_enabled), description, total footer
-  - "+ הוסף דיווח" button → inline form
-  - On save: creates `hours_log` record with `profile_id`
-- **בונוס** (only if bonus_model is configured):
-  - Shows current month revenue and calculated bonus
-  - See Bonus section below
+- Admin: the tabs-per-client variant (seeds retainer transactions via "סגור חודש").
+- Recruiter / administration: a single personal view — one table of the current month's own `hours_log` rows with the month/year selector and a "הוסף דיווח" form that writes a `hours_log` row with `profile_id = auth.uid()`. RLS guarantees they cannot read anyone else's entries.
 
 ---
 
@@ -428,7 +417,7 @@ domain table — the employee portal has been removed.
 ```
 
 ### Calculation logic (flat — NOT progressive)
-The employee receives the single flat bonus amount for the highest tier their monthly revenue reaches:
+The user receives the single flat bonus amount for the highest tier their monthly revenue reaches:
 ```
 revenue = 30,000  →  bonus = 2,100  (reached ₪25,000 tier)
 revenue = 70,000  →  bonus = 5,200  (reached ₪70,000 tier)
@@ -442,12 +431,11 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 };
 ```
 
-### Portal Bonus Tab shows:
-- Revenue card (current month, filtered by bonus_model.filter)
-- Bonus card (flat ₪ amount)
-- Current tier indicator (₪ min threshold reached)
-- "עוד ₪X למדרגה הבאה" (if not at max tier)
-- Tiers table showing ₪ min and ₪ bonus columns (NO percentages) — highlight current tier
+### Bonus model editor (admin only — `/team` edit dialog):
+- Revenue-filter shape: `{ field: 'service_lead', contains: '<name or fragment>' }`.
+- Tiers table, 2 columns per row: **מינימום (₪)** and **בונוס (₪)** — no %, no rate, no max.
+- Saved as JSONB on `profiles.bonus_model`.
+- Downstream consumers compute the flat bonus with `calcBonus()` above. (There is no user-facing bonus tab in v8; bonus is surfaced to admins only.)
 
 ### Admin configures bonus model via `/team` edit dialog.
 - Form shows only 2 columns per tier row: **מינימום (₪)** and **בונוס (₪)**
@@ -463,12 +451,12 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 **URL**: `https://szunbwkmldepkwpxojma.supabase.co/functions/v1/invite-user`
 
 Flow:
-1. Receives `{ email, full_name, role }` from frontend
-2. Calls `auth.admin.generateLink({ type: 'invite' })` — creates auth user + invite link
-3. Auth trigger (`handle_new_user`) auto-creates the `profiles` row
-4. Updates profile with `portal_token`
-5. Sends custom Hebrew RTL invite email via Resend HTTP API
-6. Returns `{ success: true, user_id, email_id }`
+1. Receives `{ email, full_name, role }` from frontend (role is one of `admin | administration | recruiter`; default when unset is `recruiter`).
+2. Calls `auth.admin.generateLink({ type: 'invite', options: { redirectTo: '<site>/set-password' } })` — creates the auth user and a one-shot link that lands on `/set-password` (NOT the app).
+3. Auth trigger (`handle_new_user`) auto-creates the `profiles` row with `password_set=false` and `role = <invited role | 'recruiter'>`.
+4. Edge function then (re)sets `full_name`, `role`, and `password_set=false` on the profile (idempotent).
+5. Sends the custom Hebrew RTL invite email via Resend HTTP API (sender defaults to `BHR Console <no-reply@banani-hr.com>`; override with the `INVITE_FROM_EMAIL` secret).
+6. Returns `{ success, user_id, email_sent, email_id, email_warning, action_link }`. `email_warning` is a non-fatal surface for Resend rejections — the profile is already created, so the admin UI advances.
 
 **Resend sender**: `banani-hr.com` is verified in Resend (eu-west-1). The edge function sends from `BHR Console <no-reply@banani-hr.com>` (override with the `INVITE_FROM_EMAIL` secret on the edge function if a different address is desired). Emails deliver to any recipient.
 
@@ -476,39 +464,27 @@ Flow:
 
 ## Auth Flow
 
-### Admin login (`/login`):
+### Login (`/login`):
 
-The UI still renders an email+password form (`src/pages/Login.tsx`) for day-to-day
-use, but the **canonical admin-authentication flow is magic link** — used by Oren
-interactively and by any autonomous run per `CLAUDE_CODE_AUTONOMOUS.md`.
+All roles log in via the email+password form in `src/pages/Login.tsx`. On successful sign-in the page redirects to `DEFAULT_LANDING[profile.role]` (`admin → /`, `administration → /transactions`, `recruiter → /transactions`). If the user has `password_set = false`, they are routed to `/set-password` first.
 
-**Magic-link flow (canonical):**
-1. Generate a one-shot link via the Supabase Admin API using `SUPABASE_SERVICE_ROLE_KEY`:
-   ```
-   POST $VITE_SUPABASE_URL/auth/v1/admin/generate_link
-   { "type": "magiclink", "email": "bananioren@gmail.com" }
-   ```
-2. Open `action_link` from the response. Supabase consumes the token, sets the
-   session, and redirects into the app at `/`.
-3. Session expires after ~1 hour; generate a fresh link and re-enter if needed.
+**Admin magic-link (service-role, for Oren or autonomous runs):**
+1. `POST $VITE_SUPABASE_URL/auth/v1/admin/generate_link` with `{ type: 'magiclink', email: 'bananioren@gmail.com' }` using `SUPABASE_SERVICE_ROLE_KEY`.
+2. Open `action_link`. Supabase sets the session and the app lands on `/`.
+3. Session lifetime ≈ 1 hour. Regenerate as needed. See `CLAUDE_CODE_AUTONOMOUS.md`.
 
-**Password flow (fallback, Login.tsx):**
-- Calls `supabase.auth.signInWithPassword()` directly (not through useAuth wrapper)
-- On success: do NOT call `setLoading(false)` — let `onAuthStateChange` update user state, which triggers `if (user) return <Navigate to="/" />` in Login.tsx
-- On error: `setError(error.message)` + `setLoading(false)` immediately, `console.error` for debugging
-- 10-second safety timeout resets loading if redirect never fires
-- Already logged in: auto-redirect to `/` via `if (user) return <Navigate to="/" />`
+**Password flow (all roles via `/login`):**
+- `Login.tsx` calls `supabase.auth.signInWithPassword()` directly (not through `useAuth`).
+- On success it does NOT call `setLoading(false)` — it lets `onAuthStateChange` update `user`/`profile` and the `if (user) return <Navigate to=DEFAULT_LANDING[profile.role] />` branch redirects.
+- On error: `setError(error.message)` + immediate `setLoading(false)` + `console.error`.
+- 10-second safety timeout resets loading if the redirect never fires.
+- Already logged in: auto-redirects to the role's default landing (or `/set-password` if the password is not yet set).
 
 ### Auth context (`src/lib/auth.tsx`):
-- Uses `onAuthStateChange(INITIAL_SESSION)` only — no separate `getSession()` call (avoids race condition)
-- Fetches profile from `profiles` table on auth state change
-- 5-second safety timeout prevents infinite loading screen
-- Cancellation flag prevents state updates after unmount
-
-### Employee portal:
-- No login — accessed via `?token=<portal_token>`
-- Token stored in `profiles.portal_token`
-- Admin copies portal link from `/team` page
+- Primes the session on mount via `supabase.auth.getSession()` (synchronous localStorage read, no network round-trip in the common case) and fetches the matching `profiles` row before clearing `loading`.
+- Subscribes to `onAuthStateChange` for subsequent sign-in/out/refresh; does NOT touch `loading` after the initial resolve (prevents a transient null-session event from toggling it back on and bouncing to `/login`).
+- 10-second safety timeout ensures `loading` does not stick if `getSession()` never resolves.
+- Cancellation flag prevents state updates after unmount.
 
 ### Password Reset:
 - Admin-initiated from `/users` page
@@ -557,15 +533,15 @@ interactively and by any autonomous run per `CLAUDE_CODE_AUTONOMOUS.md`.
 
 1. **Re-render bug prevention**: Never put `useQuery` inside a Dialog/Modal component. Always hoist queries to parent and pass as props.
 
-2. **Supabase RLS**: RLS enabled on all tables. Authenticated users get full access. Anon users get read access to profiles (portal lookup) and hours_log. No recursive policies on profiles (causes infinite recursion).
+2. **Supabase RLS — role-aware (v8)**: RLS is enabled on `profiles`, `clients`, `transactions`, `hours_log`, `agreements`. All policies target the `authenticated` role and delegate role lookups to two SECURITY DEFINER helpers — `public.current_user_role()` and `public.current_user_full_name()` — to avoid infinite recursion when a policy on `profiles` itself needs to read the caller's role. There are no `anon` policies on any domain table. See the RLS Policies (v8) table and `supabase/migrations/20260418_roles_and_rls.sql` + `_1_rls_no_recursion.sql`.
 
-3. **Portal token**: `portal_token` in `profiles` is a UUID string. The `/portal` route is excluded from auth middleware (no `ProtectedRoute` wrapper).
+3. **Route guarding**: All authenticated routes are wrapped in `<RequireRole allow={[...]}>` (`src/components/RequireRole.tsx`). `RequireRole` redirects unauthenticated users to `/login`, users with `password_set=false` to `/set-password`, and users whose role is not in `allow` to `DEFAULT_LANDING[role]`. `ProtectedRoute`/`AdminRoute` no longer exist.
 
 4. **Billable toggle**: Per-row toggle in transactions table. Immediate mutation on click with `.select()`.
 
-5. **Hours → Transaction**: When "סגור חודש" is clicked, upsert a Transaction record: check if exists for `client_name + month + year`, update or create.
+5. **Hours → Transaction**: When "סגור חודש" is clicked (admin only), upsert a Transaction record: check if exists for `client_name + month + year`, update or create.
 
-6. **Unified identity**: `profiles` is the single table for all user data. The `team_members` table is deprecated — all frontend queries use `profiles`. hours_log uses `profile_id` (not `team_member_id`).
+6. **Unified identity**: `profiles` is the single table for all user data. The `team_members` table is deprecated — all frontend queries use `profiles`. `hours_log` writes set `profile_id = auth.uid()`; `team_member_id` is ignored legacy.
 
 7. **Data persistence — save handlers**: Every form save must:
    - Use try-catch around the mutation
@@ -575,28 +551,15 @@ interactively and by any autonomous run per `CLAUDE_CODE_AUTONOMOUS.md`.
    - Call `queryClient.invalidateQueries()` on success
    - Log errors with `console.error`
 
-8. **Auth flow — no race condition**: Use `onAuthStateChange` only (not `getSession()`). The `INITIAL_SESSION` event provides the session on mount. A 5-second safety timeout prevents the loading screen from hanging forever.
+8. **Auth flow — no race condition**: `AuthProvider` primes the session with `supabase.auth.getSession()` on mount (localStorage read), fetches the matching `profiles` row, then clears `loading`. Subsequent sign-in/out events arrive via `onAuthStateChange` but do NOT touch `loading`. 10-second safety timeout trips only if `getSession()` never resolves.
 
-9. **Supabase clients — two-client architecture**:
-   - `src/lib/supabase.ts` — the **admin/authenticated client**. Single `createClient()`
-     call with default auth options (persists session to `localStorage`, auto-refreshes).
-     Every admin page imports this. The file validates that `VITE_SUPABASE_URL` and
-     `VITE_SUPABASE_ANON_KEY` exist at startup — throws if missing.
-   - `src/lib/supabasePublic.ts` — the **token-only portal client**. Separate
-     `createClient()` call with `persistSession:false`, `autoRefreshToken:false`,
-     `detectSessionInUrl:false`. Imported ONLY by `src/pages/Portal.tsx`.
-   - **Why two clients.** The employee portal is accessed via `?token=...` on devices
-     that may also have an admin's stale auth token in `localStorage`. If the portal
-     used the shared admin client, GoTrue's session-recovery flow would block every
-     `.from(...)` call while trying to refresh the stale admin session, and the portal
-     would hang on `טוען פורטל...` indefinitely. The scope-limited public client
-     never touches auth state, so portal queries never queue behind session recovery.
-   - **Rule.** Do NOT import `supabasePublic` anywhere except `src/pages/Portal.tsx`.
-     Do NOT add a third `createClient()` call without updating this section.
+9. **Single Supabase client**: The codebase uses one `createClient()` call — `src/lib/supabase.ts`. The legacy `supabasePublic.ts` portal client was removed together with `/portal` in v8. Do not add a second client without updating this section and the security model.
 
-10. **Login pattern**: Login.tsx calls `supabase.auth.signInWithPassword()` directly. On success, leaves `loading=true` and relies on `onAuthStateChange` → `setUser` → `<Navigate to="/" />` to redirect. On error, resets loading immediately with the error message. A 10-second safety timeout resets loading if the redirect never fires.
+10. **Login pattern**: `Login.tsx` calls `supabase.auth.signInWithPassword()` directly. On success it leaves `loading=true` and relies on `onAuthStateChange` → `setUser`/`setProfile` → the `<Navigate to={DEFAULT_LANDING[profile.role]} />` branch to redirect. A 10-second safety timeout resets loading if the redirect never fires.
 
-11. **RTL sidebar**: Layout.tsx uses `<div className="flex min-h-screen">` — NOT `flex-row-reverse`. With `dir="rtl"` on `<html>`, plain `flex` already renders the first child (sidebar) on the RIGHT. Using `flex-row-reverse` double-reverses it to the LEFT — this was a past bug.
+11. **RTL sidebar**: `Layout.tsx` uses `<div className="flex min-h-screen">` — NOT `flex-row-reverse`. With `dir="rtl"` on `<html>`, plain `flex` already renders the first child (sidebar) on the RIGHT. Using `flex-row-reverse` double-reverses it to the LEFT — this was a past bug.
+
+12. **Role-aware UI** (`src/components/Layout.tsx`): The sidebar filters `NAV_ITEMS` by `profile.role` (`admin` sees all six, `administration` sees לקוחות/עסקאות/יומן שעות, `recruiter` sees עסקאות/יומן שעות). `Users.tsx` exposes a 3-way role dropdown per row. `HoursLog.tsx` renders a single personal view for non-admins (no client tabs, no close-month button).
 
 ---
 
@@ -607,31 +570,34 @@ bhr-console/
 ├── src/
 │   ├── components/
 │   │   ├── ui/              # shadcn components
-│   │   └── Layout.tsx       # sidebar + header (RTL, plain flex — dir="rtl" handles direction)
+│   │   ├── Layout.tsx       # sidebar + header (RTL, plain flex — dir="rtl" handles direction; nav items filtered by role)
+│   │   └── RequireRole.tsx  # single route guard — allow prop = UserRole[]; also enforces password_set
 │   ├── pages/
-│   │   ├── Dashboard.tsx
-│   │   ├── Clients.tsx          # includes agreement fields — no separate Agreements page
-│   │   ├── Transactions.tsx
-│   │   ├── HoursLog.tsx
-│   │   ├── Team.tsx         # queries profiles WHERE role='employee'
-│   │   ├── Users.tsx        # invite via edge function
-│   │   ├── Login.tsx
-│   │   └── Portal.tsx       # queries profiles by portal_token — uses supabasePublic
+│   │   ├── Dashboard.tsx         # admin only
+│   │   ├── Clients.tsx           # admin + administration; includes agreement fields — no separate Agreements page
+│   │   ├── Transactions.tsx      # admin + administration (all rows); recruiter (own rows via RLS)
+│   │   ├── HoursLog.tsx          # admin: tabs-per-client; non-admin: single personal view
+│   │   ├── Team.tsx              # admin only; queries profiles WHERE role IN ('recruiter','administration')
+│   │   ├── Users.tsx             # admin only; invite via edge function; 3-way role dropdown
+│   │   ├── Login.tsx             # email+password; redirects to DEFAULT_LANDING[role]
+│   │   └── SetPassword.tsx       # forced password-creation step after invite
 │   ├── lib/
-│   │   ├── supabase.ts        # admin/authenticated client (persistSession:true)
-│   │   ├── supabasePublic.ts  # token-only portal client (persistSession:false) — see Key Implementation Notes #9
-│   │   ├── auth.tsx           # AuthProvider (onAuthStateChange only)
-│   │   ├── types.ts           # Profile, Client (includes agreement fields), Transaction, HoursLog, BonusTier, BonusModel
+│   │   ├── supabase.ts        # single authenticated client (persistSession:true)
+│   │   ├── auth.tsx           # AuthProvider (getSession on mount + onAuthStateChange)
+│   │   ├── types.ts           # UserRole, Profile (with password_set), Client, Transaction, HoursLog, BonusTier, BonusModel
 │   │   │                          # Note: Agreement type is deprecated — agreement fields live on Client
 │   │   └── utils.ts
 │   ├── hooks/
 │   │   └── useSupabaseQuery.ts  # useTable, useInsert, useUpdate, useDelete
-│   ├── App.tsx               # routes, ProtectedRoute, AdminRoute
+│   ├── App.tsx               # routes — every admin route uses <RequireRole allow={[...]}>
 │   └── main.tsx
 ├── supabase/
-│   └── functions/
-│       └── invite-user/
-│           └── index.ts      # edge function: invite + Resend email
+│   ├── functions/
+│   │   └── invite-user/
+│   │       └── index.ts      # edge function: invite (redirect_to=/set-password) + Resend email
+│   └── migrations/
+│       ├── 20260418_roles_and_rls.sql        # role enum expansion, password_set, role-aware RLS
+│       └── 20260418_1_rls_no_recursion.sql   # SECURITY DEFINER helpers to avoid RLS recursion on profiles
 ├── .env.local                # env variables (gitignored)
 ├── vercel.json               # SPA rewrites for client-side routing
 ├── supabase-schema.sql       # original schema (reference only)
@@ -663,11 +629,13 @@ bhr-console/
 
 ## Pending / TODO
 
-_(none — Resend domain `banani-hr.com` is verified and wired into both the edge function and Supabase Auth SMTP sender)_
+_(none)_
 
 ## ✅ Completed Infrastructure
 
-- **GitHub → Vercel auto-deploy**: ✅ DONE — `banani-oren/bhr-console` is connected to Vercel. Every `git push origin main` triggers an automatic deploy. No manual `vercel --prod` needed.
+- **GitHub → Vercel auto-deploy**: ✅ `banani-oren/bhr-console` is connected to Vercel. Every `git push origin main` triggers an automatic deploy. No manual `vercel --prod` needed.
+- **Resend verified sender** (`banani-hr.com`, eu-west-1): ✅ wired into both the `invite-user` edge function (`INVITE_FROM_EMAIL` override available) and Supabase Auth SMTP (`smtp_sender_name=BHR Console`, `smtp_admin_email=no-reply@banani-hr.com`). See `EMAIL_FIX_REPORT.md`.
+- **Three-role access control + role-aware RLS**: ✅ see §"User Roles (three-role model — v8)", §"RLS Policies (v8)", and `SECURITY_FIX_REPORT.md`. Invite-link bypass closed.
 
 ---
 
