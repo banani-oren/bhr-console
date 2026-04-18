@@ -167,6 +167,20 @@ export default function Clients() {
     },
   })
 
+  // Time-log eligible profiles (administration + recruiter)
+  const { data: eligibleProfiles = [] } = useQuery<{ id: string; full_name: string; role: string }[]>({
+    queryKey: ['eligible-profiles'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .in('role', ['administration', 'recruiter'])
+        .order('full_name', { ascending: true })
+      if (error) throw error
+      return data as { id: string; full_name: string; role: string }[]
+    },
+  })
+
   // Filter client-side
   const filtered = useMemo(() => {
     return clients.filter((c) => {
@@ -232,11 +246,25 @@ export default function Clients() {
     setCardOpen(true)
   }
 
-  function openEdit(client: Client) {
+  async function openEdit(client: Client) {
     setEditingClient(client)
     setForm(clientToForm(client))
     setSaveStatus('idle')
     setCardOpen(true)
+    // Load existing time-log permissions for this client.
+    try {
+      const { data, error } = await supabase
+        .from('client_time_log_permissions')
+        .select('profile_id')
+        .eq('client_id', client.id)
+      if (error) throw error
+      setForm((f) => ({
+        ...f,
+        time_log_permissions: (data ?? []).map((r) => r.profile_id as string),
+      }))
+    } catch (err) {
+      console.error('load permissions error:', err)
+    }
   }
 
   function closeCard() {
@@ -250,12 +278,27 @@ export default function Clients() {
     setSaveStatus('saving')
     try {
       const payload = formToPayload(form)
+      let clientId = editingClient?.id
       if (editingClient) {
         const { error } = await supabase.from('clients').update(payload).eq('id', editingClient.id)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('clients').insert(payload)
+        const { data, error } = await supabase.from('clients').insert(payload).select('id').single()
         if (error) throw error
+        clientId = data?.id as string
+      }
+      // Sync time-log permissions.
+      if (clientId) {
+        // Wipe + re-insert for simplicity (admin-only UI).
+        await supabase.from('client_time_log_permissions').delete().eq('client_id', clientId)
+        if (form.time_log_enabled && form.time_log_permissions.length > 0) {
+          const rows = form.time_log_permissions.map((profileId) => ({
+            client_id: clientId,
+            profile_id: profileId,
+          }))
+          const { error: pErr } = await supabase.from('client_time_log_permissions').insert(rows)
+          if (pErr) throw pErr
+        }
       }
       setSaveStatus('success')
       queryClient.invalidateQueries({ queryKey: ['clients'] })
@@ -768,6 +811,62 @@ export default function Clients() {
                   <Label>שם קובץ הסכם</Label>
                   <Input value={form.agreement_file} onChange={(e) => setField('agreement_file', e.target.value)} />
                 </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Section 3 — דיווח שעות */}
+            <div>
+              <h3 className="text-sm font-semibold text-purple-700 mb-3">דיווח שעות</h3>
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={form.time_log_enabled}
+                    onCheckedChange={(v) => setField('time_log_enabled', v)}
+                  />
+                  <Label>הפעל דיווח שעות ללקוח זה</Label>
+                </div>
+                {form.time_log_enabled && (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      דיווח השעות מתומחר לפי תעריף שעת העבודה של הלקוח.
+                      {form.hourly_rate ? '' : ' שים לב: תעריף שעה עדיין לא הוגדר.'}
+                    </p>
+                    <div className="space-y-1.5">
+                      <Label>עובדים מורשים לדיווח</Label>
+                      <div className="border rounded p-2 max-h-48 overflow-y-auto space-y-1">
+                        {eligibleProfiles.length === 0 ? (
+                          <p className="text-xs text-muted-foreground">אין עובדים בתפקיד רכז/מנהלה.</p>
+                        ) : (
+                          eligibleProfiles.map((p) => {
+                            const checked = form.time_log_permissions.includes(p.id)
+                            return (
+                              <label key={p.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-purple-50 rounded px-1">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    setField(
+                                      'time_log_permissions',
+                                      e.target.checked
+                                        ? [...form.time_log_permissions, p.id]
+                                        : form.time_log_permissions.filter((x) => x !== p.id),
+                                    )
+                                  }}
+                                />
+                                <span>{p.full_name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  ({p.role === 'administration' ? 'מנהלה' : 'רכז/ת'})
+                                </span>
+                              </label>
+                            )
+                          })
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
