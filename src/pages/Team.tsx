@@ -24,7 +24,7 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { Pencil, Trash2, Copy, Link, UserCircle, Plus } from 'lucide-react'
+import { Pencil, Trash2, UserCircle, Plus } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,10 +67,6 @@ function formToPayload(form: EmployeeForm): Partial<Profile> {
     bonus_model,
     hours_category_enabled: form.hours_category_enabled,
   }
-}
-
-function portalUrl(profile: Profile): string {
-  return `${window.location.origin}/portal?token=${profile.portal_token ?? ''}`
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +234,7 @@ export default function Team() {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('role', 'employee')
+        .in('role', ['recruiter', 'administration'])
         .order('full_name', { ascending: true })
       if (error) throw error
       return data as Profile[]
@@ -256,9 +252,6 @@ export default function Team() {
     bonus_tiers: [],
   })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
-
-  // Copy state
-  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   function openEditDialog(profile: Profile) {
     setEditingProfile(profile)
@@ -295,12 +288,6 @@ export default function Team() {
     setSaveStatus('success')
     queryClient.invalidateQueries({ queryKey: ['team-employees'] })
     setTimeout(() => closeDialog(), 2000)
-  }
-
-  function copyPortalLink(profile: Profile) {
-    navigator.clipboard.writeText(portalUrl(profile))
-    setCopiedId(profile.id)
-    setTimeout(() => setCopiedId((prev) => (prev === profile.id ? null : prev)), 2000)
   }
 
   return (
@@ -369,35 +356,6 @@ export default function Team() {
                   )}
                 </div>
 
-                <Separator />
-
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Link className="h-3.5 w-3.5" />
-                    <span>קישור לפורטל</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <code
-                      className="flex-1 text-xs bg-muted rounded px-2 py-1 truncate"
-                      dir="ltr"
-                    >
-                      {emp.portal_token ? portalUrl(emp) : '(אין טוקן)'}
-                    </code>
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      className="h-7 w-7 shrink-0"
-                      onClick={() => copyPortalLink(emp)}
-                      disabled={!emp.portal_token}
-                      title="העתק קישור"
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  {copiedId === emp.id && (
-                    <p className="text-xs text-green-600 font-medium">הועתק!</p>
-                  )}
-                </div>
               </CardContent>
             </Card>
           ))}

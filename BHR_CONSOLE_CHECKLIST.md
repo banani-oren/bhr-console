@@ -127,7 +127,7 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [x] AdminRoute guard: non-admin cannot access `/users` (redirected) — verified live: signed in as `qa.test+autotest@banani-hr.test` (role=employee), navigated to `/users`, URL resolved to `/` (Dashboard)
 - [x] Table shows email, name, role — columns `אימייל / שם / תפקיד / פעולות` visible
 - [x] "הזמן משתמש" opens the invite dialog — verified
-- [x] Submitting the invite calls the `invite-user` edge function and returns success — verified live (success banner)
+- [x] Submitting the invite calls the `invite-user` edge function and returns success — verified live (success banner) → re-verified post-sender-fix; email_sent=true, Resend last_event=sent
 - [x] The new user appears in the `/users` table without manual refresh — verified: QA Test Employee row appeared immediately post-invite
 - [x] Reset password triggers Supabase `resetPasswordForEmail` — button in row action column calls `supabase.auth.resetPasswordForEmail(email)` with 4-second green feedback
 - [x] Delete user removes the profile row (they disappear from `/team`) — delete dialog + `deleteProfile.mutateAsync` exercised via the autotest cleanup below

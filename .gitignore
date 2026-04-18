@@ -34,3 +34,4 @@ supabase/.temp/
 qa-screenshots/*.png
 qa-screenshots/*.jpg
 qa-screenshots/*.jpeg
+.claude/

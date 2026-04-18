@@ -9,21 +9,23 @@ import {
   LogOut,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import type { UserRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
   label: string
   to: string
   icon: React.ReactNode
+  allow: UserRole[]
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'דשבורד', to: '/', icon: <LayoutDashboard size={18} /> },
-  { label: 'לקוחות', to: '/clients', icon: <Users size={18} /> },
-  { label: 'עסקאות', to: '/transactions', icon: <Receipt size={18} /> },
-  { label: 'יומן שעות', to: '/hours', icon: <Clock size={18} /> },
-  { label: 'צוות', to: '/team', icon: <UserCog size={18} /> },
-  { label: 'ניהול משתמשים', to: '/users', icon: <Shield size={18} /> },
+  { label: 'דשבורד',        to: '/',             icon: <LayoutDashboard size={18} />, allow: ['admin'] },
+  { label: 'לקוחות',        to: '/clients',      icon: <Users size={18} />,           allow: ['admin', 'administration'] },
+  { label: 'עסקאות',        to: '/transactions', icon: <Receipt size={18} />,         allow: ['admin', 'administration', 'recruiter'] },
+  { label: 'יומן שעות',     to: '/hours',        icon: <Clock size={18} />,           allow: ['admin', 'administration', 'recruiter'] },
+  { label: 'צוות',          to: '/team',         icon: <UserCog size={18} />,         allow: ['admin'] },
+  { label: 'ניהול משתמשים', to: '/users',        icon: <Shield size={18} />,          allow: ['admin'] },
 ]
 
 interface LayoutProps {
@@ -31,8 +33,12 @@ interface LayoutProps {
 }
 
 export default function Layout({ children }: LayoutProps) {
-  const { user, signOut } = useAuth()
+  const { user, profile, signOut } = useAuth()
   const navigate = useNavigate()
+
+  const visibleItems = profile
+    ? NAV_ITEMS.filter((item) => item.allow.includes(profile.role))
+    : []
 
   const handleSignOut = async () => {
     await signOut()
@@ -55,7 +61,7 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map((item) => (
+          {visibleItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -87,6 +93,11 @@ export default function Layout({ children }: LayoutProps) {
                 <p className="text-xs font-medium text-sidebar-foreground truncate">
                   {user.email}
                 </p>
+                {profile?.role && (
+                  <p className="text-[10px] uppercase tracking-wider text-sidebar-foreground/60">
+                    {profile.role}
+                  </p>
+                )}
               </div>
             </div>
           )}

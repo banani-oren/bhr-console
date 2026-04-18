@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import type { Profile } from '@/lib/types'
+import type { Profile, UserRole } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -29,7 +29,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, KeyRound, UserCog } from 'lucide-react'
+import { Plus, Trash2, KeyRound } from 'lucide-react'
+
+const ROLE_LABELS: Record<UserRole, string> = {
+  admin: 'מנהל',
+  administration: 'מנהלה',
+  recruiter: 'גיוס',
+}
+
+const ROLE_ORDER: UserRole[] = ['admin', 'administration', 'recruiter']
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,13 +48,13 @@ type UserProfile = Profile & { email: string }
 type InviteForm = {
   email: string
   full_name: string
-  role: 'admin' | 'employee'
+  role: UserRole
 }
 
 const emptyInviteForm: InviteForm = {
   email: '',
   full_name: '',
-  role: 'employee',
+  role: 'recruiter',
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +82,7 @@ function useProfiles() {
 function useUpdateRole() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, role }: { id: string; role: 'admin' | 'employee' }) => {
+    mutationFn: async ({ id, role }: { id: string; role: UserRole }) => {
       const { error } = await supabase.from('profiles').update({ role }).eq('id', id)
       if (error) throw error
     },
@@ -208,9 +216,8 @@ export default function Users() {
   // Toggle role
   // -------------------------------------------------------------------------
 
-  async function handleToggleRole(user: UserProfile) {
-    const newRole: 'admin' | 'employee' =
-      user.role === 'admin' ? 'employee' : 'admin'
+  async function handleChangeRole(user: UserProfile, newRole: UserRole) {
+    if (newRole === user.role) return
     setTogglingRoleId(user.id)
     try {
       await updateRole.mutateAsync({ id: user.id, role: newRole })
@@ -271,28 +278,31 @@ export default function Users() {
                     <TableCell>
                       {user.role === 'admin' ? (
                         <Badge className="bg-purple-600 hover:bg-purple-700 text-white">
-                          מנהל
+                          {ROLE_LABELS.admin}
                         </Badge>
+                      ) : user.role === 'administration' ? (
+                        <Badge variant="secondary">{ROLE_LABELS.administration}</Badge>
                       ) : (
-                        <Badge variant="secondary">עובד</Badge>
+                        <Badge variant="outline">{ROLE_LABELS.recruiter}</Badge>
                       )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        {/* Toggle role */}
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          title={
-                            user.role === 'admin'
-                              ? 'שנה לעובד'
-                              : 'שנה למנהל'
-                          }
+                        {/* Change role */}
+                        <Select
+                          value={user.role}
                           disabled={togglingRoleId === user.id}
-                          onClick={() => handleToggleRole(user)}
+                          onValueChange={(val) => handleChangeRole(user, val as UserRole)}
                         >
-                          <UserCog className="h-4 w-4" />
-                        </Button>
+                          <SelectTrigger className="h-8 w-28 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ROLE_ORDER.map((r) => (
+                              <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
 
                         {/* Reset password */}
                         <Button
@@ -410,7 +420,7 @@ export default function Users() {
                   onValueChange={(val) =>
                     setInviteForm((f) => ({
                       ...f,
-                      role: val as 'admin' | 'employee',
+                      role: val as UserRole,
                     }))
                   }
                 >
@@ -418,8 +428,9 @@ export default function Users() {
                     <SelectValue placeholder="בחר תפקיד" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="employee">עובד</SelectItem>
-                    <SelectItem value="admin">מנהל</SelectItem>
+                    {ROLE_ORDER.map((r) => (
+                      <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -27,12 +27,19 @@ serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceKey)
 
-    // 1. Generate an invite link via Supabase Admin (creates user, does NOT send email)
+    // 1. Generate an invite link via Supabase Admin (creates user, does NOT send email).
+    //    The invite link's redirect target is /set-password so the invitee is forced
+    //    to choose a password BEFORE any app chrome renders — the frontend then
+    //    signs them out and they must log in with email + password. This closes
+    //    the "invite link = silent admin access" bypass.
+    const siteUrl = Deno.env.get('PUBLIC_SITE_URL') ?? 'https://bhr-console.vercel.app'
+    const redirectTo = `${siteUrl}/set-password`
     const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
       type: 'invite',
       email,
       options: {
-        data: { full_name, role: role || 'employee' },
+        data: { full_name, role: role || 'recruiter' },
+        redirectTo,
       },
     })
 
@@ -53,11 +60,13 @@ serve(async (req) => {
       )
     }
 
-    // 2. Ensure profile row has portal_token (auth trigger creates profile automatically)
+    // 2. Finalize the profile row (auth trigger creates it automatically). We
+    //    explicitly (re)set full_name + role and keep password_set=false so the
+    //    invitee is forced through /set-password before any app chrome renders.
     await admin.from('profiles').update({
-      portal_token: crypto.randomUUID(),
       full_name,
-      role: role || 'employee',
+      role: role || 'recruiter',
+      password_set: false,
     }).eq('id', userId)
 
     // 3. Send the invite email via Resend HTTP API

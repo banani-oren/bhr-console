@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { DEFAULT_LANDING } from '@/components/RequireRole'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -13,11 +14,13 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
 
-  // If already logged in, redirect to dashboard
   if (user) {
-    return <Navigate to="/" replace />
+    if (!profile?.password_set) {
+      return <Navigate to="/set-password" replace />
+    }
+    return <Navigate to={DEFAULT_LANDING[profile.role]} replace />
   }
 
   async function handleLogin(e: React.FormEvent) {

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Lock, Clock } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
 import type { HoursLog as HoursLogType, Transaction } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -63,6 +64,8 @@ const EMPTY_FORM: AddVisitForm = {
 
 export default function HoursLog() {
   const queryClient = useQueryClient()
+  const { profile } = useAuth()
+  const isAdmin = profile?.role === 'admin'
 
   const [selectedMonth, setSelectedMonth] = useState<number>(CURRENT_MONTH)
   const [selectedYear, setSelectedYear] = useState<number>(CURRENT_YEAR)
@@ -111,7 +114,8 @@ export default function HoursLog() {
   // Insert new hours_log entry
   const insertHours = useMutation({
     mutationFn: async (row: Omit<AddVisitForm, ''> & { month: number; year: number }) => {
-      const { error } = await supabase.from('hours_log').insert(row)
+      const payload = profile?.id ? { ...row, profile_id: profile.id } : row
+      const { error } = await supabase.from('hours_log').insert(payload)
       if (error) throw error
     },
     onSuccess: () => {
@@ -236,6 +240,179 @@ export default function HoursLog() {
   const hasCategory = (clientName: string) =>
     hoursForClient(clientName).some((h) => h.hours_category)
 
+  // -----------------------------------------------------------------------
+  // Personal view (non-admin): single table of my own hours for the month,
+  // no per-client tabs, no close-month action.
+  // -----------------------------------------------------------------------
+  if (!isAdmin) {
+    const totalMine = hoursData.reduce((s, h) => s + (h.hours ?? 0), 0)
+    const showCategoryPersonal = hoursData.some((h) => h.hours_category)
+    return (
+      <div className="p-6 space-y-4" dir="rtl">
+        <div className="flex items-center gap-2">
+          <Clock className="w-6 h-6 text-purple-600" />
+          <h1 className="text-2xl font-bold text-purple-900">יומן שעות</h1>
+        </div>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="space-y-1">
+              <Label className="text-xs text-purple-700">חודש</Label>
+              <Select value={String(selectedMonth)} onValueChange={(v) => setSelectedMonth(Number(v))}>
+                <SelectTrigger className="w-36 border-purple-200 focus:ring-purple-400">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {HEBREW_MONTHS.map((name, i) => (
+                    <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-purple-700">שנה</Label>
+              <Select value={String(selectedYear)} onValueChange={(v) => setSelectedYear(Number(v))}>
+                <SelectTrigger className="w-28 border-purple-200 focus:ring-purple-400">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {YEAR_OPTIONS.map((y) => (
+                    <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </Card>
+
+        <div className="flex items-center justify-end">
+          <Button className="bg-purple-600 hover:bg-purple-700 text-white" onClick={() => { setForm({ ...EMPTY_FORM }); setDialogOpen(true) }}>
+            <Plus className="w-4 h-4 ml-1" />
+            הוסף דיווח
+          </Button>
+        </div>
+
+        <Card>
+          {isLoading ? (
+            <div className="p-8 text-center text-purple-400">טוען...</div>
+          ) : hoursData.length === 0 ? (
+            <div className="p-8 text-center text-gray-400">אין רשומות לחודש זה</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-purple-50">
+                    <TableHead className="text-right text-purple-800 font-semibold">תאריך</TableHead>
+                    <TableHead className="text-right text-purple-800 font-semibold">לקוח</TableHead>
+                    <TableHead className="text-right text-purple-800 font-semibold">שעות</TableHead>
+                    <TableHead className="text-right text-purple-800 font-semibold">תיאור</TableHead>
+                    {showCategoryPersonal && (
+                      <TableHead className="text-right text-purple-800 font-semibold">קטגוריה</TableHead>
+                    )}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {hoursData.map((entry) => (
+                    <TableRow key={entry.id} className="hover:bg-purple-50/50 transition-colors">
+                      <TableCell className="text-right font-medium">{entry.visit_date}</TableCell>
+                      <TableCell className="text-right">{entry.client_name}</TableCell>
+                      <TableCell className="text-right">{entry.hours}</TableCell>
+                      <TableCell className="text-right text-gray-600">{entry.description ?? '—'}</TableCell>
+                      {showCategoryPersonal && (
+                        <TableCell className="text-right text-gray-500 text-sm">{entry.hours_category ?? '—'}</TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between px-4 py-3 border-t border-purple-100 bg-purple-50/60">
+            <span className="text-sm font-semibold text-purple-800">
+              סה"כ שעות — {HEBREW_MONTHS[selectedMonth - 1]} {selectedYear}
+            </span>
+            <span className="text-lg font-bold text-purple-900">
+              {totalMine.toLocaleString('he-IL')} ש'
+            </span>
+          </div>
+        </Card>
+
+        {/* Add-entry Dialog (reused) */}
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-md" dir="rtl">
+            <DialogHeader>
+              <DialogTitle className="text-purple-900 text-right">הוספת דיווח שעות</DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-4 py-2">
+              <div className="space-y-1">
+                <Label className="text-purple-700">לקוח</Label>
+                <Input
+                  value={form.client_name}
+                  onChange={(e) => handleFormChange('client_name', e.target.value)}
+                  className="border-purple-200 focus-visible:ring-purple-400"
+                  placeholder="שם הלקוח"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-purple-700">תאריך</Label>
+                <Input
+                  type="date"
+                  value={form.visit_date}
+                  onChange={(e) => handleFormChange('visit_date', e.target.value)}
+                  className="border-purple-200 focus-visible:ring-purple-400"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-purple-700">שעות</Label>
+                <Input
+                  type="number"
+                  step={0.5}
+                  min={0.5}
+                  value={form.hours}
+                  onChange={(e) => handleFormChange('hours', Number(e.target.value))}
+                  className="border-purple-200 focus-visible:ring-purple-400"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-purple-700">תיאור</Label>
+                <Input
+                  value={form.description}
+                  onChange={(e) => handleFormChange('description', e.target.value)}
+                  className="border-purple-200 focus-visible:ring-purple-400"
+                  placeholder="תיאור הדיווח..."
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="flex flex-col gap-2">
+              {saveStatus === 'success' && (
+                <p className="text-green-600 font-medium text-sm text-right">המידע נשמר ✓</p>
+              )}
+              {saveStatus === 'error' && (
+                <p className="text-red-600 font-medium text-sm text-right">שגיאה בשמירה, נסה שנית</p>
+              )}
+              <div className="flex gap-2 justify-end">
+                <Button variant="outline" onClick={() => setDialogOpen(false)}>ביטול</Button>
+                <Button
+                  className="bg-purple-600 hover:bg-purple-700 text-white"
+                  onClick={handleSaveVisit}
+                  disabled={saveStatus === 'saving' || !form.client_name.trim()}
+                >
+                  {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    )
+  }
+
+  // -----------------------------------------------------------------------
+  // Admin view (existing tabs-per-client layout)
+  // -----------------------------------------------------------------------
   return (
     <div className="p-6 space-y-4" dir="rtl">
       {/* Header */}

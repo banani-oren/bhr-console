@@ -1,11 +1,13 @@
+export type UserRole = 'admin' | 'administration' | 'recruiter'
+
 export type Profile = {
   id: string
   full_name: string
   email: string
-  role: 'admin' | 'employee'
+  role: UserRole
   bonus_model: BonusModel | null
   hours_category_enabled: boolean
-  portal_token: string | null
+  password_set: boolean
   phone: string | null
   status: string
   created_at: string
