@@ -33,7 +33,8 @@ import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { Plus, Upload, Search, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Upload, Search, Pencil, Trash2, Download } from 'lucide-react'
+import AgreementUploader from '@/components/AgreementUploader'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -605,6 +606,7 @@ export default function Clients() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight">לקוחות</h1>
         <div className="flex gap-2">
+          <AgreementUploader clients={clients} />
           <Button variant="outline" onClick={() => setImportOpen(true)} className="flex items-center gap-2">
             <Upload className="h-4 w-4" />
             ייבוא מאקסל
@@ -809,7 +811,27 @@ export default function Clients() {
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
                   <Label>שם קובץ הסכם</Label>
-                  <Input value={form.agreement_file} onChange={(e) => setField('agreement_file', e.target.value)} />
+                  <div className="flex gap-2 items-center">
+                    <Input value={form.agreement_file} onChange={(e) => setField('agreement_file', e.target.value)} className="flex-1" />
+                    {editingClient?.agreement_storage_path && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="border-purple-300 text-purple-700"
+                        onClick={async () => {
+                          const { data, error } = await supabase.storage
+                            .from('client-agreements')
+                            .createSignedUrl(editingClient.agreement_storage_path!, 60)
+                          if (error || !data?.signedUrl) return
+                          window.open(data.signedUrl, '_blank', 'noopener')
+                        }}
+                      >
+                        <Download className="h-4 w-4 ml-1" />
+                        הורד PDF
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
