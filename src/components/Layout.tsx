@@ -6,6 +6,7 @@ import {
   Clock,
   UserCog,
   Shield,
+  Briefcase,
   LogOut,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
@@ -31,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'עסקאות',        to: '/transactions', icon: <Receipt size={18} />,         allow: ['admin', 'administration', 'recruiter'] },
   { label: 'יומן שעות',     to: '/hours',        icon: <Clock size={18} />,           allow: ['admin', 'administration', 'recruiter'] },
   { label: 'צוות',          to: '/team',         icon: <UserCog size={18} />,         allow: ['admin'] },
+  { label: 'שירותים',       to: '/services',     icon: <Briefcase size={18} />,       allow: ['admin'] },
   { label: 'ניהול משתמשים', to: '/users',        icon: <Shield size={18} />,          allow: ['admin'] },
 ]
 
