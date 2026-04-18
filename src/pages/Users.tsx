@@ -240,7 +240,11 @@ export default function Users() {
                           onValueChange={(val) => handleChangeRole(row, val as UserRole)}
                         >
                           <SelectTrigger className="h-8 w-32 text-xs">
-                            <SelectValue />
+                            <SelectValue>
+                              {(value: unknown) =>
+                                ROLE_LABELS[value as UserRole] ?? String(value ?? '')
+                              }
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             {ROLE_ORDER.map((r) => (
@@ -356,7 +360,11 @@ export default function Users() {
                   }
                 >
                   <SelectTrigger id="invite-role">
-                    <SelectValue placeholder="בחר תפקיד" />
+                    <SelectValue placeholder="בחר תפקיד">
+                      {(value: unknown) =>
+                        ROLE_LABELS[value as UserRole] ?? String(value ?? '')
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {ROLE_ORDER.map((r) => (
