@@ -35,3 +35,6 @@ qa-screenshots/*.png
 qa-screenshots/*.jpg
 qa-screenshots/*.jpeg
 .claude/
+
+# One-shot admin magic link artifact — never commit
+magiclink.json
