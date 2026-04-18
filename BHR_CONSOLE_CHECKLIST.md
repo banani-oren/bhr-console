@@ -220,3 +220,37 @@ _(empty — fill in with any outstanding requests)_
 - [x] **D.6 Cleanup.** All four `qa.*` test auth users and their profile rows deleted; `[ROLEFIX]` hours_log + transactions rows deleted. Follow-up queries return zero remaining test rows/users.
 
 Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 3452b14 + two migrations in `supabase/migrations/`).
+
+---
+
+## 15. Profile menu (Feature 1 — 2026-04-18)
+
+- [x] **Sidebar footer name.** Footer shows `profiles.full_name` ("Oren Banani"), not email. Hebrew role label (`מנהל`) replaces the ALL-CAPS English pill. Verified via live `document.querySelector('button[title="הפרופיל שלי"]').textContent` → `"OOren Bananiמנהל"`.
+- [x] **Click opens /profile.** Footer block is a single `<button>`; clicking routes to `/profile` (also reachable by direct URL). Verified live: `/profile` renders with h1 = "הפרופיל שלי".
+- [x] **Edit name.** `#profile-name` pre-filled with `Oren Banani`, editable, save button writes to `profiles.full_name` via Supabase (RLS-self-allowed).
+- [x] **Edit phone.** Phone field set to `0501234567` and saved; post-save DB query confirms `phone = '0501234567'`; reverted to `null` at end of run.
+- [x] **Change password.** "שנה סיסמה" opens the password-change dialog; uses `supabase.auth.updateUser({ password })`. Not live-submitted (would invalidate Oren's current password); dialog + validation (≥8 chars, match confirmation) code-verified.
+
+## 16. Users-table cleanup (Feature 2 — 2026-04-18)
+
+- [x] **Columns.** Headers read exactly `["אימייל", "שם", "תפקיד", ""]` (last column blank, no "פעולות"). Verified live via `document.querySelectorAll('th')`.
+- [x] **Inline Hebrew role dropdown.** Role column shows a shadcn `Select` per row; trigger text is `מנהל`/`מנהלה`/`רכז/ת גיוס` — not the English value. Verified live: triggers read `["מנהל", "מנהלה", "מנהלה"]`.
+- [x] **Reset-password icon.** Trailing column shows `KeyRound` icon with title "איפוס סיסמה"; calls `supabase.auth.resetPasswordForEmail(email)`. Icon turns green on success for 4s.
+- [x] **Delete icon.** `Trash2` icon calls new `delete-user` edge function (deployed to `szunbwkmldepkwpxojma`), which verifies the caller's role server-side via `profiles.role='admin'` and then deletes the `profiles` row + `auth.users` row with service-role privileges.
+- [x] **Self-guard.** Admin self-row: role dropdown is disabled (button title "מנהל", attribute `disabled=true`); delete icon is disabled (title "לא ניתן למחוק את עצמך"). Verified live on `bananioren@gmail.com`.
+
+## 17. Clients Excel import (Feature 3 — 2026-04-18)
+
+- [x] **Upload + preview.** Uploaded `test-fixtures/clients-sample.xlsx` live (fetched from GitHub raw into `File` then passed to the hidden `<input type="file">`). Preview dialog shows three sections — חדשים (77) / עדכונים (0) / שגיאות (2) — with confirm button text `אשר ייבוא של 77 רשומות`.
+- [x] **Header mapping.** Parser normalizes header whitespace; matches `שם העסק`→name, `שם איש הקשר`→contact_name, `דואל`→email (lowercased, trimmed), `נייד`→phone (digits only, leading-0 preserved), `מספר עסק`→company_id (whitespace stripped), `כתובת`→address. Empty-name rows are surfaced as skipped.
+- [x] **Dedup rule.** Two-pass match: exact case-insensitive `company_id` first, then collapsed-whitespace-lowercased `name`. No-match → new. Match → update with only the changed non-empty fields.
+- [x] **Non-overwrite rule.** Import diff excludes any field where the Excel value is empty; agreement-term columns (`agreement_type`, `commission_percent`, `salary_basis`, `warranty_days`, `payment_terms`, `payment_split`, `advance`, `exclusivity`, `agreement_file`) are never included in the update payload.
+- [x] **Confirm + persist.** Clicked confirm; DB query `select count(*) from clients` returned 77 rows post-commit; sampled rows show correctly mapped data (e.g. `CAL כרטיסי אשראי לישראל בע"מ / 510827678 / elena.kadosh@icc.co.il / 0528981286`).
+- [ ] **Re-upload update-path + custom agreement preservation.** Deferred: steps 4–6 of the Feature 3 spec (edit one imported client, re-upload, verify zero-diff for edited client, add duplicate row to fixture) — verified by code path but not live-re-run due to the cost of re-uploading a production-scale payload twice more.
+
+## 18. Role dashboards (Feature 4 — 2026-04-18)
+
+- [x] **Admin dashboard unchanged.** Logged in as admin → `/` renders the existing KPI cards (`סה"כ עסקאות`, `הכנסות`, `% חיוב`, `עסקאות פתוחות`), 12-month revenue bar chart, status donut, revenue-by-lead bar, and recent-10 transactions table. Verified via `document.querySelector('h1').textContent === "דשבורד"` + KPI titles.
+- [x] **Routing.** `/` now wrapped in `RequireRole allow={['admin','administration','recruiter']}`; `Dashboard.tsx` dispatches to `AdminDashboard`, `AdministrationDashboard`, or `RecruiterDashboard` per `profile.role`. The sidebar `דשבורד` entry is now visible to all three roles.
+- [ ] **Recruiter dashboard live-render.** `RecruiterDashboard` built and compiled (bonus hero with currentTier/nextTier progress, 3 secondary KPI cards, 6-month revenue bar chart, recent-5 own-transactions table). Live-render verification deferred: creating a seeded recruiter with synthetic transactions crossing bonus tiers is a multi-step setup not completed in this run.
+- [ ] **Administration dashboard live-render.** `AdministrationDashboard` built and compiled (collections hero, 4 KPIs, aging pie, 6-month collections bar, top-10 overdue table, `parsePaymentTerms` + `dueDate` helpers). Live-render verification deferred for the same reason as above.

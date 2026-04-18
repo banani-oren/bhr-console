@@ -119,7 +119,8 @@ RLS at the database level (defense in depth).
 
 | Page / resource | admin | administration | recruiter |
 |-----------------|:-----:|:--------------:|:---------:|
-| `/` (Dashboard) | ✅ | ❌ | ❌ |
+| `/` (Dashboard) | ✅ (admin KPI view) | ✅ (collections view) | ✅ (bonus-progress view) |
+| `/profile` | ✅ | ✅ | ✅ |
 | `/clients` | ✅ | ✅ | ❌ |
 | `/transactions` | ✅ (all) | ✅ (all) | ✅ (own only — `service_lead = my full_name`) |
 | `/hours` | ✅ (all, per-client tabs) | ✅ (own only, personal view) | ✅ (own only, personal view) |
@@ -327,12 +328,38 @@ domain table — the employee portal has been removed.
 
 ### Admin Interface
 
-#### 1. `/` — Dashboard
+#### 1. `/` — Dashboard (role-aware)
+`src/pages/Dashboard.tsx` is a thin dispatcher that renders one of three role-specific
+components (`src/pages/dashboards/*.tsx`) based on `profile.role`.
+
+**Admin dashboard** (`AdminDashboard.tsx`):
 - KPI cards: total transactions, total revenue, billable %, open transactions
 - Bar chart: monthly revenue (last 12 months)
 - Donut chart: transactions by status
 - Bar chart: revenue by service lead
 - Table: recent transactions (last 10)
+
+**Administration dashboard** (`AdministrationDashboard.tsx`):
+- Hero: collections progress for the current calendar month — `collectedThisMonth / billedThisMonth` as a percentage bar with sub-label `₪A נגבו מתוך ₪B • עוד ₪C לגבייה`.
+- KPI cards: `סכום לגבייה כעת`, `שחרגו מתאריך פירעון`, `נגבה החודש`, `ממתינים לחשבונית`.
+- Aging donut: open amount bucketed `0–30 / 31–60 / 61–90 / 90+` days past due.
+- 6-month collections bar chart.
+- Top-10 overdue table (client, candidate, amount, dueDate, days-overdue).
+- Overdue logic: `dueDate = close_date + parsePaymentTerms(payment_terms)` days, where `payment_terms` is looked up from `clients.payment_terms` via `client_name` (fallback 30 days). A row is overdue when `dueDate < today AND payment_date IS NULL`.
+
+**Recruiter dashboard** (`RecruiterDashboard.tsx`):
+- Hero: current-month bonus amount (flat tier) + horizontal progress bar between `currentTier.min` and `nextTier.min`, labelled `עוד ₪Y למדרגת ₪Z` or `הגעת למדרגה המקסימלית!` at max. If `profile.bonus_model` is null, the hero shows `המנהל עדיין לא הגדיר מודל בונוס`.
+- Secondary KPI cards: `הכנסה החודש`, `עסקאות שנסגרו החודש`, `עסקאות פתוחות`.
+- 6-month revenue bar chart (own revenue only — RLS enforces scope server-side).
+- Recent-5 own-transactions table.
+
+**Routing:** `/` uses `<RequireRole allow={['admin','administration','recruiter']}>` and the sidebar `דשבורד` link is visible to every role.
+
+#### 1a. `/profile` — Self-service profile
+- Editable `full_name` and `phone` on `profiles` (RLS restricts updates to the caller's own row).
+- `שנה סיסמה` opens a dialog that calls `supabase.auth.updateUser({ password })`; shows `הסיסמה עודכנה ✓` on success.
+- `AuthContext` exposes `refreshProfile()` so the sidebar footer picks up name/role changes on the next render without a full reload.
+- Sidebar footer (in `Layout.tsx`) renders the user's `full_name` (fallback to email) and a Hebrew role label (`מנהל` / `מנהלה` / `רכז/ת גיוס`). The whole footer is a `<button>` that navigates to `/profile`.
 
 #### 2. `/clients` — Clients + Agreements (unified page)
 
@@ -342,8 +369,23 @@ domain table — the employee portal has been removed.
 **Client table:**
 - Searchable table: name, contact, phone, status
 - Add / Edit / Delete client
-- **Import button**: upload Excel (.xlsx/.csv) → preview → confirm → save
+- **Import button**: upload Excel (.xlsx/.csv) → **diff preview** (new / updates / skipped) → confirm → apply
 - Save handler: try-catch, success/error toast
+
+**Excel import spec (Feature 3):**
+
+| Excel header | DB column | Normalization |
+|--------------|-----------|---------------|
+| `שם העסק` | `name` | trim + collapse internal whitespace; required — empty rows surfaced under שגיאות |
+| `שם איש הקשר` | `contact_name` | trim, nullable |
+| `דואל` | `email` | trim + lowercase, nullable |
+| `נייד` | `phone` | strip non-digits, preserve leading `0`, nullable |
+| `מספר עסק` | `company_id` | strip whitespace, nullable |
+| `כתובת` | `address` | trim, nullable |
+
+- Dedup order: (1) exact case-insensitive `company_id` match, (2) collapsed-whitespace-lowercased `name` match, (3) otherwise new.
+- **Non-overwrite rule:** only fields where the Excel value is non-empty **and** differs from the DB are included in the update payload. Agreement-term columns (`agreement_type`, `commission_percent`, `salary_basis`, `warranty_days`, `payment_terms`, `payment_split`, `advance`, `exclusivity`, `agreement_file`) are never touched by import.
+- Preview dialog shows three sections — חדשים (green), עדכונים (amber, with a per-field diff table), שגיאות (red) — and a confirm button labelled `אשר ייבוא של N רשומות`. After commit, the toast reads `נוספו X • עודכנו Y • דולגו Z`.
 
 **Agreement terms live inside the client edit dialog (not a separate page):**
 - All fields: agreement type, commission %, salary basis, warranty days, payment terms, payment split, advance, exclusivity, agreement file
@@ -375,11 +417,12 @@ domain table — the employee portal has been removed.
 - Save goes to `profiles` with success/error toast and query invalidation.
 
 #### 6. `/users` — User Management (Admin only, behind `<RequireRole allow={['admin']}>`)
-- Table: email, name, role.
-- **Invite user**: calls `invite-user` edge function. The invite email links to `/set-password` so the invitee must set a password before `RequireRole` will let them into the app.
-- Reset password (via Supabase Auth `resetPasswordForEmail`).
-- Delete user (deletes the `profiles` row).
-- Change role: 3-way dropdown (`admin` / `administration` / `recruiter`).
+- Columns: `אימייל`, `שם`, `תפקיד`, and a blank trailing actions column (no "פעולות" header).
+- Inline Hebrew role dropdown per row in the `תפקיד` column; `admin→מנהל`, `administration→מנהלה`, `recruiter→רכז/ת גיוס`. Changing the selected value immediately updates `profiles.role` via Supabase and invalidates the `['profiles']` query.
+- Trailing column has two icon buttons only: 🔑 reset password (`supabase.auth.resetPasswordForEmail`) and 🗑 delete user.
+- **Delete** calls the `delete-user` edge function, which validates the caller's profile role is `admin` and then removes the `profiles` row and the `auth.users` row via service-role.
+- **Self-guard:** on the admin's own row, the role dropdown and the delete icon are both disabled (you cannot demote or delete yourself).
+- **Invite user**: calls `invite-user` edge function (unchanged); invite email links to `/set-password`.
 
 ---
 
@@ -445,6 +488,17 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 ---
 
 ## Edge Functions
+
+### `delete-user` (deployed)
+**Path**: `supabase/functions/delete-user/index.ts`
+**URL**: `https://szunbwkmldepkwpxojma.supabase.co/functions/v1/delete-user`
+
+Flow:
+1. Receives `{ user_id }` from the frontend (`/users` delete icon).
+2. Reads the caller's JWT from the `Authorization` header, resolves their auth user, and rejects if their `profiles.role !== 'admin'`.
+3. Rejects attempts to delete yourself.
+4. Service-role deletes the `profiles` row, then calls `auth.admin.deleteUser(user_id)` so the auth user no longer exists.
+5. Returns `{ success: true }`. The frontend invalidates the `['profiles']` query so the row disappears from `/users`.
 
 ### `invite-user` (deployed)
 **Path**: `supabase/functions/invite-user/index.ts`
