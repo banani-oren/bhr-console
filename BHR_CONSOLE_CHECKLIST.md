@@ -254,3 +254,96 @@ Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 
 - [x] **Routing.** `/` now wrapped in `RequireRole allow={['admin','administration','recruiter']}`; `Dashboard.tsx` dispatches to `AdminDashboard`, `AdministrationDashboard`, or `RecruiterDashboard` per `profile.role`. The sidebar `דשבורד` entry is now visible to all three roles.
 - [ ] **Recruiter dashboard live-render.** `RecruiterDashboard` built and compiled (bonus hero with currentTier/nextTier progress, 3 secondary KPI cards, 6-month revenue bar chart, recent-5 own-transactions table). Live-render verification deferred: creating a seeded recruiter with synthetic transactions crossing bonus tiers is a multi-step setup not completed in this run.
 - [ ] **Administration dashboard live-render.** `AdministrationDashboard` built and compiled (collections hero, 4 KPIs, aging pie, 6-month collections bar, top-10 overdue table, `parsePaymentTerms` + `dueDate` helpers). Live-render verification deferred for the same reason as above.
+
+## 19. Noa invite reconciliation (Batch 2 Phase A — 2026-04-18)
+
+- [x] **Root cause.** Auth user `930b6a93-c0a8-4038-986d-36e643dd171c` existed for
+      `noa@banani-hr.com` (`raw_user_meta_data.full_name = 'נועה פולק'`) but the
+      corresponding `profiles` row was missing. `handle_new_user` trigger + body
+      are installed correctly in prod (verified via `pg_proc` /
+      `pg_trigger`). The most likely cause was a prior profile delete (via
+      `delete-user` edge function or a manual cleanup) that did not also remove
+      the auth user — leaving an orphan auth row that subsequent re-invites
+      hit with `ON CONFLICT (id) DO NOTHING`.
+- [x] **Fix.** Inserted a `profiles` row for her id with `role='recruiter'`,
+      `password_set=false`, `full_name='נועה פולק'`; patched
+      `bonus_model` to the 6-tier Noa model from §"Bonus Model" / `BHR_CONSOLE_PROJECT.md`.
+      She is now visible on `/users` and `/team` with role `רכז/ת גיוס`.
+
+## 20. Service types (Batch 2 Phase C — 2026-04-18)
+
+- [x] **Schema.** `service_types(id, name UNIQUE, display_order, fields JSONB,
+      created_at, updated_at)` + RLS: authenticated SELECT, admin ALL.
+      `transactions.service_type_id` + `transactions.custom_fields JSONB` columns
+      added; existing rows backfilled to the seeded `השמה` service.
+- [x] **Seed.** `השמה` (display_order=1, 7 fields) + `דיווח שעות`
+      (display_order=5, 4 fields) — matches the spec.
+- [x] **`/services` admin page.** Admin-only route + sidebar item
+      `שירותים` between `צוות` and `ניהול משתמשים`. Cards list existing
+      service types with field count + display order; add/edit dialog has a
+      fields repeater (label, key, type, required, width, options for `select`)
+      with per-field up/down move + remove.
+- [x] **Delete guard.** Delete-service-type mutation counts
+      `transactions.service_type_id=id` first; rejects with a toast if any
+      exist (no merge flow in v1 — blocks and surfaces).
+
+## 21. Transaction wizard (Batch 2 Phase D — 2026-04-18)
+
+- [x] **3-step wizard.** Client search → service-type card grid → universal
+      fields + dynamic per-type fields. Required fields block advance/submit.
+      Pre-fills `commission_percent` from the picked client's agreement terms
+      when empty.
+- [x] **Storage.** Universal fields land in their dedicated columns;
+      custom values land in `transactions.custom_fields`; the seven
+      well-known mirrored keys (`position_name`, `candidate_name`,
+      `commission_percent`, `salary`, `net_invoice_amount`, `commission_amount`,
+      `service_lead`) are also written to dedicated columns.
+- [x] **List column + filter.** New `סוג שירות` column between `לקוח` and
+      `משרה`, resolved via `service_type_id → service_types.name`, with a
+      dropdown filter fed from `service_types.name` values.
+
+## 22. Hourly billing (Batch 2 Phase E — 2026-04-18)
+
+- [x] **Client toggle + permissions.** `clients.time_log_enabled` surfaced in
+      the edit dialog; when on, an inline multi-select of eligible profiles
+      (administration + recruiter) writes to `client_time_log_permissions`
+      (wipe-and-reinsert on save).
+- [x] **Time-entry form.** `start_time` / `end_time` + date + description;
+      hours computed to 2 decimals and stored in existing `hours` column for
+      backwards compatibility.
+- [x] **Personal view (non-admin).** Client picker limited to clients where
+      `profile_id` has permission AND `time_log_enabled=true`. No admin
+      tabs-per-client.
+- [x] **Report PDF.** `/hours/report` (admin-only) generates a branded A4
+      PDF via jspdf + jspdf-autotable: header, per-entry table, totals footer
+      (hours · hourly_rate · ₪ total). Download works via
+      `doc.save(<name>.pdf)`.
+- [x] **Transaction from report.** "צור עסקה מהדוח" opens the 3-step wizard
+      on step 3 pre-populated with `service_type='דיווח שעות'`,
+      `period_start`, `period_end`, `hours_total`, `hourly_rate`, and
+      `net_invoice_amount = hours_total * hourly_rate`.
+
+## 23. PDF agreement extraction (Batch 2 Phase F — 2026-04-18)
+
+- [x] **Bucket policy.** Storage bucket `client-agreements` created private
+      (no public-read) with RLS: authenticated SELECT for admin + administration,
+      ALL for admin only.
+- [x] **Edge function.** `extract-agreement` deployed; uses Claude's
+      `document` content block so scanned and text PDFs share one code path.
+      Returns `{ extracted, document_kind, fuzzy_matches }`. System prompt
+      versioned in `supabase/functions/extract-agreement/prompt.md`.
+- [x] **UI.** `/clients` admin-only `העלה הסכמים` button → multi-upload →
+      parallel extraction → per-PDF preview with field values + fuzzy match
+      dropdown + confirm/skip.
+- [x] **Non-overwrite merge.** Confirm updates the client's agreement fields
+      only when the existing column is empty; the PDF is moved from
+      `pending/<uuid>.pdf` to `<client_id>/<filename>.pdf` and
+      `clients.agreement_storage_path` + `agreement_file` are set.
+- [x] **Signed URL download.** Client edit dialog shows `הורד PDF` when
+      `agreement_storage_path` is set; click generates a 60-second
+      `storage.createSignedUrl`.
+- [ ] **Live extraction on real contracts.** Edge function + UI deployed
+      and callable. Full live run against Oren's CIVILENG text PDF and
+      BSH/חינוך לפסגות scanned PDFs is deferred — requires access to his
+      source folder which is outside the repo. Verify with 2–3 real PDFs
+      on the production URL when Oren is available.

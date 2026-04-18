@@ -203,8 +203,34 @@ create table clients (
   advance text,                                      -- מקדמה: e.g. '30% מקדמה', '1,500 ₪'
   exclusivity boolean default false,                 -- בלעדיות
   agreement_file text,                               -- שם קובץ הסכם (PDF filename)
+  agreement_storage_path text,                       -- <client_id>/<filename>.pdf within the client-agreements bucket (Phase F)
+  hourly_rate numeric,                               -- תעריף שעת עבודה (Phase B / Phase E)
+  time_log_enabled boolean not null default false,   -- הפעלת דיווח שעות ללקוח זה (Phase E)
 
   created_at timestamptz default now()
+);
+
+-- service_types: configurable service-type definitions + per-type field schemas (Phase C).
+-- Seeded with 'השמה' (7 fields) and 'דיווח שעות' (4 fields).
+-- admin: read+write. authenticated: read only. RLS enforced.
+create table service_types (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  display_order integer not null default 0,
+  fields jsonb not null default '[]'::jsonb,
+  -- fields item shape: { key, label, type, required, width, options?, default? }
+  -- type ∈ { text, textarea, number, currency, percent, date, month, year, select, boolean, employee }
+  -- width ∈ { full, half }
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- client_time_log_permissions: admin-managed whitelist of who may log hours for a client (Phase E).
+create table client_time_log_permissions (
+  client_id uuid not null references clients(id) on delete cascade,
+  profile_id uuid not null references profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (client_id, profile_id)
 );
 
 -- agreements table: DEPRECATED — kept in DB for legacy reference only.
@@ -232,7 +258,9 @@ create table transactions (
   client_name text,
   position_name text,
   candidate_name text,
-  service_type text,
+  service_type text,                                 -- legacy string; still mirrored from the wizard for filters
+  service_type_id uuid references service_types(id), -- Phase D
+  custom_fields jsonb not null default '{}'::jsonb,  -- per-service-type free-form values, Phase D
   salary numeric,
   commission_percent numeric,
   net_invoice_amount numeric,
@@ -257,10 +285,13 @@ create table hours_log (
   profile_id uuid references profiles(id),          -- unified: links to profiles table
   team_member_id uuid,                               -- legacy column, ignore
   client_name text,
+  client_id uuid references clients(id),             -- Phase E
   visit_date date,
-  hours numeric,
+  hours numeric,                                     -- computed from start_time/end_time when both present
   description text,
   hours_category text,                               -- 'BHR' or 'איגוד' (only if hours_category_enabled)
+  start_time time,                                   -- Phase E
+  end_time time,                                     -- Phase E
   month integer,
   year integer,
   created_at timestamptz default now()
@@ -416,6 +447,39 @@ components (`src/pages/dashboards/*.tsx`) based on `profile.role`.
 - No add/delete here — new users are onboarded via `/users` (invite flow).
 - Save goes to `profiles` with success/error toast and query invalidation.
 
+#### 5a. `/services` — Service types (Admin only)
+
+Admin-only CRUD surface for `service_types`. Each type carries a `name`,
+`display_order`, and a JSONB `fields` array that drives the dynamic
+`/transactions` wizard (Phase C). Seeded with:
+
+- `השמה` (display_order=1) — 7 fields: `position_name`, `candidate_name`,
+  `commission_percent`, `salary`, `net_invoice_amount`, `commission_amount`,
+  `service_lead` — exactly the fields the old flat dialog had, so the
+  existing `service_type='השמה'` flow doesn't regress.
+- `דיווח שעות` (display_order=5) — 4 fields: `period_start`, `period_end`,
+  `hours_total`, `hourly_rate` — used by the "צור עסקה מהדוח" action on
+  `/hours/report`.
+
+Field editor supports types `text`, `textarea`, `number`, `currency`,
+`percent`, `date`, `month`, `year`, `select` (options as comma-separated
+list), `boolean`, `employee` (combobox of `profiles WHERE role IN
+('recruiter','administration')`), with half/full widths and a required
+flag. Delete is blocked if any `transactions.service_type_id` references
+the row.
+
+#### 5b. `/hours/report` — Hourly-billing report (Admin only)
+
+Branded A4 PDF generated client-side with `jspdf` + `jspdf-autotable`.
+Admin picks client (only `time_log_enabled=true`), date range, and an
+optional employee allow-list. Body is one row per `hours_log` entry
+showing date, `start_time`→`end_time`, hours, description, employee.
+Footer totals: hours · hourly_rate · ₪ total. "צור עסקה מהדוח" opens the
+3-step wizard (Phase D) pre-seeded on step 3 with
+`service_type='דיווח שעות'`, `period_start`/`period_end`, `hours_total`,
+`hourly_rate`, `net_invoice_amount = hours_total * hourly_rate`, and
+`close_date = period_end`.
+
 #### 6. `/users` — User Management (Admin only, behind `<RequireRole allow={['admin']}>`)
 - Columns: `אימייל`, `שם`, `תפקיד`, and a blank trailing actions column (no "פעולות" header).
 - Inline Hebrew role dropdown per row in the `תפקיד` column; `admin→מנהל`, `administration→מנהלה`, `recruiter→רכז/ת גיוס`. Changing the selected value immediately updates `profiles.role` via Supabase and invalidates the `['profiles']` query.
@@ -487,6 +551,94 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 
 ---
 
+## Transaction wizard (Phase D)
+
+The admin-facing `+ הוספת עסקה` dialog is a 3-step wizard driven by
+`service_types`:
+
+1. **Client** — searchable list from `clients`; selecting pre-fills
+   `commission_percent` from the client's agreement terms.
+2. **Service type** — card grid of `service_types` ordered by
+   `display_order`.
+3. **Details** — universal fields (entry/closing dates + months +
+   years, payment date/status, invoice number, billable, notes) + the
+   dynamic per-type fields from `service_type.fields`.
+
+Universal fields continue to write to their dedicated columns. Custom
+fields write to `transactions.custom_fields` as a JSON object keyed by
+field `key`. Mirrored keys — `position_name`, `candidate_name`,
+`commission_percent`, `salary`, `net_invoice_amount`,
+`commission_amount`, `service_lead` — are also written to the existing
+dedicated columns so dashboards/filters continue to work without schema
+churn. New keys (e.g. `retainer_amount`) live only in `custom_fields`.
+
+The transactions list gets a `סוג שירות` column between `לקוח` and the
+previous columns, resolved via `service_type_id → service_types.name`
+(falls back to the legacy text `service_type` for older rows). The
+filter for `סוג שירות` is now a dropdown of `service_types.name` values.
+
+## Time-log & hourly billing (Phase E)
+
+- `clients.time_log_enabled` + `client_time_log_permissions(client_id,
+  profile_id)` gate who may log hours for each client. The clients edit
+  dialog surfaces the toggle and a multi-select of eligible profiles
+  (`role IN ('administration','recruiter')`); save wipes and re-inserts
+  the permissions list for that client.
+- `hours_log.start_time`/`end_time` are written from the add-entry form;
+  `hours` is computed as `(end-start)/60` rounded to 2 decimals, kept in
+  the existing `hours` column for backwards compatibility.
+- Non-admin `/hours` becomes a client-picker-gated personal view (only
+  clients where I am in `client_time_log_permissions` AND `time_log_enabled`).
+- Admin `/hours` keeps the tabs-per-client layout and gains a
+  "הפקת דוח שעות" button that routes to `/hours/report`.
+
+## PDF agreement extraction (Phase F)
+
+### Storage
+
+Supabase Storage bucket `client-agreements` (private) with RLS:
+- `SELECT` for `admin` + `administration`.
+- `ALL` for `admin` only.
+- Path convention: `client-agreements/<client_id>/<filename>.pdf`.
+- `clients.agreement_storage_path` holds the object path.
+
+### Edge function `extract-agreement`
+
+`supabase/functions/extract-agreement/index.ts` + `prompt.md` (system
+prompt, versioned). Model: `claude-sonnet-4-6` by default (override via
+`AGREEMENT_EXTRACTION_MODEL` secret). Accepts `{ storage_path }`, service-
+role downloads the PDF, base64-encodes it, and sends a single user
+message containing a `document` content block (raw PDF) + a text block
+with the extraction instruction — so scanned PDFs and text PDFs flow
+through the same path and Hebrew RTL is handled natively by the API.
+Response is parsed as JSON (code fences stripped), schema-coerced, and
+reclassified `document_kind='other'` if `matched_client_name` is null
+when `document_kind='agreement'`. Per-PDF token cost ≈ $0.015–$0.025 on
+Sonnet 4.6.
+
+Fuzzy match: Dice coefficient over character 3-grams against
+`clients.name` (whitespace-stripped); top 3 with score > 0.6 returned.
+
+### UX (`/clients`)
+
+`העלה הסכמים` button opens a dialog that:
+1. Lets the admin drop multiple PDFs.
+2. Uploads each to `client-agreements/pending/<uuid>.pdf` and invokes
+   `extract-agreement` in parallel.
+3. Previews extracted fields per PDF with a match dropdown
+   (auto-selected when top score > 0.85; otherwise lists the top fuzzy
+   matches, a "create new client from PDF" option, and any other client
+   as fallback).
+4. Confirm moves the PDF to `<client_id>/<filename>.pdf`, updates
+   `clients.agreement_storage_path` + `agreement_file`, and merges
+   extracted agreement terms into the client — non-overwrite rule:
+   only fills empty columns.
+5. Skip / dialog-close cleans up `pending/*` temp files.
+
+Client edit dialog exposes a `הורד PDF` button that generates a
+60-second `storage.createSignedUrl` when `agreement_storage_path` is
+set.
+
 ## Edge Functions
 
 ### `delete-user` (deployed)
@@ -499,6 +651,18 @@ Flow:
 3. Rejects attempts to delete yourself.
 4. Service-role deletes the `profiles` row, then calls `auth.admin.deleteUser(user_id)` so the auth user no longer exists.
 5. Returns `{ success: true }`. The frontend invalidates the `['profiles']` query so the row disappears from `/users`.
+
+### `extract-agreement` (deployed)
+**Path**: `supabase/functions/extract-agreement/index.ts`
+**URL**: `https://szunbwkmldepkwpxojma.supabase.co/functions/v1/extract-agreement`
+
+Accepts `{ storage_path }`, downloads the PDF via service role, sends it
+to Anthropic's Messages API as a base64 `document` content block with
+the system prompt from `prompt.md`, parses + schema-validates the JSON
+reply, fuzzy-matches the client name against `clients.name`, and returns
+`{ extracted, document_kind, fuzzy_matches }`. Requires
+`ANTHROPIC_API_KEY` secret. Default model `claude-sonnet-4-6`
+(overridable with `AGREEMENT_EXTRACTION_MODEL`).
 
 ### `invite-user` (deployed)
 **Path**: `supabase/functions/invite-user/index.ts`
@@ -577,6 +741,7 @@ All roles log in via the email+password form in `src/pages/Login.tsx`. On succes
 - עסקאות
 - יומן שעות
 - צוות
+- שירותים (configurable service types + their field schemas — admin only)
 - ניהול משתמשים
 
 > ⚠️ "הסכמים" is NOT a standalone nav item. Agreements are embedded inside the Clients page.
