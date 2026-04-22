@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
+import LabeledToggle from '@/components/LabeledToggle'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -99,30 +99,24 @@ function EmployeeFormBody({ form, onChange }: FormBodyProps) {
   return (
     <div className="space-y-4 py-2">
       {/* Hours category toggle */}
-      <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="tm-hours" className="leading-snug">
-          הפעל קטגוריית שעות (BHR/איגוד)
-        </Label>
-        <Switch
-          id="tm-hours"
-          checked={form.hours_category_enabled}
-          onCheckedChange={(v) => set('hours_category_enabled', v)}
-        />
-      </div>
+      <LabeledToggle
+        label="קטגוריית שעות (BHR/איגוד)"
+        checked={form.hours_category_enabled}
+        onCheckedChange={(v) => set('hours_category_enabled', v)}
+        offText="מבוטל"
+        onText="פעיל"
+      />
 
       <Separator />
 
       {/* Bonus model */}
-      <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="tm-bonus-enabled" className="font-semibold">
-          מודל בונוס
-        </Label>
-        <Switch
-          id="tm-bonus-enabled"
-          checked={form.bonus_enabled}
-          onCheckedChange={(v) => set('bonus_enabled', v)}
-        />
-      </div>
+      <LabeledToggle
+        label="מודל בונוס"
+        checked={form.bonus_enabled}
+        onCheckedChange={(v) => set('bonus_enabled', v)}
+        offText="ללא בונוס"
+        onText="בונוס פעיל"
+      />
 
       {form.bonus_enabled && (
         <div className="space-y-4 pl-2 border-r-2 border-purple-200 pr-3">

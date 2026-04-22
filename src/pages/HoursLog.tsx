@@ -5,6 +5,8 @@ import { Link } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { HoursLog as HoursLogType, Transaction, Client } from '@/lib/types'
+import ClientPicker from '@/components/ClientPicker'
+import { useSafeMutation, type SaveStatus } from '@/hooks/useSafeMutation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -170,8 +172,11 @@ export default function HoursLog() {
     }
   }, [isAdmin, personalClientId, permittedClients])
 
-  const insertHours = useMutation({
-    mutationFn: async (row: AddVisitForm & { month: number; year: number; computed_hours: number }) => {
+  const insertHours = useSafeMutation<
+    AddVisitForm & { month: number; year: number; computed_hours: number },
+    void
+  >({
+    mutationFn: async (row) => {
       const payload: Record<string, unknown> = {
         client_name: row.client_name,
         client_id: row.client_id,
@@ -188,9 +193,7 @@ export default function HoursLog() {
       const { error } = await supabase.from('hours_log').insert(payload)
       if (error) throw error
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['hours_log'] })
-    },
+    invalidate: [['hours_log']],
   })
 
   const closeMonth = useMutation({
@@ -246,27 +249,20 @@ export default function HoursLog() {
     setForm((prev) => ({ ...prev, [field]: value }))
   }
 
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
+  const saveStatus = insertHours.saveStatus
+  const saveError = insertHours.errorMessage
 
   const handleSaveVisit = async () => {
-    setSaveStatus('saving')
-    try {
-      const visitDate = new Date(form.visit_date)
-      const computed = computeHours(form.start_time, form.end_time) ?? form.hours
-      await insertHours.mutateAsync({
-        ...form,
-        month: visitDate.getMonth() + 1,
-        year: visitDate.getFullYear(),
-        computed_hours: computed,
-      })
-      setSaveStatus('success')
-      setTimeout(() => {
-        setSaveStatus('idle')
-        setDialogOpen(false)
-      }, 1500)
-    } catch (err) {
-      console.error('Save error:', err)
-      setSaveStatus('error')
+    const visitDate = new Date(form.visit_date)
+    const computed = computeHours(form.start_time, form.end_time) ?? form.hours
+    const result = await insertHours.mutate({
+      ...form,
+      month: visitDate.getMonth() + 1,
+      year: visitDate.getFullYear(),
+      computed_hours: computed,
+    })
+    if (result !== null) {
+      setTimeout(() => setDialogOpen(false), 1500)
     }
   }
 
@@ -352,22 +348,20 @@ export default function HoursLog() {
 
         <Card className="p-4">
           <div className="flex items-center gap-4 flex-wrap">
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-60">
               <Label className="text-xs text-purple-700">לקוח</Label>
-              <Select value={personalClientId ?? ''} onValueChange={(v) => setPersonalClientId(v || null)}>
-                <SelectTrigger className="w-60 border-purple-200">
-                  <SelectValue placeholder="בחר לקוח" />
-                </SelectTrigger>
-                <SelectContent>
-                  {permittedClients.length === 0 ? (
-                    <div className="p-2 text-xs text-muted-foreground">אין לקוחות מאושרים</div>
-                  ) : (
-                    permittedClients.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              {permittedClients.length === 0 ? (
+                <p className="text-xs text-muted-foreground">אין לקוחות מאושרים</p>
+              ) : (
+                <ClientPicker
+                  value={personalClientId}
+                  onChange={(id) => setPersonalClientId(id)}
+                  filter={(c) => permittedClients.some((p) => p.id === c.id)}
+                  allSentinelLabel="כל הלקוחות שלי"
+                  placeholder="חיפוש לקוח..."
+                  className="w-60"
+                />
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-purple-700">חודש</Label>
@@ -466,6 +460,7 @@ export default function HoursLog() {
             <AddVisitBody form={form} onChange={handleFormChange} disableClient />
             <DialogFooterButtons
               saveStatus={saveStatus}
+              saveError={saveError}
               onCancel={() => setDialogOpen(false)}
               onSave={handleSaveVisit}
               canSave={!!form.client_name.trim() && !!form.start_time && !!form.end_time}
@@ -718,22 +713,18 @@ function AddVisitBody({
     <div className="space-y-3 py-2">
       <div className="space-y-1">
         <Label className="text-purple-700">לקוח</Label>
-        {disableClient || !clients ? (
+        {disableClient ? (
           <Input value={form.client_name} disabled className="border-purple-200" />
         ) : (
-          <Select
-            value={form.client_id ?? ''}
-            onValueChange={(v) => {
-              const c = clients.find((x) => x.id === v)
-              onChange('client_id', c?.id ?? null)
+          <ClientPicker
+            value={form.client_id}
+            onChange={(id, c) => {
+              onChange('client_id', id)
               onChange('client_name', c?.name ?? '')
             }}
-          >
-            <SelectTrigger className="border-purple-200"><SelectValue placeholder="בחר לקוח" /></SelectTrigger>
-            <SelectContent>
-              {clients.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))}
-            </SelectContent>
-          </Select>
+            filter={clients ? (c) => clients.some((allowed) => allowed.id === c.id) : undefined}
+            placeholder="חיפוש לקוח..."
+          />
         )}
       </div>
       <div className="grid grid-cols-3 gap-3">
@@ -763,11 +754,13 @@ function AddVisitBody({
 
 function DialogFooterButtons({
   saveStatus,
+  saveError,
   onCancel,
   onSave,
   canSave,
 }: {
-  saveStatus: 'idle' | 'saving' | 'success' | 'error'
+  saveStatus: SaveStatus
+  saveError?: string | null
   onCancel: () => void
   onSave: () => void
   canSave: boolean
@@ -775,7 +768,12 @@ function DialogFooterButtons({
   return (
     <DialogFooter className="flex flex-col gap-2">
       {saveStatus === 'success' && <p className="text-green-600 font-medium text-sm text-right">המידע נשמר ✓</p>}
-      {saveStatus === 'error' && <p className="text-red-600 font-medium text-sm text-right">שגיאה בשמירה, נסה שנית</p>}
+      {saveStatus === 'error' && (
+        <p className="text-red-600 font-medium text-sm text-right">{saveError ?? 'שגיאה בשמירה, נסה שנית'}</p>
+      )}
+      {saveStatus === 'timeout' && (
+        <p className="text-red-600 font-medium text-sm text-right">פג זמן השמירה. נסה שנית.</p>
+      )}
       <div className="flex gap-2 flex-row-reverse">
         <Button onClick={onSave} disabled={saveStatus === 'saving' || !canSave} className="bg-purple-600 hover:bg-purple-700 text-white">
           {saveStatus === 'saving' ? 'שומר...' : 'שמור'}

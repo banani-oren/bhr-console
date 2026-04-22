@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Clock, RefreshCw, X } from 'lucide-react'
+import { Clock, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { Client, HoursLog, Profile, Transaction, TransactionKind } from '@/lib/types'
@@ -9,6 +9,8 @@ import {
   type ServiceType,
   evalDerived,
 } from '@/lib/serviceTypes'
+import ClientPicker from '@/components/ClientPicker'
+import LabeledToggle from '@/components/LabeledToggle'
 import {
   Dialog,
   DialogContent,
@@ -209,8 +211,6 @@ export default function TransactionDialog({
 
   const [state, setState] = useState<DialogState>(() => emptyState(profile?.full_name ?? ''))
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
-  const [clientQuery, setClientQuery] = useState('')
-  const [clientOpen, setClientOpen] = useState(false)
 
   const selectedClient = useMemo(
     () => clients.find((c) => c.id === state.client_id) ?? null,
@@ -226,8 +226,6 @@ export default function TransactionDialog({
   useEffect(() => {
     if (!open) return
     setSaveStatus('idle')
-    setClientQuery('')
-    setClientOpen(false)
     if (editing) {
       const custom = typeof editing.custom_fields === 'object' && editing.custom_fields
         ? { ...(editing.custom_fields as Record<string, unknown>) }
@@ -398,15 +396,6 @@ export default function TransactionDialog({
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.kind, state.hourly_rate_used, state.selectedHoursIds, unbilledHours])
-
-  // --- rendering helpers ---
-  const filteredClients = useMemo(() => {
-    const q = clientQuery.trim().toLowerCase()
-    if (!q) return clients.slice(0, 10)
-    return clients
-      .filter((c) => c.name.toLowerCase().includes(q) || (c.company_id ?? '').toLowerCase().includes(q))
-      .slice(0, 10)
-  }, [clients, clientQuery])
 
   const setCustom = (key: string, val: unknown) => {
     setState((s) => ({ ...s, custom: { ...s.custom, [key]: val } }))
@@ -679,70 +668,16 @@ export default function TransactionDialog({
             </div>
           </section>
 
-          {/* Client autocomplete */}
+          {/* Client autocomplete (Batch 4 A1: centralized ClientPicker) */}
           <section className="space-y-2">
             <Label className="text-purple-700 text-sm">לקוח</Label>
-            <div className="relative">
-              <div className="flex items-center gap-2 border rounded-md px-3 py-2">
-                <Input
-                  className="border-0 focus-visible:ring-0 p-0 flex-1"
-                  placeholder="חיפוש לקוח לפי שם או ח.פ. ..."
-                  value={state.client_id ? state.client_name : clientQuery}
-                  onChange={(e) => {
-                    setState((s) => ({ ...s, client_id: null, client_name: '' }))
-                    setClientQuery(e.target.value)
-                    setClientOpen(true)
-                  }}
-                  onFocus={() => setClientOpen(true)}
-                />
-                {state.client_id ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setState((s) => ({ ...s, client_id: null, client_name: '' }))
-                      setClientQuery('')
-                      setClientOpen(true)
-                    }}
-                    className="text-muted-foreground hover:text-foreground"
-                    title="נקה"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                ) : (
-                  <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
-                )}
-              </div>
-              {clientOpen && !state.client_id && (
-                <div className="absolute z-10 left-0 right-0 mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-y-auto">
-                  {filteredClients.length === 0 ? (
-                    <div className="p-3 text-sm text-muted-foreground text-center">לא נמצאו לקוחות</div>
-                  ) : (
-                    filteredClients.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setState((s) => ({ ...s, client_id: c.id, client_name: c.name }))
-                          setClientOpen(false)
-                          setClientQuery('')
-                        }}
-                        className="w-full text-right px-3 py-2 hover:bg-purple-50 flex items-center justify-between"
-                      >
-                        <div>
-                          <div className="text-sm font-medium">{c.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {c.company_id ?? '—'}
-                            {c.agreement_type ? ` · ${c.agreement_type}` : ''}
-                            {c.commission_percent != null ? ` · ${c.commission_percent}%` : ''}
-                          </div>
-                        </div>
-                        {state.client_id === c.id && <Check className="h-4 w-4 text-purple-600" />}
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
+            <ClientPicker
+              value={state.client_id}
+              onChange={(id, c) =>
+                setState((s) => ({ ...s, client_id: id, client_name: c?.name ?? '' }))
+              }
+              placeholder="חיפוש לקוח לפי שם או ח.פ. ..."
+            />
             {selectedClient && (
               <p className="text-[11px] text-muted-foreground">
                 מתוך פרטי הלקוח:{' '}
@@ -798,11 +733,13 @@ export default function TransactionDialog({
                 </Select>
               </div>
               <div className="space-y-1 flex flex-col justify-center">
-                <Label className="text-xs">חיוב</Label>
-                <div className="flex items-center gap-2">
-                  <Switch checked={state.is_billable} onCheckedChange={(v) => setState((s) => ({ ...s, is_billable: v }))} />
-                  <span className="text-sm">{state.is_billable ? 'לחיוב' : 'ללא חיוב'}</span>
-                </div>
+                <LabeledToggle
+                  label="חיוב"
+                  checked={state.is_billable}
+                  onCheckedChange={(v) => setState((s) => ({ ...s, is_billable: v }))}
+                  offText="ללא חיוב"
+                  onText="לחיוב"
+                />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך תחילת עבודה</Label>

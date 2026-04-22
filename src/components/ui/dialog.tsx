@@ -63,7 +63,7 @@ function DialogContent({
             render={
               <Button
                 variant="ghost"
-                className="absolute top-2 right-2"
+                className="absolute top-2 end-2 z-50"
                 size="icon-sm"
               />
             }
@@ -82,7 +82,8 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      // pe-10: reserve room so the close ✕ never overlaps a long RTL/LTR title.
+      className={cn("flex flex-col gap-2 pe-10", className)}
       {...props}
     />
   )

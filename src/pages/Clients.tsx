@@ -31,10 +31,11 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
+import LabeledToggle from '@/components/LabeledToggle'
 import { Plus, Upload, Search, Pencil, Trash2, Download } from 'lucide-react'
 import AgreementUploader from '@/components/AgreementUploader'
+import { useSafeMutation } from '@/hooks/useSafeMutation'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -202,7 +203,6 @@ export default function Clients() {
   const [cardOpen, setCardOpen] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const [form, setForm] = useState<ClientForm>(emptyForm)
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
 
   // ---- Delete dialog state ----
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
@@ -241,17 +241,50 @@ export default function Clients() {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
+  const saveMutation = useSafeMutation<
+    { editing: Client | null; payload: ReturnType<typeof formToPayload>; permissionIds: string[]; timeLogEnabled: boolean },
+    string
+  >({
+    mutationFn: async ({ editing, payload, permissionIds, timeLogEnabled }) => {
+      let clientId = editing?.id ?? null
+      if (editing) {
+        const { error } = await supabase.from('clients').update(payload).eq('id', editing.id)
+        if (error) throw error
+      } else {
+        const { data, error } = await supabase.from('clients').insert(payload).select('id').single()
+        if (error) throw error
+        clientId = (data as { id: string } | null)?.id ?? null
+      }
+      if (clientId) {
+        await supabase.from('client_time_log_permissions').delete().eq('client_id', clientId)
+        if (timeLogEnabled && permissionIds.length > 0) {
+          const rows = permissionIds.map((profile_id) => ({ client_id: clientId, profile_id }))
+          const { error: pErr } = await supabase.from('client_time_log_permissions').insert(rows)
+          if (pErr) throw pErr
+        }
+      }
+      return clientId ?? ''
+    },
+    invalidate: [['clients']],
+    successHoldMs: 1500,
+    onSuccess: () => {
+      setTimeout(() => closeCard(), 1500)
+    },
+  })
+  const saveStatus = saveMutation.saveStatus
+  const saveError = saveMutation.errorMessage
+
   function openCreate() {
     setEditingClient(null)
     setForm(emptyForm)
-    setSaveStatus('idle')
+    saveMutation.resetStatus()
     setCardOpen(true)
   }
 
   async function openEdit(client: Client) {
     setEditingClient(client)
     setForm(clientToForm(client))
-    setSaveStatus('idle')
+    saveMutation.resetStatus()
     setCardOpen(true)
     // Load existing time-log permissions for this client.
     try {
@@ -272,43 +305,17 @@ export default function Clients() {
   function closeCard() {
     setCardOpen(false)
     setEditingClient(null)
-    setSaveStatus('idle')
+    saveMutation.resetStatus()
   }
 
   async function handleSave() {
     if (!form.name.trim()) return
-    setSaveStatus('saving')
-    try {
-      const payload = formToPayload(form)
-      let clientId = editingClient?.id
-      if (editingClient) {
-        const { error } = await supabase.from('clients').update(payload).eq('id', editingClient.id)
-        if (error) throw error
-      } else {
-        const { data, error } = await supabase.from('clients').insert(payload).select('id').single()
-        if (error) throw error
-        clientId = data?.id as string
-      }
-      // Sync time-log permissions.
-      if (clientId) {
-        // Wipe + re-insert for simplicity (admin-only UI).
-        await supabase.from('client_time_log_permissions').delete().eq('client_id', clientId)
-        if (form.time_log_enabled && form.time_log_permissions.length > 0) {
-          const rows = form.time_log_permissions.map((profileId) => ({
-            client_id: clientId,
-            profile_id: profileId,
-          }))
-          const { error: pErr } = await supabase.from('client_time_log_permissions').insert(rows)
-          if (pErr) throw pErr
-        }
-      }
-      setSaveStatus('success')
-      queryClient.invalidateQueries({ queryKey: ['clients'] })
-      setTimeout(() => closeCard(), 2000)
-    } catch (err) {
-      console.error('Save error:', err)
-      setSaveStatus('error')
-    }
+    await saveMutation.mutate({
+      editing: editingClient,
+      payload: formToPayload(form),
+      permissionIds: form.time_log_permissions,
+      timeLogEnabled: form.time_log_enabled,
+    })
   }
 
   async function handleDelete() {
@@ -795,9 +802,14 @@ export default function Clients() {
                   <Label>מקדמה</Label>
                   <Input value={form.advance} onChange={(e) => setField('advance', e.target.value)} />
                 </div>
-                <div className="space-y-1.5 flex items-center gap-3 pt-6">
-                  <Switch checked={form.exclusivity} onCheckedChange={(v) => setField('exclusivity', v)} />
-                  <Label>בלעדיות</Label>
+                <div className="space-y-1.5 flex items-center pt-6">
+                  <LabeledToggle
+                    label="בלעדיות"
+                    checked={form.exclusivity}
+                    onCheckedChange={(v) => setField('exclusivity', v)}
+                    offText="ללא בלעדיות"
+                    onText="בלעדי"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label>תעריף שעת עבודה (₪)</Label>
@@ -843,15 +855,15 @@ export default function Clients() {
             <div>
               <h3 className="text-sm font-semibold text-purple-700 mb-3">דיווח שעות</h3>
               <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Switch
-                    checked={form.time_log_enabled}
-                    onCheckedChange={(v) => setField('time_log_enabled', v)}
-                  />
-                  <Label>הפעל דיווח שעות ללקוח זה</Label>
-                </div>
+                <LabeledToggle
+                  label="דיווח שעות ללקוח זה"
+                  checked={form.time_log_enabled}
+                  onCheckedChange={(v) => setField('time_log_enabled', v)}
+                  offText="מבוטל"
+                  onText="פעיל"
+                />
                 {form.time_log_enabled && (
-                  <>
+                  <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
                       דיווח השעות מתומחר לפי תעריף שעת העבודה של הלקוח.
                       {form.hourly_rate ? '' : ' שים לב: תעריף שעה עדיין לא הוגדר.'}
@@ -892,7 +904,7 @@ export default function Clients() {
                         )}
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -904,7 +916,12 @@ export default function Clients() {
               <p className="text-green-600 font-medium text-sm text-right">המידע נשמר ✓</p>
             )}
             {saveStatus === 'error' && (
-              <p className="text-red-600 font-medium text-sm text-right">שגיאה בשמירה, נסה שנית</p>
+              <p className="text-red-600 font-medium text-sm text-right">
+                {saveError ?? 'שגיאה בשמירה, נסה שנית'}
+              </p>
+            )}
+            {saveStatus === 'timeout' && (
+              <p className="text-red-600 font-medium text-sm text-right">פג זמן השמירה. נסה שנית.</p>
             )}
             <div className="flex gap-2 flex-row-reverse">
               <Button onClick={handleSave} disabled={saveStatus === 'saving' || saveStatus === 'success' || !form.name.trim()} className="bg-purple-600 hover:bg-purple-700 text-white">
