@@ -111,11 +111,16 @@ There is no separate `team_members` table — all non-admin data lives on `profi
 
 ---
 
-## User Roles (three-role model — v8)
+## User Roles (three-role model — admin is also an employee, v9)
 
 Roles are persisted in `profiles.role`, constrained to `{admin, administration, recruiter}`.
-Route access is enforced by `<RequireRole allow={...}>` in the frontend AND by role-aware
-RLS at the database level (defense in depth).
+`role` describes ACCESS, not identity: every role participates in employee
+features (appearing on `/team`, having a `bonus_model`, logging hours on
+permitted clients, having a personal productivity view). `admin` simply layers
+full system access on top of the employee identity.
+
+Route access is enforced by `<RequireRole allow={...}>` in the frontend AND by
+role-aware RLS at the database level (defense in depth).
 
 | Page / resource | admin | administration | recruiter |
 |-----------------|:-----:|:--------------:|:---------:|
@@ -255,17 +260,19 @@ create table agreements (
 
 create table transactions (
   id uuid primary key default gen_random_uuid(),
+  kind text not null default 'service'
+    check (kind in ('service','time_period')),      -- Batch 3 Phase C
   client_name text,
   position_name text,
   candidate_name text,
-  service_type text,                                 -- legacy string; still mirrored from the wizard for filters
-  service_type_id uuid references service_types(id), -- Phase D
-  custom_fields jsonb not null default '{}'::jsonb,  -- per-service-type free-form values, Phase D
+  service_type text,                                 -- legacy string; still mirrored for filters
+  service_type_id uuid references service_types(id),-- Phase D
+  custom_fields jsonb not null default '{}'::jsonb,  -- per-service-type free-form values
   salary numeric,
   commission_percent numeric,
   net_invoice_amount numeric,
   commission_amount numeric,
-  service_lead text,                                 -- references profiles.full_name (recruiter/administration)
+  service_lead text,                                 -- references profiles.full_name
   entry_date date,
   billing_month integer,
   billing_year integer,
@@ -275,7 +282,18 @@ create table transactions (
   payment_date date,
   payment_status text default 'ממתין',
   is_billable boolean default true,
-  invoice_number text,
+  invoice_number text,                               -- legacy; mirrored into invoice_number_transaction
+  invoice_number_transaction text,                   -- Batch 3 Phase C
+  invoice_number_receipt text,                       -- Batch 3 Phase C
+  work_start_date date,                              -- Batch 3 Phase C
+  warranty_end_date date,                            -- Batch 3 Phase C (derived from work_start + client.warranty_days)
+  invoice_sent_date date,                            -- Batch 3 Phase C
+  payment_due_date date,                             -- Batch 3 Phase C (derived from invoice_sent + client.payment_terms)
+  period_start date,                                 -- Batch 3 Phase C (kind='time_period')
+  period_end date,                                   -- Batch 3 Phase C (kind='time_period')
+  hours_total numeric,                               -- Batch 3 Phase C (kind='time_period')
+  hourly_rate_used numeric,                          -- Batch 3 Phase C (kind='time_period')
+  time_sheet_pdf_path text,                          -- Batch 3 Phase E — Storage key in 'time-sheets' bucket
   notes text,
   created_at timestamptz default now()
 );
@@ -285,16 +303,32 @@ create table hours_log (
   profile_id uuid references profiles(id),          -- unified: links to profiles table
   team_member_id uuid,                               -- legacy column, ignore
   client_name text,
-  client_id uuid references clients(id),             -- Phase E
+  client_id uuid references clients(id),             -- Batch 2 Phase E
   visit_date date,
   hours numeric,                                     -- computed from start_time/end_time when both present
   description text,
   hours_category text,                               -- 'BHR' or 'איגוד' (only if hours_category_enabled)
-  start_time time,                                   -- Phase E
-  end_time time,                                     -- Phase E
+  start_time time,                                   -- Batch 2 Phase E
+  end_time time,                                     -- Batch 2 Phase E
+  billed_transaction_id uuid references transactions(id), -- Batch 3 Phase E — flips a row out of the unbilled queue
   month integer,
   year integer,
   created_at timestamptz default now()
+);
+
+-- billing_reports: per-client aggregation across kinds (Batch 3 Phase F).
+-- admin + administration read/write via RLS; recruiter has no access.
+create table billing_reports (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references clients(id),
+  period_start date not null,
+  period_end date not null,
+  issued_at timestamptz not null default now(),
+  issued_by uuid references profiles(id),
+  transaction_ids uuid[] not null default '{}',
+  total_amount numeric not null default 0,
+  pdf_storage_path text,                            -- Storage key in 'billing-reports' bucket
+  notes text
 );
 ```
 
@@ -551,33 +585,90 @@ const calcBonus = (rev: number, tiers: {min: number, bonus: number}[]) => {
 
 ---
 
-## Transaction wizard (Phase D)
+## Transaction dialog (v2 — Batch 3 Phase C)
 
-The admin-facing `+ הוספת עסקה` dialog is a 3-step wizard driven by
-`service_types`:
+The admin-facing `+ הוספת עסקה` dialog is a single-panel form
+(`max-w-4xl`) with three cards:
 
-1. **Client** — searchable list from `clients`; selecting pre-fills
-   `commission_percent` from the client's agreement terms.
-2. **Service type** — card grid of `service_types` ordered by
-   `display_order`.
-3. **Details** — universal fields (entry/closing dates + months +
-   years, payment date/status, invoice number, billable, notes) + the
-   dynamic per-type fields from `service_type.fields`.
+1. **Kind pills** — dynamic `service_types` on the left and a visually-
+   distinct amber `דיווח שעות` pill on the right representing
+   `kind='time_period'` (not a service type). Services set `kind='service'`
+   + `service_type_id`.
+2. **Client autocomplete** — search by `name` or `company_id`, up to 10
+   hits; selecting hydrates `commission_percent`, `warranty_days`,
+   `payment_terms`, `hourly_rate` from the client record onto the form
+   and surfaces them as a "מתוך פרטי הלקוח" hint.
+3. **Three cards below:**
+   - `שדות אוטומטיים` — `service_lead` (default: current user),
+     `entry_date` (today), `close_date`, `payment_status` (`ממתין`),
+     `is_billable` (true), `work_start_date`,
+     `warranty_end_date` with a 🔄 re-derive button
+     (`work_start_date + client.warranty_days`).
+   - `שדות ייחודיים` — per-kind:
+     - `kind='service'` → grid of `service_types.fields`. Derived fields
+       (entries with a `derived` expression) recompute reactively and are
+       rendered disabled with a 🔄 marker. Supported operators: `+ − × ÷`,
+       parentheses, field refs (`salary`, `client.hourly_rate`, …), and
+       `DATE + integer` addition (for warranty_end_date).
+     - `kind='time_period'` → period start/end (default to this month
+       with a quick-pick button), `hourly_rate_used` (pre-filled from
+       client.hourly_rate with a divergence hint), an unbilled-hours
+       preview table scoped to the selected client + period (and the
+       current editing transaction) with per-row checkboxes. Selecting a
+       row contributes to `hours_total` (auto-sum) and
+       `net_invoice_amount = hours_total * hourly_rate_used` (computed,
+       read-only).
+   - `חשבונית ותשלום` — `invoice_number_transaction`, `invoice_number_receipt`,
+     `invoice_sent_date`, `payment_due_date` (🔄 re-derives from
+     `invoice_sent_date + parsePaymentTerms(client.payment_terms)`),
+     `payment_date`, `notes`.
 
 Universal fields continue to write to their dedicated columns. Custom
-fields write to `transactions.custom_fields` as a JSON object keyed by
-field `key`. Mirrored keys — `position_name`, `candidate_name`,
+fields write to `transactions.custom_fields` keyed by field `key`. The
+seven mirrored keys (`position_name`, `candidate_name`,
 `commission_percent`, `salary`, `net_invoice_amount`,
-`commission_amount`, `service_lead` — are also written to the existing
-dedicated columns so dashboards/filters continue to work without schema
-churn. New keys (e.g. `retainer_amount`) live only in `custom_fields`.
+`commission_amount`, `service_lead`) are also written to the existing
+dedicated columns.
 
-The transactions list gets a `סוג שירות` column between `לקוח` and the
-previous columns, resolved via `service_type_id → service_types.name`
-(falls back to the legacy text `service_type` for older rows). The
-filter for `סוג שירות` is now a dropdown of `service_types.name` values.
+**On save for `kind='time_period'`:** all checked `hours_log` rows get
+their `billed_transaction_id` set to the new transaction's id, so they
+don't show up in the next bill's preview. On edit, unchecked rows get
+their `billed_transaction_id` cleared.
 
-## Time-log & hourly billing (Phase E)
+The `/transactions` list gets a `סוג` column (purple badge `שירות` or
+amber badge `שעות`), a `סוג` filter, and an additional `הפק דף שעות`
+icon action per row for `kind='time_period'` rows. The service-type
+column stays for services and shows `—` for time_period rows.
+
+## Service types (Batch 3 Phase D)
+
+`service_types` contains **only real services**, never time-based billing.
+`דיווח שעות` and `מש"א במיקור חוץ` MUST NOT be present as service types —
+time-based billing is `kind='time_period'` on `transactions`.
+
+Canonical seeds (upserted by `supabase/migrations/20260422_refinements_batch3.sql`):
+
+- `השמה` (placement, display_order=1, 10 fields) — position_number,
+  position_name, candidate_name, salary, commission_percent,
+  `commission_amount (derived: salary * commission_percent / 100)`,
+  supplier_commission, supplier_name, work_start_date,
+  `warranty_end_date (derived: work_start_date + client.warranty_days)`.
+- `הד האנטינג` (head-hunting, display_order=2, 6 fields) — position_name,
+  candidate_name, retainer_amount, success_fee, work_start_date,
+  warranty_end_date (derived).
+- `הדרכה` (training, display_order=3, 6 fields) — workshop_name,
+  training_date, duration_hours, trainer, participants, price.
+- `גיוס מסה` (mass recruiting, display_order=4, 4 fields) —
+  campaign_name, candidate_count, fee_per_candidate,
+  `total_fee (derived: candidate_count * fee_per_candidate)`.
+
+The derived-field evaluator (`src/lib/serviceTypes.ts::evalDerived`)
+supports numeric literals, `+ − × ÷`, parentheses, field refs into the
+current row or the selected client, and date + integer addition (for
+warranty_end_date). Unknown tokens resolve to `null`, which short-circuits
+the derivation.
+
+## Time-log & hourly billing (Batch 2 Phase E)
 
 - `clients.time_log_enabled` + `client_time_log_permissions(client_id,
   profile_id)` gate who may log hours for each client. The clients edit
@@ -592,7 +683,27 @@ filter for `סוג שירות` is now a dropdown of `service_types.name` values.
 - Admin `/hours` keeps the tabs-per-client layout and gains a
   "הפקת דוח שעות" button that routes to `/hours/report`.
 
-## PDF agreement extraction (Phase F)
+## Billing reports (Batch 3 Phase F)
+
+`/billing-reports` is an admin + administration page that consolidates
+billable transactions per client per period into a single PDF the admin
+sends to the client.
+
+- Filter strip (client autocomplete + period from/to) → "הצג חיובים".
+- Candidate rows: any `transactions` where `is_billable = true` AND
+  (`kind='service'` with `close_date` or `entry_date` in the period, OR
+  `kind='time_period'` with `period_end` in the period). Rows already
+  included in a prior `billing_reports` row for this client are shown
+  grayed out + disabled (de-dup by `transaction_ids`).
+- "הפק דוח חיוב" inserts a `billing_reports` row, renders a branded A4
+  PDF with a summary table + an expanded hours page per `kind='time_period'`
+  item, uploads to Storage bucket `billing-reports/<report_id>.pdf`, and
+  writes `pdf_storage_path`. Past reports list at the bottom with
+  download buttons.
+- RLS: admin + administration ALL via the `current_user_role()` helper;
+  recruiter has no access.
+
+## PDF agreement extraction (Batch 2 Phase F)
 
 ### Storage
 
@@ -740,6 +851,7 @@ All roles log in via the email+password form in `src/pages/Login.tsx`. On succes
 - לקוחות (includes agreement terms — no separate הסכמים item)
 - עסקאות
 - יומן שעות
+- דוחות חיוב (admin + administration)
 - צוות
 - שירותים (configurable service types + their field schemas — admin only)
 - ניהול משתמשים

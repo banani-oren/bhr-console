@@ -347,3 +347,123 @@ Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 
       BSH/חינוך לפסגות scanned PDFs is deferred — requires access to his
       source folder which is outside the repo. Verify with 2–3 real PDFs
       on the production URL when Oren is available.
+
+## 24. service_types purge (Batch 3 Phase A — 2026-04-22)
+
+- [x] **Seed list.** `select name from service_types order by display_order`
+      returns exactly `['השמה','הד האנטינג','הדרכה','גיוס מסה']`.
+      `דיווח שעות` and `מש"א במיקור חוץ` MUST NOT appear.
+- [x] **Dangling transactions.** No `transactions` rows reference a
+      now-deleted `service_type_id`. The migration reassigns any such
+      rows to `kind='time_period'` with period / hours / hourly_rate
+      backfilled from `custom_fields`. At run time there were **zero**
+      dangling rows (prior-batch seed had been cleaned already).
+- [x] **UI regression.** `/services` shows only the 4 canonical rows;
+      the `/transactions` wizard replacement has no `דיווח שעות` option
+      in the service-type pills and instead surfaces an amber `דיווח שעות`
+      pill that represents `kind='time_period'`.
+
+## 25. Admin-is-employee (Batch 3 Phase B — 2026-04-22)
+
+- [x] **`/team` includes admins.** Query changed from
+      `role IN ('administration','recruiter')` to
+      `role IN ('admin','administration','recruiter')`. Oren appears as
+      a card with a purple `מנהל` badge alongside every employee.
+- [x] **Bonus editor works on the admin card.** Clicking edit on Oren's
+      card opens the same `EmployeeFormBody` and persists the bonus_model
+      back to `profiles`.
+- [x] **`/hours` admin toggle.** `ניהול שעות` / `השעות שלי` pill toggle
+      on `/hours` for admins; 'mine' mode renders the personal client-
+      picker view scoped to `profile_id = auth.uid()`.
+- [x] **`/hours` permitted clients for admins.** Admins in `mine` mode
+      see every `time_log_enabled=true` client without needing an
+      explicit `client_time_log_permissions` row.
+- [x] **Client edit dialog permissions include admins.** The eligible-
+      profiles query on `/clients` time-log multi-select now includes
+      `role='admin'`. Role label shows `מנהל` / `מנהלה` / `רכז/ת`.
+- [x] **Dashboard toggle.** Admin's `/` now renders a three-pill toggle
+      (`דשבורד מנהל` / `דשבורד עובד` / `דשבורד גבייה`) that switches
+      between `AdminDashboard`, `RecruiterDashboard`, and
+      `AdministrationDashboard`. Non-admins see no toggle and render
+      their scoped dashboard directly.
+
+## 26. Transaction dialog redesign (Batch 3 Phase C — 2026-04-22)
+
+- [x] **Single-panel wider layout.** `max-w-4xl` dialog; three stacked
+      cards (auto fields, kind-specific, invoicing).
+- [x] **Kind pills.** Dynamic service types + separator + visually-
+      distinct amber `דיווח שעות` pill with a 🕒 icon.
+- [x] **Client autocomplete.** Filters by `name.ilike('%term%')` or
+      `company_id.ilike('%term%')`; up to 10 results. Selecting a client
+      hydrates `commission_percent`, `warranty_days`, `payment_terms`,
+      `hourly_rate` as read-only hint + editable form values.
+- [x] **Auto-fill defaults.** `service_lead` = current user's full_name,
+      `entry_date` = today, `payment_status` = `ממתין`, `is_billable` =
+      true. Editable.
+- [x] **Derived fields.** `warranty_end_date = work_start_date + client.warranty_days`
+      recomputes on source change. `payment_due_date = invoice_sent_date
+      + parsePaymentTerms(client.payment_terms)` recomputes. Derived
+      service_types.fields (e.g. `commission_amount = salary *
+      commission_percent / 100`) recompute reactively and are rendered
+      disabled with a 🔄 marker.
+- [x] **Kind column + filter.** `/transactions` has a new `סוג`
+      column with purple `שירות` / amber `שעות` badge, and a `סוג`
+      filter with options הכל / שירות / שעות.
+
+## 27. Canonical service seeds (Batch 3 Phase D — 2026-04-22)
+
+- [x] **Seed count.** `select count(*) from service_types` = 4.
+      `select name, jsonb_array_length(fields) from service_types
+      order by display_order` →
+      `השמה:10 · הד האנטינג:6 · הדרכה:6 · גיוס מסה:4`.
+- [x] **Derived commission_amount.** Setting salary=10000 and
+      commission_percent=100 auto-populates commission_amount=10000.
+      Changing to 90 updates it to 9000 without a manual re-derive.
+- [x] **Derived total_fee.** Setting candidate_count=10 and
+      fee_per_candidate=1500 auto-populates total_fee=15000.
+
+## 28. time_period kind (Batch 3 Phase E — 2026-04-22)
+
+- [x] **Entry from /transactions.** `דיווח שעות` pill switches the
+      custom-fields block to the time-bill form: period pickers
+      (default this month), hourly_rate_used (pre-fills from client),
+      hours preview table, hours_total + net_invoice_amount computed.
+- [x] **Entry from /hours/report.** `צור עסקה מהדוח` opens the new
+      TransactionDialog with `kind='time_period'` pre-seeded with the
+      client, period, hours_total, and hourly_rate_used.
+- [x] **Unbilled-hours preview.** Table shows rows where
+      `billed_transaction_id IS NULL` AND `client_id = selected` AND
+      `visit_date` in period; unchecking a row excludes it from the
+      bill's totals.
+- [x] **Billing flag.** On save, the selected rows have their
+      `billed_transaction_id` set to the new transaction; on edit,
+      unchecked rows have it cleared.
+- [x] **Re-preview empty.** Opening the dialog for the same client +
+      period after billing shows zero unbilled hours (rows now carry a
+      `billed_transaction_id`).
+- [x] **Time-sheet PDF.** The per-row `הפק דף שעות` button on
+      `/transactions` (visible for `kind='time_period'` rows) generates
+      the PDF via jspdf, uploads to `time-sheets/<txn_id>.pdf`, updates
+      `transactions.time_sheet_pdf_path`, and opens the signed URL in
+      a new tab.
+
+## 29. Billing reports (Batch 3 Phase F — 2026-04-22)
+
+- [x] **Schema + RLS.** `billing_reports` table created with admin +
+      administration ALL policy via `current_user_role()`.
+      `billing-reports` Storage bucket created private with matching
+      admin + administration RLS.
+- [x] **Sidebar item.** `דוחות חיוב` appears between `יומן שעות` and
+      `צוות`; guarded by `RequireRole allow={['admin','administration']}`.
+- [x] **Candidate aggregation.** `הצג חיובים` loads service rows
+      (close_date/entry_date in period) + time_period rows (period_end
+      in period) for the selected client, all with `is_billable=true`.
+- [x] **De-dup.** Rows that appear in an earlier `billing_reports` for
+      the same client are grayed out + disabled; the checkbox cannot be
+      toggled.
+- [x] **PDF.** `הפק דוח חיוב` inserts the report row, renders a
+      branded A4 PDF (summary table + one expanded hours page per
+      included time_period transaction), uploads to
+      `billing-reports/<report_id>.pdf`, and opens the signed URL.
+- [x] **Past reports list.** Shows reports most-recent first with a
+      Download button that opens a signed URL when clicked.
