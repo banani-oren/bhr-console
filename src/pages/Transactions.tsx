@@ -1,12 +1,13 @@
 import { useState, useMemo, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { Plus, Upload, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Upload, Pencil, Trash2, FileText } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTable, useInsert, useDelete } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
-import type { Transaction } from '@/lib/types'
+import type { Transaction, HoursLog, Client } from '@/lib/types'
 import type { ServiceType } from '@/lib/serviceTypes'
-import TransactionWizard from '@/components/TransactionWizard'
+import TransactionDialog from '@/components/TransactionDialog'
+import { buildTimeSheetPdf, uploadTimeSheetPdf, signedUrl } from '@/lib/pdf'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -83,6 +84,7 @@ export default function Transactions() {
   const [filterServiceLead, setFilterServiceLead] = useState<string>('all')
   const [filterBillable, setFilterBillable] = useState<string>('all')
   const [filterClosingYear, setFilterClosingYear] = useState<string>('all')
+  const [filterKind, setFilterKind] = useState<string>('all')
 
   const uniqueServiceLeads = useMemo(
     () => [...new Set(transactions.map((t) => t.service_lead).filter(Boolean))].sort(),
@@ -107,6 +109,7 @@ export default function Transactions() {
 
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
+      if (filterKind !== 'all' && (t.kind ?? 'service') !== filterKind) return false
       if (filterBillingMonth !== 'all' && t.billing_month !== Number(filterBillingMonth)) return false
       if (filterClosingMonth !== 'all' && t.closing_month !== Number(filterClosingMonth)) return false
       if (filterServiceType !== 'all' && resolveServiceName(t) !== filterServiceType) return false
@@ -116,7 +119,7 @@ export default function Transactions() {
       if (filterClosingYear !== 'all' && t.closing_year !== Number(filterClosingYear)) return false
       return true
     })
-  }, [transactions, filterBillingMonth, filterClosingMonth, filterServiceType, filterServiceLead, filterBillable, filterClosingYear, serviceNameById])
+  }, [transactions, filterKind, filterBillingMonth, filterClosingMonth, filterServiceType, filterServiceLead, filterBillable, filterClosingYear, serviceNameById])
 
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
@@ -126,6 +129,45 @@ export default function Transactions() {
 
   const handleDelete = async (id: string) => {
     if (confirm('האם למחוק עסקה זו?')) await remove.mutateAsync(id)
+  }
+
+  const handleGenerateTimeSheet = async (t: Transaction) => {
+    try {
+      // Fetch the hours_log rows billed to this transaction.
+      const { data: hours, error: hErr } = await supabase
+        .from('hours_log')
+        .select('*')
+        .eq('billed_transaction_id', t.id)
+        .order('visit_date', { ascending: true })
+      if (hErr) throw hErr
+      // Fetch profile names.
+      const { data: profiles } = await supabase.from('profiles').select('id, full_name')
+      const profileNameById = new Map<string, string>()
+      for (const p of (profiles as Array<{ id: string; full_name: string }> | null) ?? []) {
+        profileNameById.set(p.id, p.full_name)
+      }
+      // Fetch client.
+      const { data: client } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('name', t.client_name)
+        .maybeSingle()
+
+      const doc = buildTimeSheetPdf({
+        transaction: t,
+        client: (client as Client | null) ?? null,
+        entries: (hours as HoursLog[] | null) ?? [],
+        profileNameById,
+      })
+      const path = await uploadTimeSheetPdf(t.id, doc)
+      await supabase.from('transactions').update({ time_sheet_pdf_path: path }).eq('id', t.id)
+      queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      const url = await signedUrl('time-sheets', path, 120)
+      if (url) window.open(url, '_blank', 'noopener')
+    } catch (err) {
+      console.error('time sheet PDF error:', err)
+      alert('שגיאה בהפקת ה-PDF')
+    }
   }
 
   // Excel import (kept from prior batch; minimal update: accepts old flat columns)
@@ -206,7 +248,18 @@ export default function Transactions() {
       </div>
 
       <Card className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <div className="space-y-1">
+            <Label className="text-xs text-purple-700">סוג</Label>
+            <Select value={filterKind} onValueChange={(v) => setFilterKind(v ?? 'all')}>
+              <SelectTrigger className="border-purple-200 focus:ring-purple-400 text-sm"><SelectValue placeholder="הכל" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">הכל</SelectItem>
+                <SelectItem value="service">שירות</SelectItem>
+                <SelectItem value="time_period">שעות</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">חודש כניסה</Label>
             <Select value={filterBillingMonth} onValueChange={(v) => setFilterBillingMonth(v ?? 'all')}>
@@ -282,6 +335,7 @@ export default function Transactions() {
               <TableHeader>
                 <TableRow className="bg-purple-50">
                   <TableHead className="text-right text-purple-800 font-semibold">לקוח</TableHead>
+                  <TableHead className="text-right text-purple-800 font-semibold">סוג</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">סוג שירות</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">משרה</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">מועמד</TableHead>
@@ -301,7 +355,16 @@ export default function Transactions() {
                 {filtered.map((t) => (
                   <TableRow key={t.id} className="hover:bg-purple-50/50 transition-colors">
                     <TableCell className="text-right font-medium">{t.client_name}</TableCell>
-                    <TableCell className="text-right">{resolveServiceName(t) || '—'}</TableCell>
+                    <TableCell className="text-right">
+                      {t.kind === 'time_period' ? (
+                        <Badge className="bg-amber-50 text-amber-700 border-amber-200">שעות</Badge>
+                      ) : (
+                        <Badge className="bg-purple-50 text-purple-700 border-purple-200">שירות</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {t.kind === 'time_period' ? '—' : resolveServiceName(t) || '—'}
+                    </TableCell>
                     <TableCell className="text-right">{t.position_name}</TableCell>
                     <TableCell className="text-right">{t.candidate_name}</TableCell>
                     <TableCell className="text-right">{formatCurrency(t.salary)}</TableCell>
@@ -329,6 +392,17 @@ export default function Transactions() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex gap-1 justify-end">
+                        {t.kind === 'time_period' && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-amber-600 hover:bg-amber-50"
+                            onClick={() => handleGenerateTimeSheet(t)}
+                            title="הפק דף שעות"
+                          >
+                            <FileText className="w-4 h-4" />
+                          </Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:bg-purple-100" onClick={() => openEdit(t)}>
                           <Pencil className="w-4 h-4" />
                         </Button>
@@ -345,8 +419,8 @@ export default function Transactions() {
         )}
       </Card>
 
-      {/* Wizard */}
-      <TransactionWizard
+      {/* Dialog (single panel) */}
+      <TransactionDialog
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         editing={editing}

@@ -5,9 +5,8 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '@/lib/supabase'
 import type { Client, HoursLog, Profile } from '@/lib/types'
-import type { ServiceType } from '@/lib/serviceTypes'
-import TransactionWizard from '@/components/TransactionWizard'
-import type { WizardValues } from '@/components/TransactionWizard'
+import TransactionDialog from '@/components/TransactionDialog'
+import type { DialogInitial } from '@/components/TransactionDialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -40,7 +39,7 @@ export default function HoursReport() {
   const [periodEnd, setPeriodEnd] = useState<string>(today)
   const [selectedEmployees, setSelectedEmployees] = useState<Set<string>>(new Set())
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [wizardInitial, setWizardInitial] = useState<Partial<WizardValues> | undefined>(undefined)
+  const [wizardInitial, setWizardInitial] = useState<DialogInitial | undefined>(undefined)
 
   const { data: clients = [] } = useQuery<Client[]>({
     queryKey: ['clients'],
@@ -194,38 +193,16 @@ export default function HoursReport() {
     doc.save(`hours-report-${selectedClient.name}-${periodStart}-${periodEnd}.pdf`)
   }
 
-  const { data: serviceTypes = [] } = useQuery<ServiceType[]>({
-    queryKey: ['service_types'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('service_types').select('*')
-      if (error) throw error
-      return data as ServiceType[]
-    },
-  })
-
   const handleCreateTransaction = () => {
     if (!selectedClient) return
-    const st = serviceTypes.find((s) => s.name === 'דיווח שעות')
-    if (!st) {
-      alert('סוג השירות "דיווח שעות" לא נמצא')
-      return
-    }
-    const endDate = new Date(periodEnd)
     setWizardInitial({
+      kind: 'time_period',
       client_id: selectedClient.id,
       client_name: selectedClient.name,
-      service_type_id: st.id,
-      service_type_name: st.name,
-      close_date: periodEnd,
-      closing_month: endDate.getMonth() + 1,
-      closing_year: endDate.getFullYear(),
-      custom: {
-        period_start: periodStart,
-        period_end: periodEnd,
-        hours_total: totalHours,
-        hourly_rate: hourlyRate,
-        net_invoice_amount: totalAmount,
-      },
+      period_start: periodStart,
+      period_end: periodEnd,
+      hours_total: totalHours,
+      hourly_rate_used: hourlyRate,
     })
     setWizardOpen(true)
   }
@@ -338,12 +315,11 @@ export default function HoursReport() {
         </Card>
       )}
 
-      <TransactionWizard
+      <TransactionDialog
         open={wizardOpen}
         onOpenChange={setWizardOpen}
         editing={null}
         initial={wizardInitial}
-        initialStep={3}
       />
     </div>
   )

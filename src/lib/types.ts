@@ -65,8 +65,11 @@ export type ClientWithAgreement = Client & {
   agreements: Agreement[]
 }
 
+export type TransactionKind = 'service' | 'time_period'
+
 export type Transaction = {
   id: string
+  kind: TransactionKind
   client_name: string
   position_name: string
   candidate_name: string
@@ -88,6 +91,17 @@ export type Transaction = {
   payment_status: string
   is_billable: boolean
   invoice_number: string | null
+  invoice_number_transaction: string | null
+  invoice_number_receipt: string | null
+  work_start_date: string | null
+  warranty_end_date: string | null
+  invoice_sent_date: string | null
+  payment_due_date: string | null
+  period_start: string | null
+  period_end: string | null
+  hours_total: number | null
+  hourly_rate_used: number | null
+  time_sheet_pdf_path: string | null
   notes: string | null
   created_at: string
 }
@@ -97,13 +111,30 @@ export type HoursLog = {
   team_member_id: string | null
   profile_id: string | null
   client_name: string
+  client_id: string | null
   visit_date: string
   hours: number
   description: string | null
   hours_category: string | null
+  start_time: string | null
+  end_time: string | null
+  billed_transaction_id: string | null
   month: number
   year: number
   created_at: string
+}
+
+export type BillingReport = {
+  id: string
+  client_id: string
+  period_start: string
+  period_end: string
+  issued_at: string
+  issued_by: string | null
+  transaction_ids: string[]
+  total_amount: number
+  pdf_storage_path: string | null
+  notes: string | null
 }
 
 export type BonusTier = {
