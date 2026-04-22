@@ -83,7 +83,16 @@ Repeat until the checklist is all `[x]`:
    c. `npm run build` — fix errors, repeat until clean.
    d. `git add` + `git commit -m "<section>: <what changed>"`.
    e. `git push origin main`.
-   f. Wait 90 seconds for Vercel.
+   f. After pushing, poll the Vercel API
+      (`GET /v6/deployments?projectId=${PROJECT_ID}&limit=1` with
+      `Authorization: Bearer $VERCEL_TOKEN`) every 10 seconds until the
+      latest deployment's `state` is `READY`. Timeout 5 minutes. If
+      `state` becomes `ERROR` or `CANCELED`, fetch the deployment
+      events/logs (`/v3/deployments/<id>/events`), diagnose the build
+      failure, fix the code, and go back to step 2c for the same
+      checklist item. Do not proceed to verification until the live
+      deployment matches the commit you just pushed. A fixed-length
+      "wait 90 seconds" is NOT acceptable — always verify build state.
 3. Open the live URL in Chrome. Perform the check. Observe.
 4. If it passes, edit `BHR_CONSOLE_CHECKLIST.md`: flip `[ ]` → `[x]`, append a short
    live-evidence note (what you clicked, what you saw). Commit + push.

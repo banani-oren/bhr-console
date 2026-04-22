@@ -51,8 +51,20 @@ git push origin main
 
 ### Step 4 — Verify Deployment on Vercel
 - GitHub → Vercel auto-deploy **is active** (confirmed). Every push to `main` triggers a deploy automatically.
-- Wait ~60 seconds after push, then open https://app.banani-hr.com (legacy: https://bhr-console.vercel.app)
-- Navigate to the specific page/feature that was changed and confirm it works correctly in production
+- **Do not wait a fixed number of seconds.** Poll the Vercel API:
+  ```bash
+  # PROJECT_ID = prj_rmCrlbOpuVLP6XPiPTOwYBlq0Smz
+  curl -sS "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&limit=1" \
+    -H "Authorization: Bearer $VERCEL_TOKEN"
+  ```
+  Extract `deployments[0].state` and loop every 10 seconds until it is
+  `READY`. Timeout after 5 minutes. If it becomes `ERROR` or `CANCELED`,
+  fetch `/v3/deployments/<id>/events`, diagnose the build failure, fix
+  the code, and try again. "Waited 90 seconds" is NOT proof of a
+  successful build and must never be accepted as done.
+- Only once `state=READY` and the deployed commit SHA matches the SHA
+  you just pushed, open https://app.banani-hr.com (legacy:
+  https://bhr-console.vercel.app) and verify the feature in production.
 - **Do not report the task as complete until the live URL has been verified**
 
 > ⚠️ A task is only DONE when: (1) build passes, (2) QA passes locally, (3) code is on GitHub, (4) Vercel shows the change live.
