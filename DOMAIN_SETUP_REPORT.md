@@ -167,7 +167,7 @@ Explicitly **not in this batch**. §34 added to `BHR_CONSOLE_CHECKLIST.md`.
 |------|--------|-------|
 | Phases 1–2 artifacts + groundwork (pre-DNS) | `2b310f0` | spec, checklist §§ 30-31-34, DNS instructions, invite-user env fallback, VITE_SITE_URL on Vercel + .env.local |
 | Report SHA backfill | `28b7e91` | |
-| Phases 3–5 completion (post-DNS) | (this commit) | auth PATCH, PUBLIC_SITE_URL secret, invite-user redeployed, live-verified, checklist §§ 30.last + 31 flipped |
+| Phases 3–5 completion (post-DNS) | bd00ea6 | auth PATCH, PUBLIC_SITE_URL secret, invite-user redeployed, live-verified, checklist §§ 30.last + 31 flipped |
 
 ## Future work
 
