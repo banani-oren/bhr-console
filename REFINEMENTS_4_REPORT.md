@@ -10,7 +10,7 @@ Run date: 2026-04-22.
 | B (hours dialog) | `d96a80b` | `feat(hours): client picker inside entry dialog` |
 | C (billing flex) | `7d586d5` | `feat(billing): flexible billing-report filters across any combination` |
 | D (PWA / mobile / offline / login) | `4e34de6` | `feat(mobile): PWA install + /m mobile routes + offline hours queue` |
-| Termination (this commit) | (to be appended) | `docs: spec + checklist + REFINEMENTS_4_REPORT` |
+| Termination (this commit) | 955b68a | `docs: spec + checklist + REFINEMENTS_4_REPORT` |
 
 All commits auto-deployed to `https://app.banani-hr.com` via the Vercel
 integration on `main`.
