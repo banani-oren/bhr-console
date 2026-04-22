@@ -133,7 +133,7 @@ Explicitly **not in this batch**. §34 added to `BHR_CONSOLE_CHECKLIST.md`.
 
 | Step | Commit | Notes |
 |------|--------|-------|
-| Spec + checklist + DNS instructions + invite-user env fallback + env var | (this commit) | |
+| Spec + checklist + DNS instructions + invite-user env fallback + env var | 2b310f0 | |
 
 ## Follow-up runbook
 
