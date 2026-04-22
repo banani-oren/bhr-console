@@ -51,7 +51,7 @@ git push origin main
 
 ### Step 4 — Verify Deployment on Vercel
 - GitHub → Vercel auto-deploy **is active** (confirmed). Every push to `main` triggers a deploy automatically.
-- Wait ~60 seconds after push, then open https://bhr-console.vercel.app
+- Wait ~60 seconds after push, then open https://app.banani-hr.com (legacy: https://bhr-console.vercel.app)
 - Navigate to the specific page/feature that was changed and confirm it works correctly in production
 - **Do not report the task as complete until the live URL has been verified**
 
@@ -71,7 +71,7 @@ git push origin main
 | Auth | Supabase Auth — email/password + invite via edge function |
 | Email | Resend (invite emails via HTTP API) |
 | Edge Functions | Supabase Edge Functions (Deno) |
-| Hosting | Vercel — https://bhr-console.vercel.app |
+| Hosting | Vercel — https://app.banani-hr.com (legacy: https://bhr-console.vercel.app) |
 | Repo | github.com/banani-oren/bhr-console |
 
 ---
@@ -91,10 +91,14 @@ RESEND_API_KEY=re_<...>
 ### Vercel Environment Variables (set via API)
 - `VITE_SUPABASE_URL` — production, preview, development
 - `VITE_SUPABASE_ANON_KEY` — production, preview, development
+- `VITE_SITE_URL` — `https://app.banani-hr.com` (production, preview, development)
 - `RESEND_API_KEY` — production, preview (sensitive)
 
 ### Supabase Edge Function Secrets
 - `RESEND_API_KEY` — set via `supabase secrets set`
+- `ANTHROPIC_API_KEY` — set via Management API (`extract-agreement`)
+- `PUBLIC_SITE_URL` / `VITE_SITE_URL` — `https://app.banani-hr.com` (used by
+  `invite-user` to build the `/set-password` redirect in the invite email)
 
 ---
 
@@ -943,7 +947,11 @@ bhr-console/
 
 ### Vercel
 - Project: `bhr-console` (team: `banani-orens-projects`)
-- Live URL: https://bhr-console.vercel.app
+- Live URL: **https://app.banani-hr.com** (primary, attached to the project with a
+  CNAME `app → cname.vercel-dns.com.` on the Cloudflare zone; Let's Encrypt cert
+  auto-issued by Vercel)
+- Legacy URL: https://bhr-console.vercel.app (still serves the same app as a
+  safety net until §34 retires it)
 - Framework: Vite
 - SPA routing via `vercel.json` rewrites
 - Deploy: push to `main` branch → Vercel auto-deploys (GitHub App connected ✅)

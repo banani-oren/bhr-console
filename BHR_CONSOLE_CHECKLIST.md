@@ -467,3 +467,45 @@ Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 
       `billing-reports/<report_id>.pdf`, and opens the signed URL.
 - [x] **Past reports list.** Shows reports most-recent first with a
       Download button that opens a signed URL when clicked.
+
+## 30. Custom domain `app.banani-hr.com` (DOMAIN_SETUP Phases 1–2 — 2026-04-22)
+
+- [x] **Domain attached in Vercel.** `POST /v10/projects/<id>/domains`
+      returned `{"verified": true, "projectId": prj_rmCrlb...}`. The
+      project now lists `app.banani-hr.com` alongside the legacy
+      `bhr-console.vercel.app`.
+- [x] **DNS instructions written.** `DOMAIN_DNS_INSTRUCTIONS.md`
+      documents the CNAME to add on the Cloudflare zone
+      (`app → cname.vercel-dns.com.`, DNS-only / grey cloud).
+- [x] **`VITE_SITE_URL` env var.** Added to the Vercel project for
+      production + preview + development (value
+      `https://app.banani-hr.com`) and to local `.env.local`.
+- [x] **`invite-user` redirectTo env-driven.** Source now reads
+      `PUBLIC_SITE_URL` → `VITE_SITE_URL` → fallback
+      `https://app.banani-hr.com`. NOT yet redeployed — redeploy is
+      gated on DNS being live so invites continue reaching a resolvable
+      host.
+- [ ] **DNS propagated.** `GET /v6/domains/app.banani-hr.com/config`
+      still returns `misconfigured: true` after 30 polls / 30 minutes
+      (`cnames: []`, `aValues: []`). Pending the CNAME record at
+      Cloudflare.
+
+## 31. Custom domain activation (DOMAIN_SETUP Phases 3–5 — pending DNS)
+
+- [ ] **Supabase auth Site URL + uri_allow_list.** PATCH to include
+      `https://app.banani-hr.com` + wildcard; keep legacy for one
+      release. Deferred until DNS propagates.
+- [ ] **`invite-user` redeployed** on the new default. Deferred — do
+      this after DNS resolves so invite links point at a reachable host.
+- [ ] **Live checks** on `https://app.banani-hr.com/login`, admin
+      magic-link flow, invite action link, and legacy `bhr-console.vercel.app`
+      still serving. Deferred.
+
+## 34. Retire `bhr-console.vercel.app` (future batch)
+
+- [ ] Remove `bhr-console.vercel.app` from Supabase
+      `uri_allow_list` once all employees have switched to
+      `app.banani-hr.com`.
+- [ ] Optionally add a 301 redirect in `vercel.json` (or via a Vercel
+      redirect rule) from `bhr-console.vercel.app` to
+      `app.banani-hr.com` for any stale bookmark traffic.

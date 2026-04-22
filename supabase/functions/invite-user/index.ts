@@ -32,7 +32,10 @@ serve(async (req) => {
     //    to choose a password BEFORE any app chrome renders — the frontend then
     //    signs them out and they must log in with email + password. This closes
     //    the "invite link = silent admin access" bypass.
-    const siteUrl = Deno.env.get('PUBLIC_SITE_URL') ?? 'https://bhr-console.vercel.app'
+    const siteUrl =
+      Deno.env.get('PUBLIC_SITE_URL') ??
+      Deno.env.get('VITE_SITE_URL') ??
+      'https://app.banani-hr.com'
     const redirectTo = `${siteUrl}/set-password`
     const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
       type: 'invite',
