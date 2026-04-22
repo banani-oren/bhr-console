@@ -228,13 +228,15 @@ function EmployeeFormBody({ form, onChange }: FormBodyProps) {
 export default function Team() {
   const queryClient = useQueryClient()
 
+  // Admin is also an employee (Phase B): include all three roles so admins
+  // appear as cards alongside every employee.
   const { data: employees = [], isLoading } = useQuery<Profile[]>({
     queryKey: ['team-employees'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .in('role', ['recruiter', 'administration'])
+        .in('role', ['admin', 'administration', 'recruiter'])
         .order('full_name', { ascending: true })
       if (error) throw error
       return data as Profile[]
@@ -319,8 +321,21 @@ export default function Team() {
                       <CardTitle className="text-lg leading-tight truncate">
                         {emp.full_name}
                       </CardTitle>
-                      <Badge variant="secondary" className="mt-1 text-xs font-normal">
-                        עובד
+                      <Badge
+                        variant="secondary"
+                        className={`mt-1 text-xs font-normal ${
+                          emp.role === 'admin'
+                            ? 'bg-purple-100 text-purple-700'
+                            : emp.role === 'administration'
+                            ? 'bg-blue-50 text-blue-700'
+                            : ''
+                        }`}
+                      >
+                        {emp.role === 'admin'
+                          ? 'מנהל'
+                          : emp.role === 'administration'
+                          ? 'מנהלה'
+                          : 'רכז/ת גיוס'}
                       </Badge>
                     </div>
                   </div>

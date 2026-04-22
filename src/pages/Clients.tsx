@@ -168,14 +168,15 @@ export default function Clients() {
     },
   })
 
-  // Time-log eligible profiles (administration + recruiter)
+  // Time-log eligible profiles — Phase B includes admins too (admin is also
+  // an employee).
   const { data: eligibleProfiles = [] } = useQuery<{ id: string; full_name: string; role: string }[]>({
     queryKey: ['eligible-profiles'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, full_name, role')
-        .in('role', ['administration', 'recruiter'])
+        .in('role', ['admin', 'administration', 'recruiter'])
         .order('full_name', { ascending: true })
       if (error) throw error
       return data as { id: string; full_name: string; role: string }[]
@@ -879,7 +880,11 @@ export default function Clients() {
                                 />
                                 <span>{p.full_name}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  ({p.role === 'administration' ? 'מנהלה' : 'רכז/ת'})
+                                  ({p.role === 'admin'
+                                    ? 'מנהל'
+                                    : p.role === 'administration'
+                                    ? 'מנהלה'
+                                    : 'רכז/ת'})
                                 </span>
                               </label>
                             )

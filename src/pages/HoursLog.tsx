@@ -88,6 +88,8 @@ export default function HoursLog() {
   const [form, setForm] = useState<AddVisitForm>(EMPTY_FORM)
   const [closingClient, setClosingClient] = useState<string | null>(null)
   const [personalClientId, setPersonalClientId] = useState<string | null>(null)
+  // Phase B: admins get a ניהול/שלי toggle; non-admins always see personal view.
+  const [adminHoursView, setAdminHoursView] = useState<'manage' | 'mine'>('manage')
 
   // Clients (admin + permitted list for non-admin)
   const { data: allClients = [] } = useQuery<Client[]>({
@@ -99,11 +101,22 @@ export default function HoursLog() {
     },
   })
 
-  // Non-admin: permitted clients with time_log_enabled
+  // Non-admin: permitted clients with time_log_enabled.
+  // Admin in 'mine' mode (Phase B): all time_log_enabled clients — admins may
+  // log time on any client without being explicitly permissioned.
   const { data: permittedClients = [] } = useQuery<Client[]>({
-    queryKey: ['permitted-clients', profile?.id],
-    enabled: !!profile?.id && !isAdmin,
+    queryKey: ['permitted-clients', profile?.id, isAdmin],
+    enabled: !!profile?.id,
     queryFn: async () => {
+      if (isAdmin) {
+        const { data, error } = await supabase
+          .from('clients')
+          .select('*')
+          .eq('time_log_enabled', true)
+          .order('name', { ascending: true })
+        if (error) throw error
+        return (data as Client[]) ?? []
+      }
       const { data, error } = await supabase
         .from('client_time_log_permissions')
         .select('client_id, clients(*)')
@@ -116,9 +129,11 @@ export default function HoursLog() {
     },
   })
 
-  // Fetch hours_log entries for selected month/year
+  // Fetch hours_log entries for selected month/year. Admin 'mine' mode and
+  // non-admin view both filter by profile_id.
+  const scopeMine = !isAdmin || adminHoursView === 'mine'
   const { data: hoursData = [], isLoading } = useQuery<HoursLogType[]>({
-    queryKey: ['hours_log', selectedMonth, selectedYear, profile?.id, isAdmin],
+    queryKey: ['hours_log', selectedMonth, selectedYear, profile?.id, scopeMine],
     queryFn: async () => {
       let q = supabase
         .from('hours_log')
@@ -126,7 +141,7 @@ export default function HoursLog() {
         .eq('month', selectedMonth)
         .eq('year', selectedYear)
         .order('visit_date', { ascending: true })
-      if (!isAdmin && profile?.id) q = q.eq('profile_id', profile.id)
+      if (scopeMine && profile?.id) q = q.eq('profile_id', profile.id)
       const { data, error } = await q
       if (error) throw error
       return data as HoursLogType[]
@@ -292,8 +307,8 @@ export default function HoursLog() {
   const hasCategory = (clientName: string) =>
     hoursForClient(clientName).some((h) => h.hours_category)
 
-  // Personal (non-admin) view
-  if (!isAdmin) {
+  // Personal view: non-admins always see it; admins see it when toggle is 'mine'.
+  if (!isAdmin || adminHoursView === 'mine') {
     const selectedClient = permittedClients.find((c) => c.id === personalClientId) ?? null
     const hoursForSelected = selectedClient
       ? hoursData.filter((h) => h.client_name === selectedClient.name)
@@ -302,9 +317,37 @@ export default function HoursLog() {
     const showCategoryPersonal = hoursForSelected.some((h) => h.hours_category)
     return (
       <div className="p-6 space-y-4" dir="rtl">
-        <div className="flex items-center gap-2">
-          <Clock className="w-6 h-6 text-purple-600" />
-          <h1 className="text-2xl font-bold text-purple-900">יומן שעות</h1>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Clock className="w-6 h-6 text-purple-600" />
+            <h1 className="text-2xl font-bold text-purple-900">יומן שעות</h1>
+          </div>
+          {isAdmin && (
+            <div className="inline-flex rounded-lg border border-purple-200 bg-white p-0.5 text-sm">
+              <button
+                type="button"
+                onClick={() => setAdminHoursView('manage')}
+                className={`px-3 py-1.5 rounded-md ${
+                  adminHoursView === 'manage'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-purple-700 hover:bg-purple-50'
+                }`}
+              >
+                ניהול שעות
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdminHoursView('mine')}
+                className={`px-3 py-1.5 rounded-md ${
+                  adminHoursView === 'mine'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-purple-700 hover:bg-purple-50'
+                }`}
+              >
+                השעות שלי
+              </button>
+            </div>
+          )}
         </div>
 
         <Card className="p-4">
@@ -436,17 +479,35 @@ export default function HoursLog() {
   // Admin view
   return (
     <div className="p-6 space-y-4" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Clock className="w-6 h-6 text-purple-600" />
           <h1 className="text-2xl font-bold text-purple-900">יומן שעות</h1>
         </div>
-        <Link to="/hours/report">
-          <Button variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50">
-            <FileText className="w-4 h-4 ml-1" />
-            הפקת דוח שעות
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-lg border border-purple-200 bg-white p-0.5 text-sm">
+            <button
+              type="button"
+              onClick={() => setAdminHoursView('manage')}
+              className="px-3 py-1.5 rounded-md bg-purple-600 text-white"
+            >
+              ניהול שעות
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminHoursView('mine')}
+              className="px-3 py-1.5 rounded-md text-purple-700 hover:bg-purple-50"
+            >
+              השעות שלי
+            </button>
+          </div>
+          <Link to="/hours/report">
+            <Button variant="outline" className="border-purple-300 text-purple-700 hover:bg-purple-50">
+              <FileText className="w-4 h-4 ml-1" />
+              הפקת דוח שעות
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <Card className="p-4">
