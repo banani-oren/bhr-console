@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import {
   LayoutDashboard,
   Users,
@@ -9,10 +10,19 @@ import {
   Briefcase,
   FileText,
   LogOut,
+  Download,
+  Smartphone,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
+
+// Captured by the beforeinstallprompt listener so the sidebar can call prompt()
+// at a user-initiated moment (Chrome / Edge on desktop + Android only).
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
 
 const ROLE_LABELS_HE: Record<UserRole, string> = {
   admin: 'מנהל',
@@ -45,10 +55,34 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const { user, profile, signOut } = useAuth()
   const navigate = useNavigate()
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isStandalone, setIsStandalone] = useState(false)
 
   const visibleItems = profile
     ? NAV_ITEMS.filter((item) => item.allow.includes(profile.role))
     : []
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    setIsStandalone(
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+        // @ts-expect-error legacy iOS navigator.standalone
+        !!window.navigator?.standalone,
+    )
+    const handler = (e: Event) => {
+      e.preventDefault()
+      setInstallPrompt(e as BeforeInstallPromptEvent)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  const handleInstall = async () => {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    const choice = await installPrompt.userChoice
+    if (choice.outcome === 'accepted') setInstallPrompt(null)
+  }
 
   const handleSignOut = async () => {
     await signOut()
@@ -117,6 +151,22 @@ export default function Layout({ children }: LayoutProps) {
             </button>
           )}
 
+          {installPrompt && !isStandalone && (
+            <button
+              onClick={handleInstall}
+              className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-purple-300 hover:bg-sidebar-accent/50 transition-colors mb-1"
+            >
+              <Download size={16} />
+              <span>התקן BHR Console</span>
+            </button>
+          )}
+          <button
+            onClick={() => navigate('/m/hours')}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors mb-1"
+          >
+            <Smartphone size={16} />
+            <span>תצוגה ניידת</span>
+          </button>
           <button
             onClick={handleSignOut}
             className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"

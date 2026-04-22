@@ -86,11 +86,23 @@ export default function SetPassword() {
         </CardHeader>
 
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4" method="post" action="#">
+            {/* Batch 4 Phase D4: hidden username so Safari can associate the
+                new password with the correct account in its Keychain. */}
+            <input
+              type="email"
+              name="email"
+              autoComplete="username"
+              value={user?.email ?? ''}
+              readOnly
+              hidden
+              aria-hidden="true"
+            />
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="password">סיסמה חדשה</Label>
               <Input
                 id="password"
+                name="new-password"
                 type="password"
                 autoComplete="new-password"
                 required
@@ -99,6 +111,7 @@ export default function SetPassword() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="לפחות 8 תווים"
                 disabled={submitting}
+                dir="ltr"
               />
             </div>
 
@@ -106,6 +119,7 @@ export default function SetPassword() {
               <Label htmlFor="confirm">אימות סיסמה</Label>
               <Input
                 id="confirm"
+                name="confirm-password"
                 type="password"
                 autoComplete="new-password"
                 required
@@ -114,6 +128,7 @@ export default function SetPassword() {
                 onChange={(e) => setConfirm(e.target.value)}
                 placeholder="הזינו שוב"
                 disabled={submitting}
+                dir="ltr"
               />
             </div>
 

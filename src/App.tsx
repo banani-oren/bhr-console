@@ -14,6 +14,11 @@ import Services from '@/pages/Services'
 import HoursReport from '@/pages/HoursReport'
 import BillingReports from '@/pages/BillingReports'
 import Profile from '@/pages/Profile'
+import MobileShell from '@/pages/mobile/MobileShell'
+import MobileHours from '@/pages/mobile/MobileHours'
+import MobileTransactions from '@/pages/mobile/MobileTransactions'
+import MobileProfile from '@/pages/mobile/MobileProfile'
+import MobileAutoRoute from '@/components/MobileAutoRoute'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,6 +34,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
+          <MobileAutoRoute />
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/set-password" element={<SetPassword />} />
@@ -113,6 +119,20 @@ export default function App() {
                 </RequireRole>
               }
             />
+            {/* Batch 4 Phase D2: mobile route group (shared MobileShell). */}
+            <Route
+              path="/m"
+              element={
+                <RequireRole allow={['admin', 'administration', 'recruiter']}>
+                  <MobileShell />
+                </RequireRole>
+              }
+            >
+              <Route index element={<Navigate to="/m/hours" replace />} />
+              <Route path="hours" element={<MobileHours />} />
+              <Route path="transactions" element={<MobileTransactions />} />
+              <Route path="profile" element={<MobileProfile />} />
+            </Route>
             <Route path="/portal" element={<Navigate to="/login" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>

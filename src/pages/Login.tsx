@@ -7,6 +7,28 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { Share2 } from 'lucide-react'
+
+// Batch 4 Phase D4: iOS Safari doesn't fire beforeinstallprompt. Nudge the
+// user through the Share → Add to Home Screen flow when we detect iOS + we
+// aren't already in standalone mode.
+function IosInstallHint() {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  const isIos = /iPhone|iPad|iPod/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua)
+  const inStandalone =
+    typeof window !== 'undefined' &&
+    (
+      (window.matchMedia?.('(display-mode: standalone)').matches) ||
+      // @ts-expect-error legacy iOS navigator.standalone
+      window.navigator?.standalone === true
+    )
+  if (!isIos || inStandalone) return null
+  return (
+    <p className="mt-4 text-[11px] text-center text-muted-foreground leading-relaxed">
+      <Share2 className="inline h-3 w-3 mb-0.5" /> להוספה למסך הבית — לחץ "שתף" ואז "הוסף למסך הבית".
+    </p>
+  )
+}
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -61,18 +83,24 @@ export default function Login() {
         </CardHeader>
 
         <CardContent>
-          <form onSubmit={handleLogin} className="flex flex-col gap-4">
+          <form onSubmit={handleLogin} className="flex flex-col gap-4" method="post" action="#">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="email">אימייל</Label>
               <Input
                 id="email"
+                name="email"
                 type="email"
-                autoComplete="email"
+                // Batch 4 Phase D4: 'username' is what iOS Safari expects on the
+                // email/login field for credential save + Face-ID autofill.
+                autoComplete="username"
+                inputMode="email"
+                spellCheck={false}
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 disabled={loading}
+                dir="ltr"
               />
             </div>
 
@@ -80,6 +108,7 @@ export default function Login() {
               <Label htmlFor="password">סיסמה</Label>
               <Input
                 id="password"
+                name="password"
                 type="password"
                 autoComplete="current-password"
                 required
@@ -87,6 +116,7 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 disabled={loading}
+                dir="ltr"
               />
             </div>
 
@@ -102,6 +132,7 @@ export default function Login() {
               {loading ? 'מתחבר...' : 'התחבר'}
             </Button>
           </form>
+          <IosInstallHint />
         </CardContent>
       </Card>
     </div>
