@@ -392,10 +392,11 @@ export default function HoursLog() {
           <Button
             className="bg-purple-600 hover:bg-purple-700 text-white"
             onClick={() => {
-              if (!selectedClient) return
-              handleOpenAddDialog(selectedClient.name, selectedClient.id)
+              // Batch 4 Phase B: client is picked INSIDE the dialog; the
+              // top-of-page selection merely pre-selects it if present.
+              handleOpenAddDialog(selectedClient?.name ?? '', selectedClient?.id ?? null)
             }}
-            disabled={!selectedClient}
+            disabled={permittedClients.length === 0}
           >
             <Plus className="w-4 h-4 ml-1" />
             הוסף דיווח
@@ -453,17 +454,34 @@ export default function HoursLog() {
         </Card>
 
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="max-w-md" dir="rtl">
+          <DialogContent className="max-w-lg" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-purple-900 text-right">הוספת דיווח שעות</DialogTitle>
             </DialogHeader>
-            <AddVisitBody form={form} onChange={handleFormChange} disableClient />
+            {permittedClients.length === 0 ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">
+                אין לקוחות מורשים לדיווח שעות. פנה למנהל.
+              </div>
+            ) : (
+              <AddVisitBody
+                form={form}
+                onChange={handleFormChange}
+                disableClient={false}
+                clients={permittedClients}
+              />
+            )}
             <DialogFooterButtons
               saveStatus={saveStatus}
               saveError={saveError}
               onCancel={() => setDialogOpen(false)}
               onSave={handleSaveVisit}
-              canSave={!!form.client_name.trim() && !!form.start_time && !!form.end_time}
+              canSave={
+                permittedClients.length > 0 &&
+                !!form.client_id &&
+                !!form.client_name.trim() &&
+                !!form.start_time &&
+                !!form.end_time
+              }
             />
           </DialogContent>
         </Dialog>
