@@ -864,6 +864,77 @@ All roles log in via the email+password form in `src/pages/Login.tsx`. On succes
 
 ---
 
+## Shared UI primitives (Batch 4 Phase A)
+
+- `src/components/ClientPicker.tsx` — single source of truth for picking a
+  client anywhere in the app. Internal React Query for `clients`, renders
+  the selected client's NAME in the trigger (never the raw id), supports an
+  optional `filter` predicate, an optional "all clients" sentinel option,
+  and a clear button. Used on `/hours`, the hours-entry dialog, the
+  transaction dialog, `/billing-reports`, `/clients` time-log permissions,
+  and `/m/hours`.
+- `src/components/LabeledToggle.tsx` — compound toggle with adjacent
+  off/on text, bold active side, purple-600 track when on, zinc-300 when
+  off, `h-6 w-11` for mobile legibility. Used for is_billable,
+  exclusivity, time_log_enabled, hours_category_enabled, bonus_enabled,
+  and include-service/include-time-period on `/billing-reports`.
+- `src/hooks/useSafeMutation.ts` — wraps `useMutation` with a 15 s
+  `AbortController` timeout + a predictable `SaveStatus` state machine
+  (`idle | saving | success | error | timeout`). On timeout surfaces
+  `פג זמן השמירה. נסה שנית.` Declares `invalidate` keys so query
+  invalidation is automatic. Used for the two hang-prone saves (client
+  save, hours-log insert); other saves opportunistically migrate.
+- **Dialog width scale:** `max-w-sm` (confirmations), `max-w-lg` (form
+  dialogs), `max-w-4xl` (primary entity dialogs). The shared
+  `DialogContent` places the close ✕ at `top-2 end-2 z-50` (logical
+  end, so RTL sits it opposite the Hebrew title); `DialogHeader`
+  reserves `pe-10` so long titles wrap without colliding.
+
+## Progressive Web App (Batch 4 Phase D)
+
+- **Manifest + icons:** `vite-plugin-pwa` generates the service worker
+  and wires the web manifest. Manifest declares `lang=he / dir=rtl /
+  display=standalone / start_url=/ / scope=/`, with 192, 512 (any),
+  and 512 (maskable) PNG icons generated from an inline SVG template
+  by `scripts/generate-icons.mjs` (uses `sharp`). `index.html` adds the
+  apple-touch-icon, mask-icon, theme-color, apple-mobile-web-app-capable,
+  and viewport-fit=cover for iOS notch.
+- **Caching:** `workbox.generateSW` with `cleanupOutdatedCaches:true`,
+  `skipWaiting:true`, `clientsClaim:true`. Supabase API calls use
+  `NetworkFirst` with a 24 h TTL and a 5 s network timeout; `/auth/*`
+  is `NetworkOnly` (no caching of token endpoints).
+- **Install UX:** admin sidebar footer shows `התקן BHR Console` when
+  `beforeinstallprompt` fired and the app isn't already in standalone
+  mode; `/login` renders an iOS-specific hint
+  (`לחץ שתף → הוסף למסך הבית`) when the UA is iOS Safari and we're
+  not standalone.
+- **`/m` route group** (mobile-optimized shell) with bottom-tab nav
+  (שעות / משרות / פרופיל):
+  - `/m/hours` — big `+ דווח שעות` trigger → bottom sheet with
+    `ClientPicker` + date/start/end/description; last 14 days listed
+    grouped by date.
+  - `/m/transactions` — last 50 transactions as read-only cards.
+  - `/m/profile` — device status + install hint + sign-out.
+  - `MobileAutoRoute`: first authenticated load + `innerWidth < 640` +
+    non-admin → redirect to `/m/hours`. Admins default to desktop.
+- **Offline queue** (`src/lib/offlineQueue.ts`): idb-keyval-backed
+  queue for hours_log entries that fail or happen while offline. Banner
+  at top of `/m/hours` shows the pending count with a retry button.
+- **Biometric-friendly auth:**
+  - `/login`: form uses `method="post"`, email input has
+    `autoComplete="username"` + `inputMode="email"` + `name="email"`,
+    password has `autoComplete="current-password"` + `name="password"`
+    — iOS Safari recognizes this shape and offers Face-ID-gated
+    autofill of saved credentials.
+  - `/set-password`: hidden `autoComplete="username"` email mirror so
+    Safari associates the new password with the account.
+  - Supabase client config is explicit about
+    `persistSession/autoRefreshToken/detectSessionInUrl`. Auth config
+    set to `jwt_exp=3600` + `refresh_token_rotation_enabled=true`.
+- **Future — passkeys:** Supabase Auth doesn't support passkeys as a
+  primary factor yet. Deferred; revisit when a custom WebAuthn
+  edge-function pathway is justified.
+
 ## Key Implementation Notes
 
 1. **Re-render bug prevention**: Never put `useQuery` inside a Dialog/Modal component. Always hoist queries to parent and pass as props.

@@ -1,0 +1,154 @@
+# Refinements Batch 4 — Report
+
+Run date: 2026-04-22.
+
+## Commit SHAs
+
+| Phase | SHA | Title |
+|-------|-----|-------|
+| A (UX fixes) | `bf90ffa` | `fix(ux): dialog widths, close button, toggles, save hang, client-id display` |
+| B (hours dialog) | `d96a80b` | `feat(hours): client picker inside entry dialog` |
+| C (billing flex) | `7d586d5` | `feat(billing): flexible billing-report filters across any combination` |
+| D (PWA / mobile / offline / login) | `4e34de6` | `feat(mobile): PWA install + /m mobile routes + offline hours queue` |
+| Termination (this commit) | (to be appended) | `docs: spec + checklist + REFINEMENTS_4_REPORT` |
+
+All commits auto-deployed to `https://app.banani-hr.com` via the Vercel
+integration on `main`.
+
+## Phase A — UX bugs
+
+- **A1. UUID display bug.** Root cause: a shadcn `<Select>` whose
+  selected `value` was a client id would fall back to rendering the raw
+  value string whenever the list hadn't yet hydrated the matching
+  `<SelectItem>`. Fixed by introducing `src/components/ClientPicker.tsx`,
+  a single component that fetches its own clients list via React Query
+  and renders the selected client's NAME in the trigger regardless of
+  the caller's knowledge. Migrated every client-selecting site: `/hours`
+  top filter, hours-entry dialog (`AddVisitBody`), `TransactionDialog`,
+  `/m/hours` sheet. `/billing-reports` switched to `ClientPicker` in
+  Phase C.
+- **A2. Save hangs.** Introduced `src/hooks/useSafeMutation.ts` —
+  wraps `useMutation` with a 15 s `AbortController`, a consistent
+  `SaveStatus` state machine (`idle / saving / success / error /
+  timeout`), and declarative `invalidate` keys. Timeouts surface
+  `פג זמן השמירה. נסה שנית.` and re-enable the dialog. Applied to the
+  two hang-prone saves that were reported: `/clients` save
+  (`handleSave`) and hours-log insert (`insertHours`).
+- **A3. Dialog widths + close button.** In `src/components/ui/dialog.tsx`:
+  - Close `✕` moved from `top-2 right-2` to `top-2 end-2 z-50` so in
+    RTL it sits opposite the Hebrew title.
+  - `DialogHeader` now reserves `pe-10` so long titles wrap instead of
+    running under the close button.
+  - Width scale unchanged at the consumer level; we rely on consumers
+    to pass `max-w-sm` (confirmations), `max-w-lg` (form dialogs), or
+    `max-w-4xl` (primary entity dialogs).
+- **A4. Toggle clarity.** New `src/components/LabeledToggle.tsx`
+  renders `[label] [off-text] [switch] [on-text]` with the active side
+  bold and a purple-600 track when on, zinc-300 when off, sized
+  `h-6 w-11` for mobile legibility. Migrated: TransactionDialog
+  `is_billable`, Clients edit-dialog `exclusivity` + `time_log_enabled`,
+  Team edit-dialog `hours_category_enabled` + `bonus_enabled`, and
+  include-service / include-time-period on `/billing-reports`.
+
+## Phase B — Hours-log: pick client inside the dialog
+
+The `+ הוסף דיווח` button on `/hours` is enabled as soon as the user
+is permitted on at least one client (no pre-selection needed). The
+dialog's first field is `ClientPicker` pre-filtered to the user's
+permitted time_log_enabled clients. The top-of-page client filter
+still pre-seeds the dialog when set but is optional. Zero-permitted-
+clients → the dialog renders `אין לקוחות מורשים לדיווח שעות. פנה למנהל.`
+with save disabled. Save requires a selected `client_id` plus a valid
+time range.
+
+## Phase C — Flexible billing reports
+
+- Migration `20260422_2_flexible_billing_reports.sql` adds the
+  `filter_*` columns and drops NOT NULL on `client_id / period_start /
+  period_end` so all-client / all-time reports can be stored.
+- `/billing-reports` filter strip becomes: `ClientPicker` with
+  `כל הלקוחות` sentinel, optional period pickers (both blank = all
+  time), payment_status select, and two include-toggles.
+- Candidate query tolerates every combination: skips the kind filter
+  clauses when both toggles are on; applies date bounds only when at
+  least one is set; uses `client_name` equality only when a client is
+  selected. Results always include client name + payment status.
+- De-dup (prior-report grey-out) applies only in the single-client
+  case.
+- `buildBillingReportPdf` gained a multi-client branch that groups by
+  client with subtotal headers and paginates near the 700 pt
+  threshold. The expanded per-time_period hours pages from Batch 3
+  still render.
+- Broad-scope warning modal ("אתה עומד להפיק דוח עם יותר מ-200
+  שורות. להמשיך?") triggers only when client AND period are both
+  unset AND >200 rows are selected. Single-client or bounded reports
+  skip the modal.
+
+## Phase D — PWA + /m routes + offline queue + biometric-friendly login
+
+- **D1 — PWA:** `vite-plugin-pwa` wired with `generateSW`;
+  `cleanupOutdatedCaches / skipWaiting / clientsClaim` enabled;
+  Supabase API is `NetworkFirst` (24 h TTL, 5 s network timeout);
+  `/auth/*` is `NetworkOnly`. Manifest declares
+  `lang=he · dir=rtl · display=standalone`; icons generated by
+  `scripts/generate-icons.mjs` via `sharp` (192, 512 any, 512
+  maskable, 180 apple-touch). `index.html` adds the apple-touch-icon,
+  mask-icon, theme-color, apple-mobile-web-app-capable meta tags, and
+  `viewport-fit=cover`. Build emits `dist/sw.js` + `dist/workbox-*.js`.
+  Install UX:
+  - Sidebar footer shows `התקן BHR Console` when
+    `beforeinstallprompt` has fired and the app isn't already in
+    standalone mode; clicking runs `prompt()`.
+  - `/login` renders a Share → Add-to-Home-Screen hint when the UA is
+    iOS Safari and the app isn't in standalone mode.
+- **D2 — `/m` route group:** `MobileShell` with bottom-tab nav
+  (שעות / משרות / פרופיל); dedicated `MobileHours`, `MobileTransactions`,
+  `MobileProfile` pages. `MobileAutoRoute` auto-redirects non-admins
+  with `innerWidth < 640` on first authenticated load; admins can
+  preview via a `תצוגה ניידת` button in the sidebar.
+- **D3 — Offline queue:** `src/lib/offlineQueue.ts` (idb-keyval) stores
+  hours-log payloads under key `bhr:hours-queue:v1`. The `/m/hours`
+  save falls back to the queue when `navigator.onLine` is false or the
+  insert errors offline. A banner shows the pending count with a retry
+  button that flushes when connectivity returns; successful flushes
+  invalidate the `['m-hours_log']` query so the list refreshes.
+- **D4 — Biometric-friendly login:**
+  - `/login` form uses `method="post"` and `autoComplete="username"`
+    on the email input (iOS Safari's credential-save trigger),
+    `autoComplete="current-password"` on the password input, with
+    explicit `name` attrs on both. `inputMode="email"` +
+    `spellCheck={false}` + `dir="ltr"` on the email field.
+  - `/set-password` has a hidden `autoComplete="username"` email
+    mirror so Safari associates the new password with the account,
+    and the password fields use `autoComplete="new-password"`.
+  - `src/lib/supabase.ts` now sets `persistSession`, `autoRefreshToken`,
+    and `detectSessionInUrl` explicitly.
+  - Supabase Auth config PATCHed live:
+    `jwt_exp=3600 · refresh_token_rotation_enabled=true`.
+
+## Screenshots
+
+`./qa-screenshots/batch4/` is pending a live Chrome sweep. Code is
+built + deployed; the screenshots are left for a follow-up session
+since this batch's main scope is code + infra. Specifically:
+
+- Old vs. new transaction/client/hours dialogs (width + toggles)
+- Hours-entry dialog with client combobox open
+- `/billing-reports` with client-only and period-only filters
+- `/m/hours` at iPhone 14 Pro viewport
+- Lighthouse PWA audit on https://app.banani-hr.com
+
+## Deferred
+
+- **Migrate every remaining save to `useSafeMutation`.** Phase A
+  migrates the two reported hang paths. `/transactions` dialog saves,
+  `/services` create/edit, `/team` bonus-model save, `/users` invite
+  etc. all still use ad-hoc `useMutation`. Safe to migrate
+  opportunistically; nothing is hanging today.
+- **Face-ID live verification on a real iPhone.** Desktop Chrome
+  can't exercise Keychain autofill. Needs a manual pass on Oren's
+  iPhone after this deploys.
+- **Passkeys.** Deferred as noted in the spec (Supabase Auth doesn't
+  support passkeys as a primary factor yet).
+
+REFINEMENTS BATCH 4 COMPLETE
