@@ -485,21 +485,35 @@ Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 
       `https://app.banani-hr.com`. NOT yet redeployed — redeploy is
       gated on DNS being live so invites continue reaching a resolvable
       host.
-- [ ] **DNS propagated.** `GET /v6/domains/app.banani-hr.com/config`
-      still returns `misconfigured: true` after 30 polls / 30 minutes
-      (`cnames: []`, `aValues: []`). Pending the CNAME record at
-      Cloudflare.
+- [x] **DNS propagated.** After Oren added the CNAME, the follow-up
+      poll flipped the config to
+      `misconfigured:false · configuredBy:"CNAME" ·
+      cnames:["cname.vercel-dns.com."] · acceptedChallenges:["http-01"]`.
+      `curl -sSI https://app.banani-hr.com/` returned HTTP/1.1 200 OK
+      via Let's Encrypt.
 
-## 31. Custom domain activation (DOMAIN_SETUP Phases 3–5 — pending DNS)
+## 31. Custom domain activation (DOMAIN_SETUP Phases 3–5 — 2026-04-22)
 
-- [ ] **Supabase auth Site URL + uri_allow_list.** PATCH to include
-      `https://app.banani-hr.com` + wildcard; keep legacy for one
-      release. Deferred until DNS propagates.
-- [ ] **`invite-user` redeployed** on the new default. Deferred — do
-      this after DNS resolves so invite links point at a reachable host.
-- [ ] **Live checks** on `https://app.banani-hr.com/login`, admin
-      magic-link flow, invite action link, and legacy `bhr-console.vercel.app`
-      still serving. Deferred.
+- [x] **Supabase auth Site URL + uri_allow_list.** PATCHed via
+      `/v1/projects/<ref>/config/auth`. Before: `site_url =
+      https://bhr-console.vercel.app`, allow-list points exclusively at
+      the vercel.app host. After: `site_url = https://app.banani-hr.com`,
+      allow-list now includes
+      `https://app.banani-hr.com{,/*,/**},https://bhr-console.vercel.app{,/*,/**}`
+      (legacy kept as a safety net for one release).
+- [x] **`invite-user` redeployed.** Source change (env-driven
+      `redirectTo`) committed earlier; `PUBLIC_SITE_URL =
+      https://app.banani-hr.com` set as a Supabase function secret, then
+      `supabase functions deploy invite-user` redeployed. Live invite
+      against `qa.domain+test@banani-hr.test` returned
+      `success:true · email_sent:true ·
+      redirect_to=https://app.banani-hr.com/set-password`. Test user
+      deleted.
+- [x] **Live checks.** `https://app.banani-hr.com/login` returns 200;
+      admin `auth/v1/admin/generate_link` yields a magiclink with
+      `redirect_to=https://app.banani-hr.com/`;
+      `https://bhr-console.vercel.app/login` continues to return 200
+      (safety net intact).
 
 ## 34. Retire `bhr-console.vercel.app` (future batch)
 
