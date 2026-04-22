@@ -126,15 +126,21 @@ export type HoursLog = {
 
 export type BillingReport = {
   id: string
-  client_id: string
-  period_start: string
-  period_end: string
+  client_id: string | null
+  period_start: string | null
+  period_end: string | null
   issued_at: string
   issued_by: string | null
   transaction_ids: string[]
   total_amount: number
   pdf_storage_path: string | null
   notes: string | null
+  filter_client_id: string | null
+  filter_period_start: string | null
+  filter_period_end: string | null
+  filter_payment_status: string | null
+  filter_include_service: boolean
+  filter_include_time_period: boolean
 }
 
 export type BonusTier = {

@@ -84,15 +84,33 @@ export async function uploadTimeSheetPdf(transactionId: string, doc: jsPDF): Pro
 type BillingReportArgs = {
   report: BillingReport
   client: Client | null
+  clientNameById?: Map<string, string>
   transactions: Transaction[]
   serviceTypeNames: Map<string, string>
   hoursByTransaction: Map<string, HoursLog[]>
   profileNameById: Map<string, string>
 }
 
+function describeTxn(
+  t: Transaction,
+  serviceTypeNames: Map<string, string>,
+): string {
+  if (t.kind === 'time_period') {
+    return `${label('דוח שעות')} ${t.period_start ?? ''} → ${t.period_end ?? ''}`
+  }
+  const sn = serviceTypeNames.get(t.service_type_id ?? '') ?? t.service_type ?? ''
+  const extras = [t.position_name, t.candidate_name].filter(Boolean).join(' · ')
+  return extras ? `${sn} · ${extras}` : sn
+}
+
+function txnDate(t: Transaction): string {
+  return t.close_date ?? t.period_end ?? t.entry_date ?? ''
+}
+
 export function buildBillingReportPdf({
   report,
   client,
+  clientNameById,
   transactions,
   serviceTypeNames,
   hoursByTransaction,
@@ -104,32 +122,62 @@ export function buildBillingReportPdf({
   doc.setFontSize(13)
   doc.text(label('דוח חיוב'), 555, 50, { align: 'right' })
   doc.setFontSize(10)
-  doc.text(`${label('לקוח')}: ${client?.name ?? ''}`, 555, 72, { align: 'right' })
-  doc.text(`${label('תקופה')}: ${report.period_start} — ${report.period_end}`, 555, 88, { align: 'right' })
+  const clientLabel = client?.name ?? (report.filter_client_id == null ? label('כל הלקוחות') : '—')
+  doc.text(`${label('לקוח')}: ${clientLabel}`, 555, 72, { align: 'right' })
+  const periodLabel = !report.period_start && !report.period_end
+    ? label('כל התקופות')
+    : `${report.period_start ?? '—'} — ${report.period_end ?? '—'}`
+  doc.text(`${label('תקופה')}: ${periodLabel}`, 555, 88, { align: 'right' })
   doc.text(`${label('תאריך הפקה')}: ${new Date(report.issued_at).toISOString().slice(0, 10)}`, 555, 104, { align: 'right' })
 
-  autoTable(doc, {
-    startY: 130,
-    head: [[
-      label('סוג'),
-      label('תיאור'),
-      label('תאריך'),
-      label('סכום'),
-    ]],
-    body: transactions.map((t) => {
-      const kindLabel = t.kind === 'time_period' ? label('שעות') : label('שירות')
-      const desc =
-        t.kind === 'time_period'
-          ? `${label('דוח שעות')} ${t.period_start ?? ''} → ${t.period_end ?? ''}`
-          : `${serviceTypeNames.get(t.service_type_id ?? '') ?? t.service_type ?? ''}${
-              t.position_name ? ` · ${t.position_name}` : ''
-            }${t.candidate_name ? ` · ${t.candidate_name}` : ''}`
-      const date = t.close_date ?? t.period_end ?? t.entry_date ?? ''
-      return [kindLabel, desc, date, formatCurrency(t.net_invoice_amount)]
-    }),
-    styles: { font: 'helvetica', fontSize: 9, halign: 'right' },
-    headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-  })
+  // Multi-client mode: group rows by client name, one subtotal per group.
+  const multiClient = !client
+  if (multiClient) {
+    const byClient = new Map<string, Transaction[]>()
+    for (const t of transactions) {
+      const name = t.client_name || clientNameById?.get('') || '—'
+      const arr = byClient.get(name) ?? []
+      arr.push(t)
+      byClient.set(name, arr)
+    }
+    let y = 130
+    for (const [name, rows] of [...byClient.entries()].sort((a, b) => a[0].localeCompare(b[0], 'he'))) {
+      const subtotal = rows.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
+      doc.setFontSize(11)
+      doc.text(`${name} · ${formatCurrency(subtotal)}`, 555, y, { align: 'right' })
+      autoTable(doc, {
+        startY: y + 6,
+        head: [[label('סוג'), label('תיאור'), label('תאריך'), label('סכום')]],
+        body: rows.map((t) => [
+          t.kind === 'time_period' ? label('שעות') : label('שירות'),
+          describeTxn(t, serviceTypeNames),
+          txnDate(t),
+          formatCurrency(Number(t.net_invoice_amount) || 0),
+        ]),
+        styles: { font: 'helvetica', fontSize: 9, halign: 'right' },
+        headStyles: { fillColor: [147, 51, 234], textColor: 255 },
+      })
+      const ft = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable
+      y = (ft?.finalY ?? y) + 18
+      if (y > 700) {
+        doc.addPage()
+        y = 40
+      }
+    }
+  } else {
+    autoTable(doc, {
+      startY: 130,
+      head: [[label('סוג'), label('תיאור'), label('תאריך'), label('סכום')]],
+      body: transactions.map((t) => [
+        t.kind === 'time_period' ? label('שעות') : label('שירות'),
+        describeTxn(t, serviceTypeNames),
+        txnDate(t),
+        formatCurrency(Number(t.net_invoice_amount) || 0),
+      ]),
+      styles: { font: 'helvetica', fontSize: 9, halign: 'right' },
+      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
+    })
+  }
 
   // Expanded hours tables per time_period transaction.
   for (const t of transactions) {
