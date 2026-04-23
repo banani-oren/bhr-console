@@ -876,6 +876,56 @@ All roles log in via the email+password form in `src/pages/Login.tsx`. On succes
 
 ---
 
+## Route layout model
+
+Every authenticated route is wrapped in `<RequireRole allow={...}>`.
+`RequireRole` checks session + `password_set` + role membership and
+then renders its children. It accepts an optional `withLayout` prop
+(default `true`) that controls whether the children are wrapped in
+the desktop `<Layout>`:
+
+- **Desktop routes** (`/`, `/clients`, `/transactions`, `/hours`,
+  `/team`, `/users`, `/services`, `/billing-reports`, `/profile`,
+  `/hours/report`) use the default — `withLayout` is true, so the
+  desktop shell (right-aligned sidebar + main content) wraps each
+  page.
+- **Mobile routes** (`/m/*`) pass `withLayout={false}`. They render
+  directly inside `MobileShell` (bottom-tab nav + mobile header) with
+  no desktop sidebar. This is the fix for the "double sidebar" bug
+  where `/m/hours` previously rendered MobileShell INSIDE the admin
+  Layout.
+
+`MobileAutoRoute` still auto-redirects non-admin narrow viewports
+(<640 px) from `/` to `/m/hours` on first load. Admins default to
+the desktop shell and can preview `/m` via the sidebar footer.
+
+## Profile page (`/profile`, `/m/profile`)
+
+`src/components/ProfileEditor.tsx` is the shared editor used by both
+the desktop and mobile profile pages. Editable fields:
+
+- `full_name` and `phone` on `profiles` (persisted via
+  `useSafeMutation` with a 15 s timeout).
+- **Password change** (`שנה סיסמה`) — dialog calls
+  `supabase.auth.updateUser({ password })`. Includes a hidden
+  `autoComplete="username"` mirror so iOS Keychain associates the
+  new password with the current account. Success state announces
+  that the new password will be required on next login.
+- **Email change** (`שנה כתובת מייל`) — dialog calls
+  `supabase.auth.updateUser({ email })`. Supabase's
+  `mailer_secure_email_change_enabled: true` double-confirm mode
+  sends a link to the new inbox; the auth row's `email` only updates
+  after the user clicks it. Until then the success toast reads
+  `קישור אימות נשלח ל-<newEmail>. יש לאשר בתיבת הדואר החדשה כדי
+  להשלים את השינוי.`
+
+**`profiles.email` reconciliation:** `AuthProvider` compares the
+authenticated user's `email` against the cached `profiles.email` on
+every session prime and every `onAuthStateChange` event; when they
+differ, the profile row is updated in place and the new email
+propagates to `/users`, `/team`, and the sidebar footer on the next
+render without any manual step.
+
 ## Shared UI primitives (Batch 4 Phase A)
 
 - `src/components/ClientPicker.tsx` — single source of truth for picking a

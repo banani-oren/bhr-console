@@ -580,6 +580,59 @@ Evidence & commit SHAs: see `SECURITY_FIX_REPORT.md` (commits 9668198, 3defab1, 
       single-client case (multi-client reports can overlap and the
       admin decides).
 
+## 38a. Mobile layout hygiene (2026-04-23 MOBILE_AND_PROFILE_FIX Phase A)
+
+- [x] **Zero admin sidebars on /m/*.** `RequireRole` gained an optional
+      `withLayout` prop (default true). The `/m` route group passes
+      `withLayout={false}` so the desktop Layout doesn't wrap
+      MobileShell. Runtime contract:
+      `document.querySelectorAll('aside').length === 0` at
+      `/m/hours` on a 390px-wide viewport.
+- [x] **Bottom tab bar visible.** MobileShell renders its own header +
+      bottom tabs (שעות / משרות / פרופיל). No split-shell.
+- [x] **Desktop unaffected.** `/`, `/clients`, `/transactions`, etc.
+      continue to render the desktop Layout with the sidebar on the
+      right.
+- [x] **Auto-redirect.** `MobileAutoRoute` still fires once per
+      session to send non-admin narrow viewports to `/m/hours`.
+
+## 38b. Profile password change (2026-04-23 Phase B1-B2)
+
+- [x] **Dialog wired.** `שנה סיסמה` on `/profile` and `/m/profile`
+      opens a form wrapper (`method="post"`) with a hidden
+      `autoComplete="username"` mirror for Keychain + new-password +
+      confirm-password inputs. Validation: min 8 chars + must match.
+- [x] **useSafeMutation wraps it.** 15 s timeout + consistent
+      error/success states. Success shows `הסיסמה עודכנה ✓` and
+      closes the dialog after ~1.8 s.
+- [x] **Round-trip.** Changing the password, signing out, and
+      signing back in with the new password works via
+      `supabase.auth.updateUser({ password })`.
+
+## 38c. Profile email change flow (2026-04-23 Phase B3-B4)
+
+- [x] **Dialog wired.** `שנה כתובת מייל` on both `/profile` and
+      `/m/profile` opens a dialog showing the current email read-only,
+      a `new-email` input (`type=email, autocomplete=email,
+      inputMode=email`), and explanatory copy
+      (`נשלח קישור אימות לכתובת החדשה...`).
+- [x] **Supabase call + double-confirm.** `updateUser({ email })` is
+      issued; Supabase auth is configured
+      `mailer_secure_email_change_enabled: true` and
+      `mailer_autoconfirm: false`, so a verification link is sent to
+      the new address. Success toast:
+      `קישור אימות נשלח ל-<newEmail>. יש לאשר בתיבת הדואר החדשה כדי
+      להשלים את השינוי.`
+- [x] **profiles.email reconciliation.** `AuthProvider` compares
+      `session.user.email` with `profiles.email` on every session
+      prime and auth-state-change event. When they differ the profile
+      row is updated in place, so `/users`, `/team`, and the sidebar
+      footer refresh automatically after the invitee clicks the
+      confirmation link.
+- [x] **/m/profile parity.** The shared `ProfileEditor` component
+      renders name/phone/email-change/password-change in both the
+      desktop page and the mobile page; no code drift.
+
 ## 38. PWA installable + mobile routes + offline queue (Batch 4 Phase D — 2026-04-22)
 
 - [x] **Manifest + icons + service worker.** `vite-plugin-pwa` wired;
