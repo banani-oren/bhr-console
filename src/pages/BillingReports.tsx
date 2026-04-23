@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
+import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, FileText, Plus, TriangleAlert } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -14,7 +15,6 @@ import {
 import ClientPicker from '@/components/ClientPicker'
 import LabeledToggle from '@/components/LabeledToggle'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -319,11 +319,11 @@ export default function BillingReports() {
           </div>
           <div className="space-y-1">
             <Label className="text-purple-700 text-sm">מתאריך</Label>
-            <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+            <DateInput value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-purple-700 text-sm">עד תאריך</Label>
-            <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+            <DateInput value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

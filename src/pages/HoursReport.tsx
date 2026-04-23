@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { DateInput } from '@/components/ui/date-input'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Download, Plus } from 'lucide-react'
 import jsPDF from 'jspdf'
@@ -8,7 +9,6 @@ import type { Client, HoursLog, Profile } from '@/lib/types'
 import TransactionDialog from '@/components/TransactionDialog'
 import type { DialogInitial } from '@/components/TransactionDialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import {
@@ -233,11 +233,11 @@ export default function HoursReport() {
           </div>
           <div className="space-y-1">
             <Label className="text-purple-700">מתאריך</Label>
-            <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+            <DateInput value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-purple-700">עד תאריך</Label>
-            <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
+            <DateInput value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
           </div>
         </div>
 

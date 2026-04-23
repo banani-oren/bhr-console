@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import * as XLSX from 'xlsx'
-import { Plus, Upload, Pencil, Trash2, FileText } from 'lucide-react'
+import { Plus, Upload, Pencil, Trash2, FileText, Search, X } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTable, useInsert, useDelete } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
@@ -85,6 +85,16 @@ export default function Transactions() {
   const [filterBillable, setFilterBillable] = useState<string>('all')
   const [filterClosingYear, setFilterClosingYear] = useState<string>('all')
   const [filterKind, setFilterKind] = useState<string>('all')
+  // Free-text search (Batch 4.2 Phase B): single input matching any of
+  // client name / service_lead / custom_fields.position_name /
+  // custom_fields.candidate_name / custom_fields.position_number /
+  // notes / invoice_number_transaction / invoice_number_receipt.
+  const [searchInput, setSearchInput] = useState('')
+  const [searchDebounced, setSearchDebounced] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   const uniqueServiceLeads = useMemo(
     () => [...new Set(transactions.map((t) => t.service_lead).filter(Boolean))].sort(),
@@ -107,8 +117,33 @@ export default function Transactions() {
   const resolveServiceName = (t: Transaction) =>
     (t.service_type_id && serviceNameById.get(t.service_type_id)) || t.service_type || ''
 
+  const searchMatches = (t: Transaction, q: string): boolean => {
+    if (!q) return true
+    const cf = (t.custom_fields ?? {}) as Record<string, unknown>
+    const needles = [
+      t.client_name,
+      t.service_lead,
+      t.position_name,
+      t.candidate_name,
+      cf.position_name,
+      cf.candidate_name,
+      cf.position_number,
+      cf.deliverable_name,
+      cf.invoice_contact,
+      t.notes,
+      t.invoice_number,
+      t.invoice_number_transaction,
+      t.invoice_number_receipt,
+      resolveServiceName(t),
+    ]
+      .filter(Boolean)
+      .map((s) => String(s).toLowerCase())
+    return needles.some((s) => s.includes(q))
+  }
+
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
+      if (!searchMatches(t, searchDebounced)) return false
       if (filterKind !== 'all' && (t.kind ?? 'service') !== filterKind) return false
       if (filterBillingMonth !== 'all' && t.billing_month !== Number(filterBillingMonth)) return false
       if (filterClosingMonth !== 'all' && t.closing_month !== Number(filterClosingMonth)) return false
@@ -119,7 +154,8 @@ export default function Transactions() {
       if (filterClosingYear !== 'all' && t.closing_year !== Number(filterClosingYear)) return false
       return true
     })
-  }, [transactions, filterKind, filterBillingMonth, filterClosingMonth, filterServiceType, filterServiceLead, filterBillable, filterClosingYear, serviceNameById])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transactions, searchDebounced, filterKind, filterBillingMonth, filterClosingMonth, filterServiceType, filterServiceLead, filterBillable, filterClosingYear, serviceNameById])
 
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
@@ -247,7 +283,37 @@ export default function Transactions() {
         </div>
       </div>
 
-      <Card className="p-4">
+      <Card className="p-4 space-y-3">
+        <div className="space-y-1">
+          <Label className="text-xs text-purple-700">חיפוש חופשי</Label>
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
+              className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
+              dir="rtl"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
+                aria-label="נקה"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {searchDebounced && (
+            <p className="text-[11px] text-muted-foreground">
+              {filtered.length === 0
+                ? 'לא נמצאו תוצאות'
+                : `נמצאו ${filtered.length} מתוך ${transactions.length}`}
+            </p>
+          )}
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">סוג</Label>

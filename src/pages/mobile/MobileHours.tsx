@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, WifiOff, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -236,7 +237,7 @@ export default function MobileHours() {
                 <div className="grid grid-cols-3 gap-2">
                   <div className="space-y-1">
                     <Label className="text-xs">תאריך</Label>
-                    <Input type="date" value={visitDate} onChange={(e) => setVisitDate(e.target.value)} />
+                    <DateInput value={visitDate} onChange={(e) => setVisitDate(e.target.value)} />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">משעה</Label>

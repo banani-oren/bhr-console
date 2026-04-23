@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Lock, Clock, FileText } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -748,7 +749,7 @@ function AddVisitBody({
       <div className="grid grid-cols-3 gap-3">
         <div className="space-y-1">
           <Label className="text-purple-700">תאריך</Label>
-          <Input type="date" value={form.visit_date} onChange={(e) => onChange('visit_date', e.target.value)} />
+          <DateInput value={form.visit_date} onChange={(e) => onChange('visit_date', e.target.value)} />
         </div>
         <div className="space-y-1">
           <Label className="text-purple-700">משעה</Label>

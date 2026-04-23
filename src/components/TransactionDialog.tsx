@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -558,8 +559,7 @@ export default function TransactionDialog({
         )
       case 'date':
         return wrap(
-          <Input
-            type="date"
+          <DateInput
             value={(value as string) ?? ''}
             onChange={(e) => setCustom(f.key, e.target.value || null)}
             {...inputProps}
@@ -706,16 +706,14 @@ export default function TransactionDialog({
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך פתיחה</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.entry_date}
                   onChange={(e) => setState((s) => ({ ...s, entry_date: e.target.value }))}
                 />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך סגירה</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.close_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
                 />
@@ -743,8 +741,7 @@ export default function TransactionDialog({
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך תחילת עבודה</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.work_start_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, work_start_date: e.target.value || null }))}
                 />
@@ -764,8 +761,7 @@ export default function TransactionDialog({
                     <RefreshCw className="h-3 w-3" />
                   </button>
                 </Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.warranty_end_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, warranty_end_date: e.target.value || null }))}
                 />
@@ -819,8 +815,7 @@ export default function TransactionDialog({
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך שליחת חשבונית</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.invoice_sent_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, invoice_sent_date: e.target.value || null }))}
                 />
@@ -841,16 +836,14 @@ export default function TransactionDialog({
                     <RefreshCw className="h-3 w-3" />
                   </button>
                 </Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.payment_due_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, payment_due_date: e.target.value || null }))}
                 />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">תאריך תשלום בפועל</Label>
-                <Input
-                  type="date"
+                <DateInput
                   value={state.payment_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, payment_date: e.target.value || null }))}
                 />
@@ -941,16 +934,14 @@ function TimePeriodForm({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="space-y-1">
           <Label className="text-xs">תחילת תקופה</Label>
-          <Input
-            type="date"
+          <DateInput
             value={state.period_start ?? ''}
             onChange={(e) => setState((s) => ({ ...s, period_start: e.target.value || null }))}
           />
         </div>
         <div className="space-y-1">
           <Label className="text-xs">סוף תקופה</Label>
-          <Input
-            type="date"
+          <DateInput
             value={state.period_end ?? ''}
             onChange={(e) => setState((s) => ({ ...s, period_end: e.target.value || null }))}
           />
