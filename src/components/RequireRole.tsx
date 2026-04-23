@@ -12,9 +12,14 @@ export const DEFAULT_LANDING: Record<UserRole, string> = {
 type Props = {
   allow: UserRole[]
   children: React.ReactNode
+  // Batch 4.1 mobile fix: the /m/* mobile routes bring their own shell
+  // (MobileShell). Passing withLayout={false} tells RequireRole to skip
+  // wrapping the children in the desktop Layout so the two shells can't
+  // render simultaneously (the "double sidebar" bug).
+  withLayout?: boolean
 }
 
-export default function RequireRole({ allow, children }: Props) {
+export default function RequireRole({ allow, children, withLayout = true }: Props) {
   const { user, profile, loading } = useAuth()
 
   if (loading) {
@@ -37,5 +42,5 @@ export default function RequireRole({ allow, children }: Props) {
     return <Navigate to={DEFAULT_LANDING[profile.role]} replace />
   }
 
-  return <Layout>{children}</Layout>
+  return withLayout ? <Layout>{children}</Layout> : <>{children}</>
 }

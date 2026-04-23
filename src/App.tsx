@@ -119,11 +119,14 @@ export default function App() {
                 </RequireRole>
               }
             />
-            {/* Batch 4 Phase D2: mobile route group (shared MobileShell). */}
+            {/* Batch 4 Phase D2: mobile route group (shared MobileShell).
+                Uses withLayout={false} so the desktop Layout doesn't ALSO
+                render its sidebar on top of MobileShell (the double-shell
+                bug fixed in the 2026-04-23 MOBILE_AND_PROFILE_FIX). */}
             <Route
               path="/m"
               element={
-                <RequireRole allow={['admin', 'administration', 'recruiter']}>
+                <RequireRole allow={['admin', 'administration', 'recruiter']} withLayout={false}>
                   <MobileShell />
                 </RequireRole>
               }
