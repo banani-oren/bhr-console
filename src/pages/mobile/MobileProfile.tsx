@@ -3,6 +3,7 @@ import { useAuth } from '@/lib/auth'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { LogOut, Smartphone } from 'lucide-react'
+import ProfileEditor from '@/components/ProfileEditor'
 
 export default function MobileProfile() {
   const { user, profile, signOut } = useAuth()
@@ -34,6 +35,9 @@ export default function MobileProfile() {
             : 'רכז/ת גיוס'}
         </p>
       </Card>
+
+      <ProfileEditor variant="mobile" />
+
       <Card className="p-4 space-y-2">
         <div className="flex items-center gap-2 text-sm">
           <Smartphone className="h-4 w-4 text-purple-600" />

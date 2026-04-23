@@ -41,6 +41,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     let initialResolved = false
 
+    // Batch 4.1 profile fix: when the Supabase auth row's email differs from
+    // the cached profiles.email (i.e. the user completed an email-change
+    // verification), reconcile the profile row so /users, /team, and the
+    // sidebar reflect the new address.
+    const syncProfileEmailIfStale = async (
+      authUser: User,
+      loadedProfile: Profile | null,
+    ): Promise<Profile | null> => {
+      if (!authUser.email || !loadedProfile) return loadedProfile
+      if (loadedProfile.email === authUser.email) return loadedProfile
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({ email: authUser.email })
+        .eq('id', authUser.id)
+        .select('*')
+        .single()
+      if (error) {
+        console.warn('could not reconcile profiles.email with auth.email', error)
+        return loadedProfile
+      }
+      return (data as Profile | null) ?? loadedProfile
+    }
+
     // 1. Prime the session synchronously from storage (or a short-lived
     //    background refresh for near-expiry tokens). getSession() reads the
     //    persisted session from localStorage and returns it WITHOUT a network
@@ -51,14 +74,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data } = await supabase.auth.getSession()
         if (cancelled) return
         if (data.session?.user) {
-          const { data: profile } = await supabase
+          const { data: profileRow } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', data.session.user.id)
             .single()
           if (cancelled) return
+          const reconciled = await syncProfileEmailIfStale(
+            data.session.user,
+            profileRow as Profile | null,
+          )
+          if (cancelled) return
           setUser(data.session.user)
-          setProfile(profile as Profile | null)
+          setProfile(reconciled)
         } else {
           setUser(null)
           setProfile(null)
@@ -89,14 +117,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!initialResolved) return // let the initial resolution handle mount
 
       if (session?.user) {
-        const { data: profile } = await supabase
+        const { data: profileRow } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', session.user.id)
           .single()
+        if (cancelled) return
+        const reconciled = await syncProfileEmailIfStale(
+          session.user,
+          profileRow as Profile | null,
+        )
         if (!cancelled) {
           setUser(session.user)
-          setProfile(profile as Profile | null)
+          setProfile(reconciled)
         }
       } else {
         if (!cancelled) {
