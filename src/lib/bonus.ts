@@ -1,8 +1,8 @@
 import type { BonusModel, BonusTier, Profile, Transaction } from './types'
 
-// Batch 5 Phase B: single source of truth for bonus calculations.
-// `calculateBonus(rev, tiers)` returns the flat bonus amount for the highest
-// tier whose `min` is <= revenue. This matches the legacy logic in Portal.tsx.
+// ---------------------------------------------------------------------------
+// Tier math
+// ---------------------------------------------------------------------------
 
 export function calculateBonus(revenue: number, tiers: BonusTier[]): number {
   if (!tiers || tiers.length === 0) return 0
@@ -20,9 +20,9 @@ export type BonusBreakdown = {
   currentTier: BonusTier | null
   nextTier: BonusTier | null
   bonus: number
-  progressPct: number      // 0..100, distance from currentTier.min to nextTier.min
-  amountToNext: number     // money needed to reach next tier (0 if at top)
-  tierIndex: number        // -1 if below all tiers
+  progressPct: number
+  amountToNext: number
+  tierIndex: number
 }
 
 export function bonusBreakdown(revenue: number, tiers: BonusTier[]): BonusBreakdown {
@@ -51,12 +51,28 @@ export function bonusBreakdown(revenue: number, tiers: BonusTier[]): BonusBreakd
   return { revenue, currentTier, nextTier, bonus, progressPct, amountToNext, tierIndex }
 }
 
-// Apply the profile's bonus_model.filter to a list of transactions and
-// return the slice that should count toward this profile's revenue.
+// ---------------------------------------------------------------------------
+// Transaction → employee attribution
+//
+// Each transaction carries a `service_lead` field (the employee's name).
+// The bonus for a profile is calculated from transactions where
+// service_lead matches profile.full_name (case-insensitive).
+// ---------------------------------------------------------------------------
+
+export function filterByEmployee(txns: Transaction[], fullName: string): Transaction[] {
+  const needle = (fullName ?? '').trim().toLowerCase()
+  if (!needle) return []
+  return txns.filter((t) => (t.service_lead ?? '').trim().toLowerCase() === needle)
+}
+
+// Kept for backward compatibility — delegates to filterByEmployee when a name
+// is supplied; falls back to the legacy field/contains filter otherwise.
 export function filterRevenueTransactions(
   txns: Transaction[],
   model: BonusModel,
+  employeeName?: string,
 ): Transaction[] {
+  if (employeeName) return filterByEmployee(txns, employeeName)
   const f = model.filter
   if (!f || !f.field) return txns
   const needle = (f.contains ?? '').trim().toLowerCase()
@@ -68,14 +84,22 @@ export function filterRevenueTransactions(
   })
 }
 
-// Determine the (calendar) month of a transaction for revenue attribution.
-// Prefers explicit `closing_*` fields, then `billing_*`, then `entry_date`.
+// ---------------------------------------------------------------------------
+// Transaction → month attribution
+//
+// PRIMARY:  billing_month / billing_year  (when revenue is actually collected)
+// FALLBACK: closing_month / closing_year  (when the deal was signed)
+// LAST:     entry_date
+// ---------------------------------------------------------------------------
+
 export function transactionMonth(t: Transaction): { month: number; year: number } | null {
-  if (t.closing_year && t.closing_month) {
-    return { month: t.closing_month, year: t.closing_year }
-  }
+  // Billing date = when money lands = the correct month for bonus accumulation.
   if (t.billing_year && t.billing_month) {
     return { month: t.billing_month, year: t.billing_year }
+  }
+  // Fall back to deal-close date if billing not set.
+  if (t.closing_year && t.closing_month) {
+    return { month: t.closing_month, year: t.closing_year }
   }
   if (t.entry_date) {
     const d = new Date(t.entry_date)
@@ -84,13 +108,16 @@ export function transactionMonth(t: Transaction): { month: number; year: number 
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Monthly rollup
+// ---------------------------------------------------------------------------
+
 export type EmployeeBonusRow = {
   profile: Profile
   breakdown: BonusBreakdown
   monthRevenue: number
 }
 
-// Compute every-employee-with-a-bonus-model breakdown for a given month.
 export function computeMonthlyBonusRows(
   profiles: Profile[],
   txns: Transaction[],
@@ -100,7 +127,7 @@ export function computeMonthlyBonusRows(
   const out: EmployeeBonusRow[] = []
   for (const p of profiles) {
     if (!p.bonus_model) continue
-    const filtered = filterRevenueTransactions(txns, p.bonus_model).filter((t) => {
+    const filtered = filterByEmployee(txns, p.full_name ?? '').filter((t) => {
       const tm = transactionMonth(t)
       return tm && tm.month === month && tm.year === year
     })
