@@ -63,14 +63,32 @@ serve(async (req) => {
       )
     }
 
-    // 2. Finalize the profile row (auth trigger creates it automatically). We
-    //    explicitly (re)set full_name + role and keep password_set=false so the
-    //    invitee is forced through /set-password before any app chrome renders.
-    await admin.from('profiles').update({
-      full_name,
-      role: role || 'recruiter',
-      password_set: false,
-    }).eq('id', userId)
+    // 2. Finalize the profile row. The handle_new_user trigger usually creates
+    //    it on auth.users INSERT, but if the trigger fails (RLS, constraint
+    //    violation, ON CONFLICT DO NOTHING swallowing an error, etc.) an UPDATE
+    //    here would silently no-op and leave an orphan auth user with no
+    //    profile — exactly the Noa bug. Use UPSERT so the row is guaranteed to
+    //    land regardless of trigger state. Defense-in-depth.
+    const { error: profileErr } = await admin
+      .from('profiles')
+      .upsert(
+        {
+          id: userId,
+          full_name,
+          email,
+          role: role || 'recruiter',
+          password_set: false,
+        },
+        { onConflict: 'id' },
+      )
+    if (profileErr) {
+      // Surface the failure so the UI can show a real error rather than a
+      // false-positive success. The auth user still exists; admin can retry.
+      return new Response(
+        JSON.stringify({ error: `profile upsert failed: ${profileErr.message}`, user_id: userId }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
+    }
 
     // 3. Send the invite email via Resend HTTP API
     const emailHtml = `
