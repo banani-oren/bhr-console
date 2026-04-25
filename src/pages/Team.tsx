@@ -25,7 +25,8 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { Pencil, Trash2, UserCircle, Plus } from 'lucide-react'
+import { Pencil, Trash2, UserCircle, Plus, IdCard } from 'lucide-react'
+import UserEditDialog from '@/components/UserEditDialog'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,6 +242,9 @@ export default function Team() {
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null)
+  // Phase A: shared admin-edit dialog target (separate from the existing
+  // bonus/hours-category dialog above).
+  const [editDetailsTarget, setEditDetailsTarget] = useState<Profile | null>(null)
   const [form, setForm] = useState<EmployeeForm>({
     hours_category_enabled: false,
     bonus_enabled: false,
@@ -382,6 +386,15 @@ export default function Team() {
                   )}
                 </div>
 
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="self-start text-xs border-purple-300 text-purple-700 hover:bg-purple-50"
+                  onClick={() => setEditDetailsTarget(emp)}
+                >
+                  <IdCard className="h-3 w-3 ml-1" />
+                  ערוך פרטים
+                </Button>
               </CardContent>
             </Card>
           ))}
@@ -421,6 +434,13 @@ export default function Team() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <UserEditDialog
+        open={!!editDetailsTarget}
+        onOpenChange={(open) => { if (!open) setEditDetailsTarget(null) }}
+        user={editDetailsTarget}
+        invalidate={[['team-employees']]}
+      />
     </div>
   )
 }

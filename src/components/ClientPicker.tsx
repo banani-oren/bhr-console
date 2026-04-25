@@ -1,22 +1,27 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Client } from '@/lib/types'
 import { Input } from '@/components/ui/input'
 
-// Batch 4 Phase A1: centralized client picker. Renders the client's NAME in
-// the trigger regardless of whether the outer component knows it yet. Used
-// on /hours, /transactions, /billing-reports, /clients time-log permissions.
+// Centralized client picker. Renders the client's NAME in the trigger
+// regardless of whether the outer component knows it yet. Used on /hours,
+// /transactions, /billing-reports, /clients time-log permissions, and the
+// mobile shell.
+//
+// QUICK_FIXES_NAME_HOURS Phase B: the dropdown is openable EVEN WHEN a
+// client is already selected, so the user can swap to a different client
+// without first clearing the field. Typing replaces the selection in
+// place. Escape closes without clearing. Click-outside closes the menu.
 
 type Props = {
   value: string | null
   onChange: (id: string | null, client: Client | null) => void
-  // Optional pre-filter (e.g. only time_log_enabled clients, or a permission set).
   filter?: (client: Client) => boolean
   placeholder?: string
   emptyLabel?: string
-  allSentinelLabel?: string | null // if set, renders an "all clients" option that yields null
+  allSentinelLabel?: string | null // if set, renders an "all clients" option
   disabled?: boolean
   className?: string
   /** Show a clear button when a selection is active. Default: true. */
@@ -36,6 +41,7 @@ export default function ClientPicker({
 }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const { data: clients = [] } = useQuery<Client[]>({
@@ -59,43 +65,87 @@ export default function ClientPicker({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return pool.slice(0, 10)
+    if (!q) return pool.slice(0, 50)
     return pool
       .filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
           (c.company_id ?? '').toLowerCase().includes(q),
       )
-      .slice(0, 10)
+      .slice(0, 50)
   }, [pool, query])
 
+  // Click-outside closes the dropdown.
+  useEffect(() => {
+    if (!open) return
+    function onDocDown(e: MouseEvent) {
+      const root = wrapperRef.current
+      if (root && !root.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocDown)
+    return () => document.removeEventListener('mousedown', onDocDown)
+  }, [open])
+
+  function pickClient(c: Client) {
+    onChange(c.id, c)
+    setOpen(false)
+    setQuery('')
+  }
+
+  function clearSelection() {
+    onChange(null, null)
+    setQuery('')
+    setOpen(true)
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
+  // The visible value for the input.
+  // - User typing: show the query (live filter).
+  // - Otherwise:    show the selected client's name (or empty).
+  const displayValue = query.length > 0 ? query : (selected?.name ?? '')
+
   return (
-    <div className={`relative ${className ?? ''}`}>
+    <div
+      className={`relative ${className ?? ''}`}
+      ref={wrapperRef}
+    >
       <div
-        className={`flex items-center gap-2 border rounded-md px-3 py-2 bg-background ${
+        className={`flex items-center gap-2 border rounded-md px-3 py-2 bg-background cursor-text ${
           disabled ? 'opacity-60 pointer-events-none' : ''
         }`}
+        onClick={() => {
+          // Clicking anywhere in the field opens the menu and focuses the input
+          // so the user can type to swap to a different client.
+          setOpen(true)
+          inputRef.current?.focus()
+        }}
       >
         <Input
           ref={inputRef}
           className="border-0 focus-visible:ring-0 p-0 flex-1 bg-transparent"
-          placeholder={placeholder}
-          value={selected ? selected.name : query}
+          placeholder={selected ? '' : placeholder}
+          value={displayValue}
           onChange={(e) => {
-            if (selected) onChange(null, null)
             setQuery(e.target.value)
             setOpen(true)
           }}
           onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setOpen(false)
+              setQuery('')
+              ;(e.target as HTMLInputElement).blur()
+            }
+          }}
         />
         {selected && allowClear ? (
           <button
             type="button"
-            onClick={() => {
-              onChange(null, null)
-              setQuery('')
-              setOpen(true)
-              inputRef.current?.focus()
+            onClick={(e) => {
+              e.stopPropagation()
+              clearSelection()
             }}
             className="text-muted-foreground hover:text-foreground"
             aria-label="נקה"
@@ -106,11 +156,9 @@ export default function ClientPicker({
           <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
         )}
       </div>
-      {open && !selected && (
-        <div
-          className="absolute z-50 left-0 right-0 mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-y-auto"
-          onMouseLeave={() => setOpen(false)}
-        >
+
+      {open && !disabled && (
+        <div className="absolute z-50 left-0 right-0 mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-y-auto">
           {allSentinelLabel && (
             <button
               type="button"
@@ -119,7 +167,9 @@ export default function ClientPicker({
                 setOpen(false)
                 setQuery('')
               }}
-              className="w-full text-right px-3 py-2 hover:bg-purple-50 text-sm font-medium text-purple-700 border-b"
+              className={`w-full text-right px-3 py-2 hover:bg-purple-50 text-sm font-medium border-b ${
+                !value ? 'text-purple-700 bg-purple-50/50' : 'text-purple-700'
+              }`}
             >
               {allSentinelLabel}
             </button>
@@ -131,12 +181,10 @@ export default function ClientPicker({
               <button
                 key={c.id}
                 type="button"
-                onClick={() => {
-                  onChange(c.id, c)
-                  setOpen(false)
-                  setQuery('')
-                }}
-                className="w-full text-right px-3 py-2 hover:bg-purple-50 flex items-center justify-between"
+                onClick={() => pickClient(c)}
+                className={`w-full text-right px-3 py-2 hover:bg-purple-50 flex items-center justify-between ${
+                  value === c.id ? 'bg-purple-50/50' : ''
+                }`}
               >
                 <div>
                   <div className="text-sm font-medium">{c.name}</div>

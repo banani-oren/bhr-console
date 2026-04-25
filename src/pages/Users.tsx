@@ -29,7 +29,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Plus, Trash2, KeyRound } from 'lucide-react'
+import { Plus, Trash2, KeyRound, Pencil } from 'lucide-react'
+import UserEditDialog from '@/components/UserEditDialog'
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'מנהל',
@@ -104,6 +105,9 @@ export default function Users() {
 
   // Role-change transient
   const [togglingRoleId, setTogglingRoleId] = useState<string | null>(null)
+
+  // Edit dialog
+  const [editTarget, setEditTarget] = useState<UserProfile | null>(null)
 
   function openInviteDialog() {
     setInviteForm(emptyInviteForm)
@@ -257,6 +261,14 @@ export default function Users() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            title="ערוך פרטי משתמש"
+                            onClick={() => setEditTarget(row)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -429,6 +441,13 @@ export default function Users() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Phase A — shared admin edit dialog (name + email + role). */}
+      <UserEditDialog
+        open={!!editTarget}
+        onOpenChange={(open) => { if (!open) setEditTarget(null) }}
+        user={editTarget}
+      />
     </div>
   )
 }
