@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import type { Profile, BonusModel, BonusTier } from '@/lib/types'
+import { useSafeMutation } from '@/hooks/useSafeMutation'
 import {
   Dialog,
   DialogContent,
@@ -222,8 +223,6 @@ function EmployeeFormBody({ form, onChange }: FormBodyProps) {
 // ---------------------------------------------------------------------------
 
 export default function Team() {
-  const queryClient = useQueryClient()
-
   // Admin is also an employee (Phase B): include all three roles so admins
   // appear as cards alongside every employee.
   const { data: employees = [], isLoading } = useQuery<Profile[]>({
@@ -252,12 +251,27 @@ export default function Team() {
     bonus_filter_contains: '',
     bonus_tiers: [],
   })
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
+  const saveMutation = useSafeMutation<{ id: string; payload: Partial<Profile> }, Profile[]>({
+    mutationFn: async ({ id, payload }, signal) => {
+      const { data, error } = await supabase
+        .from('profiles')
+        .update(payload)
+        .eq('id', id)
+        .select()
+        .abortSignal(signal)
+      if (error) throw new Error(error.message)
+      return (data ?? []) as Profile[]
+    },
+    invalidate: [['team-employees']],
+    onSuccess: () => {
+      setTimeout(() => closeDialog(), 1200)
+    },
+  })
 
   function openEditDialog(profile: Profile) {
     setEditingProfile(profile)
     setForm(profileToForm(profile))
-    setSaveStatus('idle')
+    saveMutation.resetStatus()
     setDialogOpen(true)
   }
 
@@ -280,31 +294,12 @@ export default function Team() {
   function closeDialog() {
     setDialogOpen(false)
     setEditingProfile(null)
-    setSaveStatus('idle')
+    saveMutation.resetStatus()
   }
 
-  async function handleSave() {
+  function handleSave() {
     if (!editingProfile) return
-    setSaveStatus('saving')
-
-    const payload = formToPayload(form)
-
-    const { data, error } = await supabase
-      .from('profiles')
-      .update(payload)
-      .eq('id', editingProfile.id)
-      .select()
-
-    if (error) {
-      console.error('Save error:', error)
-      setSaveStatus('error')
-      return
-    }
-    console.log('Saved:', data)
-
-    setSaveStatus('success')
-    queryClient.invalidateQueries({ queryKey: ['team-employees'] })
-    setTimeout(() => closeDialog(), 2000)
+    saveMutation.mutate({ id: editingProfile.id, payload: formToPayload(form) })
   }
 
   return (
@@ -413,21 +408,28 @@ export default function Team() {
           <EmployeeFormBody form={form} onChange={setForm} />
 
           <DialogFooter className="flex flex-col gap-2">
-            {saveStatus === 'success' && (
+            {saveMutation.saveStatus === 'success' && (
               <p className="text-green-600 font-medium text-sm text-right">המידע נשמר ✓</p>
             )}
-            {saveStatus === 'error' && (
-              <p className="text-red-600 font-medium text-sm text-right">שגיאה בשמירה, נסה שנית</p>
+            {saveMutation.saveStatus === 'error' && (
+              <p className="text-red-600 font-medium text-sm text-right">
+                שגיאה בשמירה: {saveMutation.errorMessage || 'נסה שנית'}
+              </p>
+            )}
+            {saveMutation.saveStatus === 'timeout' && (
+              <p className="text-red-600 font-medium text-sm text-right">
+                {saveMutation.errorMessage || 'פג זמן השמירה. נסה שנית.'}
+              </p>
             )}
             <div className="flex gap-2 flex-row-reverse">
               <Button
                 onClick={handleSave}
-                disabled={saveStatus === 'saving' || saveStatus === 'success'}
+                disabled={saveMutation.saveStatus === 'saving' || saveMutation.saveStatus === 'success'}
                 className="bg-purple-600 hover:bg-purple-700 text-white"
               >
-                {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
+                {saveMutation.saveStatus === 'saving' ? 'שומר...' : 'שמור'}
               </Button>
-              <Button variant="outline" onClick={closeDialog} disabled={saveStatus === 'saving'}>
+              <Button variant="outline" onClick={closeDialog} disabled={saveMutation.saveStatus === 'saving'}>
                 ביטול
               </Button>
             </div>
