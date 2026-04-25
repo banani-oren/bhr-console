@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import type { Profile, BonusModel, BonusTier } from '@/lib/types'
@@ -255,6 +256,22 @@ export default function Team() {
     setSaveStatus('idle')
     setDialogOpen(true)
   }
+
+  // Urgent fix Phase C5: deep-link from /bonuses → /team?edit=<id>
+  // automatically opens that employee's edit dialog.
+  const [searchParams, setSearchParams] = useSearchParams()
+  useEffect(() => {
+    const editId = searchParams.get('edit')
+    if (!editId || dialogOpen || employees.length === 0) return
+    const target = employees.find((e) => e.id === editId)
+    if (target) {
+      openEditDialog(target)
+      // Strip the param so a refresh doesn't re-open it.
+      const next = new URLSearchParams(searchParams)
+      next.delete('edit')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, employees, dialogOpen, setSearchParams])
 
   function closeDialog() {
     setDialogOpen(false)

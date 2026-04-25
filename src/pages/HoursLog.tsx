@@ -552,29 +552,33 @@ export default function HoursLog() {
         </div>
       </Card>
 
+      {/* Urgent fix Phase B: client picker is ALWAYS visible (was previously
+          hidden when no hours existed for the selected month — invisible to
+          Oren when he scrolled to a future month). Filter is
+          time_log_enabled=true so non-time-logged clients never appear. */}
+      <Card className="p-3">
+        <div className="space-y-1">
+          <Label className="text-xs text-purple-700">לקוח</Label>
+          <ClientPicker
+            value={allClients.find((c) => c.name === resolvedTab)?.id ?? null}
+            onChange={(_id, client) => setActiveTab(client?.name ?? '')}
+            filter={(c) => c.time_log_enabled}
+            allSentinelLabel="כל הלקוחות"
+            placeholder="חפש לקוח..."
+          />
+        </div>
+      </Card>
+
       {isLoading ? (
         <div className="p-8 text-center text-purple-400">טוען...</div>
-      ) : clientTabs.length === 0 ? (
-        <Card className="p-8 text-center text-gray-400">אין נתוני שעות לחודש זה</Card>
+      ) : !resolvedTab ? (
+        clientTabs.length === 0 ? (
+          <Card className="p-8 text-center text-gray-400">אין נתוני שעות לחודש זה</Card>
+        ) : (
+          <Card className="p-8 text-center text-gray-400">בחר לקוח כדי להציג את השעות שלו</Card>
+        )
       ) : (
         <div className="space-y-3">
-          {/* Phase D2: client tabs replaced by a searchable picker. The
-              picker is constrained to clients that actually have hours
-              logged this month, which keeps it short. */}
-          <Card className="p-3">
-            <div className="space-y-1">
-              <Label className="text-xs text-purple-700">לקוח</Label>
-              <ClientPicker
-                value={
-                  allClients.find((c) => c.name === resolvedTab)?.id ?? null
-                }
-                onChange={(_id, client) => setActiveTab(client?.name ?? '')}
-                filter={(c) => clientTabs.includes(c.name)}
-                placeholder="חפש לקוח..."
-              />
-            </div>
-          </Card>
-
           {(resolvedTab ? [resolvedTab] : []).map((client) => {
             const entries = hoursForClient(client)
             const total = totalHours(client)
