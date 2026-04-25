@@ -241,7 +241,7 @@ export default function Team() {
       // Promise.race ensures the call is cancelled when signal fires even if
       // Supabase's .abortSignal() doesn't propagate to the underlying fetch.
       const result = await Promise.race<{ error: { message: string } | null }>([
-        supabase.from('profiles').update(payload).eq('id', id).abortSignal(signal) as Promise<any>,
+        supabase.from('profiles').update(payload).eq('id', id).abortSignal(signal) as unknown as Promise<{ error: { message: string } | null }>,
         new Promise<never>((_, rej) => {
           if (signal.aborted) { rej(new DOMException('Aborted', 'AbortError')); return }
           signal.addEventListener('abort', () => rej(new DOMException('Aborted', 'AbortError')), { once: true })
