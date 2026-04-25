@@ -8,16 +8,12 @@ import { supabase } from '@/lib/supabase'
 import type { Client, HoursLog, Profile } from '@/lib/types'
 import TransactionDialog from '@/components/TransactionDialog'
 import type { DialogInitial } from '@/components/TransactionDialog'
+import ClientPicker from '@/components/ClientPicker'
+import { DateCell } from '@/components/ui/date-cell'
+import { formatDate } from '@/lib/dates'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -140,7 +136,7 @@ export default function HoursReport() {
     doc.setFontSize(10)
     doc.text(`${label('לקוח')}: ${selectedClient?.name ?? ''}`, 555, 72, { align: 'right' })
     doc.text(
-      `${label('תקופה')}: ${periodStart} — ${periodEnd}`,
+      `${label('תקופה')}: ${formatDate(periodStart)} — ${formatDate(periodEnd)}`,
       555, 88, { align: 'right' },
     )
     doc.text(`${label('תאריך הפקה')}: ${today}`, 555, 104, { align: 'right' })
@@ -156,7 +152,7 @@ export default function HoursReport() {
         label('עובד/ת'),
       ]],
       body: entries.map((e) => [
-        e.visit_date,
+        formatDate(e.visit_date),
         (e as unknown as { start_time?: string | null }).start_time ?? '—',
         (e as unknown as { end_time?: string | null }).end_time ?? '—',
         String(e.hours ?? 0),
@@ -218,18 +214,14 @@ export default function HoursReport() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="space-y-1">
             <Label className="text-purple-700">לקוח</Label>
-            <Select value={clientId} onValueChange={(v) => setClientId(v ?? '')}>
-              <SelectTrigger><SelectValue placeholder="בחר לקוח" /></SelectTrigger>
-              <SelectContent>
-                {clients.length === 0 ? (
-                  <div className="p-2 text-xs text-muted-foreground">
-                    אין לקוחות עם דיווח שעות מופעל
-                  </div>
-                ) : (
-                  clients.map((c) => (<SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>))
-                )}
-              </SelectContent>
-            </Select>
+            {/* Phase D3: filter to time_log_enabled clients only. */}
+            <ClientPicker
+              value={clientId || null}
+              onChange={(id) => setClientId(id ?? '')}
+              filter={(c) => clients.some((tlc) => tlc.id === c.id)}
+              placeholder="חפש לקוח..."
+              emptyLabel="אין לקוחות עם דיווח שעות מופעל"
+            />
           </div>
           <div className="space-y-1">
             <Label className="text-purple-700">מתאריך</Label>
@@ -301,7 +293,7 @@ export default function HoursReport() {
               <TableBody>
                 {entries.map((e) => (
                   <TableRow key={e.id}>
-                    <TableCell className="font-medium">{e.visit_date}</TableCell>
+                    <TableCell className="font-medium"><DateCell value={e.visit_date} /></TableCell>
                     <TableCell dir="ltr">{(e as unknown as { start_time?: string | null }).start_time ?? '—'}</TableCell>
                     <TableCell dir="ltr">{(e as unknown as { end_time?: string | null }).end_time ?? '—'}</TableCell>
                     <TableCell>{e.hours}</TableCell>

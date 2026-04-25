@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import type { Transaction, Client } from '@/lib/types'
+import { DateCell } from '@/components/ui/date-cell'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -392,7 +393,7 @@ export default function AdministrationDashboard() {
                       {ILS.format(t.net_invoice_amount ?? 0)}
                     </TableCell>
                     <TableCell className="px-4 text-muted-foreground" dir="ltr">
-                      {dueDate.toISOString().slice(0, 10)}
+                      <DateCell value={dueDate} />
                     </TableCell>
                     <TableCell className="px-4">
                       <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-100 text-red-700">

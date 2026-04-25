@@ -13,6 +13,8 @@ import {
   formatCurrency,
 } from '@/lib/pdf'
 import ClientPicker from '@/components/ClientPicker'
+import { DateCell } from '@/components/ui/date-cell'
+import { formatDate } from '@/lib/dates'
 import LabeledToggle from '@/components/LabeledToggle'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -369,7 +371,7 @@ export default function BillingReports() {
             <span>
               {selectedClient ? selectedClient.name : 'כל הלקוחות'} ·{' '}
               {periodStart || periodEnd
-                ? `${periodStart || '—'} → ${periodEnd || '—'}`
+                ? `${formatDate(periodStart) || '—'} → ${formatDate(periodEnd) || '—'}`
                 : 'כל התקופות'}
             </span>
             <span>
@@ -418,7 +420,7 @@ export default function BillingReports() {
                           )}
                         </TableCell>
                         <TableCell className="text-xs">{t.payment_status}</TableCell>
-                        <TableCell>{date}</TableCell>
+                        <TableCell><DateCell value={date} /></TableCell>
                         <TableCell>{formatCurrency(Number(t.net_invoice_amount) || 0)}</TableCell>
                       </TableRow>
                     )
@@ -476,12 +478,12 @@ export default function BillingReports() {
                   </TableCell>
                   <TableCell>
                     {r.period_start || r.period_end
-                      ? `${r.period_start ?? '—'} → ${r.period_end ?? '—'}`
+                      ? `${formatDate(r.period_start) || '—'} → ${formatDate(r.period_end) || '—'}`
                       : 'כל התקופות'}
                   </TableCell>
                   <TableCell>{r.transaction_ids?.length ?? 0}</TableCell>
                   <TableCell>{formatCurrency(r.total_amount)}</TableCell>
-                  <TableCell>{new Date(r.issued_at).toISOString().slice(0, 10)}</TableCell>
+                  <TableCell><DateCell value={r.issued_at} /></TableCell>
                   <TableCell>
                     {r.pdf_storage_path && (
                       <Button size="sm" variant="ghost" onClick={() => openReportPdf(r)}>

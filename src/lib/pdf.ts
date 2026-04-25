@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable'
 import { supabase } from './supabase'
 import type { BillingReport, Client, HoursLog, Transaction } from './types'
 import type { ServiceType } from './serviceTypes'
+import { formatDate } from './dates'
 
 // jsPDF defaults to helvetica (no Hebrew glyphs). Characters outside the
 // ISO-Latin range render as squares. Reversing the string pre-draw lets
@@ -29,11 +30,16 @@ export function buildTimeSheetPdf({ transaction, client, entries, profileNameByI
   doc.setFontSize(12)
   doc.text(label('דף שעות'), 555, 50, { align: 'right' })
   doc.setFontSize(10)
-  const periodStart = transaction.period_start ?? '—'
-  const periodEnd = transaction.period_end ?? '—'
+  const periodStart = formatDate(transaction.period_start) || '—'
+  const periodEnd = formatDate(transaction.period_end) || '—'
   doc.text(`${label('לקוח')}: ${client?.name ?? transaction.client_name ?? ''}`, 555, 72, { align: 'right' })
   doc.text(`${label('תקופה')}: ${periodStart} — ${periodEnd}`, 555, 88, { align: 'right' })
-  doc.text(`${label('תאריך הפקה')}: ${new Date().toISOString().slice(0, 10)}`, 555, 104, { align: 'right' })
+  doc.text(`${label('תאריך הפקה')}: ${formatDate(new Date())}`, 555, 104, { align: 'right' })
+
+  function fmtRange(a: string | null | undefined, b: string | null | undefined): string {
+    return `${formatDate(a) || '—'} → ${formatDate(b) || '—'}`
+  }
+  void fmtRange
 
   autoTable(doc, {
     startY: 130,
@@ -46,7 +52,7 @@ export function buildTimeSheetPdf({ transaction, client, entries, profileNameByI
       label('תיאור'),
     ]],
     body: entries.map((e) => [
-      e.visit_date,
+      formatDate(e.visit_date),
       e.start_time ?? '—',
       e.end_time ?? '—',
       String(e.hours ?? 0),
@@ -96,7 +102,7 @@ function describeTxn(
   serviceTypeNames: Map<string, string>,
 ): string {
   if (t.kind === 'time_period') {
-    return `${label('דוח שעות')} ${t.period_start ?? ''} → ${t.period_end ?? ''}`
+    return `${label('דוח שעות')} ${formatDate(t.period_start) || ''} → ${formatDate(t.period_end) || ''}`
   }
   const sn = serviceTypeNames.get(t.service_type_id ?? '') ?? t.service_type ?? ''
   const extras = [t.position_name, t.candidate_name].filter(Boolean).join(' · ')
@@ -104,7 +110,8 @@ function describeTxn(
 }
 
 function txnDate(t: Transaction): string {
-  return t.close_date ?? t.period_end ?? t.entry_date ?? ''
+  const raw = t.close_date ?? t.period_end ?? t.entry_date ?? ''
+  return raw ? formatDate(raw) : ''
 }
 
 export function buildBillingReportPdf({
@@ -126,7 +133,7 @@ export function buildBillingReportPdf({
   doc.text(`${label('לקוח')}: ${clientLabel}`, 555, 72, { align: 'right' })
   const periodLabel = !report.period_start && !report.period_end
     ? label('כל התקופות')
-    : `${report.period_start ?? '—'} — ${report.period_end ?? '—'}`
+    : `${formatDate(report.period_start) || '—'} — ${formatDate(report.period_end) || '—'}`
   doc.text(`${label('תקופה')}: ${periodLabel}`, 555, 88, { align: 'right' })
   doc.text(`${label('תאריך הפקה')}: ${new Date(report.issued_at).toISOString().slice(0, 10)}`, 555, 104, { align: 'right' })
 
@@ -188,7 +195,7 @@ export function buildBillingReportPdf({
     doc.setFontSize(13)
     doc.text(`${label('פירוט שעות')} · ${t.client_name}`, 555, 50, { align: 'right' })
     doc.setFontSize(10)
-    doc.text(`${label('תקופה')}: ${t.period_start} → ${t.period_end}`, 555, 68, { align: 'right' })
+    doc.text(`${label('תקופה')}: ${formatDate(t.period_start)} → ${formatDate(t.period_end)}`, 555, 68, { align: 'right' })
     autoTable(doc, {
       startY: 90,
       head: [[
@@ -200,7 +207,7 @@ export function buildBillingReportPdf({
         label('תיאור'),
       ]],
       body: hrs.map((h) => [
-        h.visit_date,
+        formatDate(h.visit_date),
         h.start_time ?? '—',
         h.end_time ?? '—',
         String(h.hours ?? 0),

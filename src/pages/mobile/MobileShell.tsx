@@ -1,18 +1,21 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Clock, Receipt, UserCircle, LogOut } from 'lucide-react'
+import { Clock, UserCircle, Monitor } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
-// Batch 4 Phase D2: mobile-optimized shell with a bottom-tab nav. Used at
-// /m/* routes. Admins can preview it from the desktop sidebar; non-admins
-// are auto-redirected here on narrow viewports.
+// Batch 5 Phase C: stripped-down mobile shell — only two tabs (שעות,
+// פרופיל). Header has a "תצוגת דסקטופ" link that sets the localStorage
+// override flag so the auto-redirect in MobileAutoRoute won't bounce
+// back to /m on the next navigation.
 export default function MobileShell() {
-  const { profile, user, signOut } = useAuth()
+  const { profile, user } = useAuth()
   const navigate = useNavigate()
 
-  const handleSignOut = async () => {
-    await signOut()
-    navigate('/login')
+  const handleDesktopView = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('bhr_force_desktop', '1')
+    }
+    navigate('/')
   }
 
   return (
@@ -36,11 +39,12 @@ export default function MobileShell() {
           </div>
         </div>
         <button
-          onClick={handleSignOut}
-          className="text-muted-foreground hover:text-destructive p-2 rounded-md"
-          aria-label="יציאה"
+          onClick={handleDesktopView}
+          className="text-xs text-purple-700 hover:text-purple-900 flex items-center gap-1 px-2 py-1 rounded-md hover:bg-purple-50"
+          aria-label="תצוגת דסקטופ"
         >
-          <LogOut className="h-4 w-4" />
+          <Monitor className="h-3.5 w-3.5" />
+          <span>תצוגת דסקטופ</span>
         </button>
       </header>
 
@@ -48,10 +52,9 @@ export default function MobileShell() {
         <Outlet />
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 h-14 bg-card border-t grid grid-cols-3 text-[11px]">
-        <BottomTab to="/m/hours" icon={<Clock className="h-5 w-5" />} label="שעות" />
-        <BottomTab to="/m/transactions" icon={<Receipt className="h-5 w-5" />} label="משרות" />
-        <BottomTab to="/m/profile" icon={<UserCircle className="h-5 w-5" />} label="פרופיל" />
+      <nav className="fixed bottom-0 inset-x-0 h-16 bg-card border-t grid grid-cols-2 text-sm">
+        <BottomTab to="/m/hours" icon={<Clock className="h-6 w-6" />} label="שעות" />
+        <BottomTab to="/m/profile" icon={<UserCircle className="h-6 w-6" />} label="פרופיל" />
       </nav>
     </div>
   )
@@ -63,7 +66,7 @@ function BottomTab({ to, icon, label }: { to: string; icon: React.ReactNode; lab
       to={to}
       className={({ isActive }) =>
         cn(
-          'flex flex-col items-center justify-center gap-0.5',
+          'flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform',
           isActive ? 'text-purple-600' : 'text-muted-foreground hover:text-foreground',
         )
       }

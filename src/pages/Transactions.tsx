@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import * as XLSX from 'xlsx'
 import { Plus, Upload, Pencil, Trash2, FileText, Search, X } from 'lucide-react'
+import { DateCell } from '@/components/ui/date-cell'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTable, useInsert, useDelete } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
@@ -436,8 +437,8 @@ export default function Transactions() {
                     <TableCell className="text-right">{formatCurrency(t.salary)}</TableCell>
                     <TableCell className="text-right">{t.commission_percent}%</TableCell>
                     <TableCell className="text-right">{t.service_lead}</TableCell>
-                    <TableCell className="text-right">{t.entry_date}</TableCell>
-                    <TableCell className="text-right">{t.close_date ?? '—'}</TableCell>
+                    <TableCell className="text-right"><DateCell value={t.entry_date} /></TableCell>
+                    <TableCell className="text-right"><DateCell value={t.close_date} /></TableCell>
                     <TableCell className="text-right">{formatCurrency(t.net_invoice_amount)}</TableCell>
                     <TableCell className="text-right">{formatCurrency(t.commission_amount)}</TableCell>
                     <TableCell className="text-right">

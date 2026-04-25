@@ -12,6 +12,7 @@ import {
 } from '@/lib/serviceTypes'
 import ClientPicker from '@/components/ClientPicker'
 import LabeledToggle from '@/components/LabeledToggle'
+import { DateCell } from '@/components/ui/date-cell'
 import {
   Dialog,
   DialogContent,
@@ -1016,7 +1017,7 @@ function TimePeriodForm({
                         onChange={() => toggleHourRow(h.id)}
                       />
                     </TableCell>
-                    <TableCell className="text-xs">{h.visit_date}</TableCell>
+                    <TableCell className="text-xs"><DateCell value={h.visit_date} /></TableCell>
                     <TableCell className="text-xs" dir="ltr">{h.start_time ?? '—'}</TableCell>
                     <TableCell className="text-xs" dir="ltr">{h.end_time ?? '—'}</TableCell>
                     <TableCell className="text-xs">{h.hours}</TableCell>

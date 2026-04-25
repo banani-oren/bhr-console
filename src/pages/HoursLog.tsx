@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { HoursLog as HoursLogType, Transaction, Client } from '@/lib/types'
 import ClientPicker from '@/components/ClientPicker'
+import { DateCell } from '@/components/ui/date-cell'
 import { useSafeMutation, type SaveStatus } from '@/hooks/useSafeMutation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -34,7 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 
 const HEBREW_MONTHS = [
   'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
@@ -428,7 +428,7 @@ export default function HoursLog() {
                 <TableBody>
                   {hoursForSelected.map((entry) => (
                     <TableRow key={entry.id} className="hover:bg-purple-50/50 transition-colors">
-                      <TableCell className="text-right font-medium">{entry.visit_date}</TableCell>
+                      <TableCell className="text-right font-medium"><DateCell value={entry.visit_date} /></TableCell>
                       <TableCell className="text-right">{entry.client_name}</TableCell>
                       <TableCell className="text-right" dir="ltr">{(entry as unknown as { start_time?: string | null }).start_time ?? '—'}</TableCell>
                       <TableCell className="text-right" dir="ltr">{(entry as unknown as { end_time?: string | null }).end_time ?? '—'}</TableCell>
@@ -557,27 +557,31 @@ export default function HoursLog() {
       ) : clientTabs.length === 0 ? (
         <Card className="p-8 text-center text-gray-400">אין נתוני שעות לחודש זה</Card>
       ) : (
-        <Tabs value={resolvedTab} onValueChange={(v) => setActiveTab(v)} dir="rtl">
-          <TabsList className="bg-purple-50 border border-purple-200 flex-wrap h-auto gap-1 p-1">
-            {clientTabs.map((client) => (
-              <TabsTrigger
-                key={client}
-                value={client}
-                className="data-[state=active]:bg-purple-600 data-[state=active]:text-white text-purple-700"
-              >
-                {client}
-                {isMonthClosed(client) && <Lock className="w-3 h-3 mr-1 inline-block opacity-70" />}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+        <div className="space-y-3">
+          {/* Phase D2: client tabs replaced by a searchable picker. The
+              picker is constrained to clients that actually have hours
+              logged this month, which keeps it short. */}
+          <Card className="p-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-purple-700">לקוח</Label>
+              <ClientPicker
+                value={
+                  allClients.find((c) => c.name === resolvedTab)?.id ?? null
+                }
+                onChange={(_id, client) => setActiveTab(client?.name ?? '')}
+                filter={(c) => clientTabs.includes(c.name)}
+                placeholder="חפש לקוח..."
+              />
+            </div>
+          </Card>
 
-          {clientTabs.map((client) => {
+          {(resolvedTab ? [resolvedTab] : []).map((client) => {
             const entries = hoursForClient(client)
             const total = totalHours(client)
             const showCategory = hasCategory(client)
             const closed = isMonthClosed(client)
             return (
-              <TabsContent key={client} value={client} className="space-y-3 mt-3">
+              <div key={client} className="space-y-3 mt-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     {closed ? (
@@ -627,7 +631,7 @@ export default function HoursLog() {
                         <TableBody>
                           {entries.map((entry) => (
                             <TableRow key={entry.id} className="hover:bg-purple-50/50 transition-colors">
-                              <TableCell className="text-right font-medium">{entry.visit_date}</TableCell>
+                              <TableCell className="text-right font-medium"><DateCell value={entry.visit_date} /></TableCell>
                               <TableCell className="text-right" dir="ltr">{(entry as unknown as { start_time?: string | null }).start_time ?? '—'}</TableCell>
                               <TableCell className="text-right" dir="ltr">{(entry as unknown as { end_time?: string | null }).end_time ?? '—'}</TableCell>
                               <TableCell className="text-right">{entry.hours}</TableCell>
@@ -650,10 +654,10 @@ export default function HoursLog() {
                     </span>
                   </div>
                 </Card>
-              </TabsContent>
+              </div>
             )
           })}
-        </Tabs>
+        </div>
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

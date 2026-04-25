@@ -13,10 +13,10 @@ import Users from '@/pages/Users'
 import Services from '@/pages/Services'
 import HoursReport from '@/pages/HoursReport'
 import BillingReports from '@/pages/BillingReports'
+import Bonuses from '@/pages/Bonuses'
 import Profile from '@/pages/Profile'
 import MobileShell from '@/pages/mobile/MobileShell'
 import MobileHours from '@/pages/mobile/MobileHours'
-import MobileTransactions from '@/pages/mobile/MobileTransactions'
 import MobileProfile from '@/pages/mobile/MobileProfile'
 import MobileAutoRoute from '@/components/MobileAutoRoute'
 
@@ -112,6 +112,14 @@ export default function App() {
               }
             />
             <Route
+              path="/bonuses"
+              element={
+                <RequireRole allow={['admin']}>
+                  <Bonuses />
+                </RequireRole>
+              }
+            />
+            <Route
               path="/profile"
               element={
                 <RequireRole allow={['admin', 'administration', 'recruiter']}>
@@ -119,10 +127,10 @@ export default function App() {
                 </RequireRole>
               }
             />
-            {/* Batch 4 Phase D2: mobile route group (shared MobileShell).
-                Uses withLayout={false} so the desktop Layout doesn't ALSO
-                render its sidebar on top of MobileShell (the double-shell
-                bug fixed in the 2026-04-23 MOBILE_AND_PROFILE_FIX). */}
+            {/* Batch 5 Phase C: mobile is scoped to hours-only. The
+                /m/transactions route from batch 4 is removed — phones never
+                need the admin transactions surface. withLayout={false}
+                guarantees no admin sidebar leaks into MobileShell. */}
             <Route
               path="/m"
               element={
@@ -133,8 +141,9 @@ export default function App() {
             >
               <Route index element={<Navigate to="/m/hours" replace />} />
               <Route path="hours" element={<MobileHours />} />
-              <Route path="transactions" element={<MobileTransactions />} />
               <Route path="profile" element={<MobileProfile />} />
+              {/* Legacy mobile transactions route → redirect to hours. */}
+              <Route path="transactions" element={<Navigate to="/m/hours" replace />} />
             </Route>
             <Route path="/portal" element={<Navigate to="/login" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />

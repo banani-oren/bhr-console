@@ -9,6 +9,7 @@ import {
   Shield,
   Briefcase,
   FileText,
+  Trophy,
   LogOut,
   Download,
   Smartphone,
@@ -43,6 +44,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'עסקאות',        to: '/transactions', icon: <Receipt size={18} />,         allow: ['admin', 'administration', 'recruiter'] },
   { label: 'יומן שעות',     to: '/hours',        icon: <Clock size={18} />,           allow: ['admin', 'administration', 'recruiter'] },
   { label: 'דוחות חיוב',    to: '/billing-reports', icon: <FileText size={18} />,     allow: ['admin', 'administration'] },
+  { label: 'בונוסים',       to: '/bonuses',      icon: <Trophy size={18} />,          allow: ['admin'] },
   { label: 'צוות',          to: '/team',         icon: <UserCog size={18} />,         allow: ['admin'] },
   { label: 'שירותים',       to: '/services',     icon: <Briefcase size={18} />,       allow: ['admin'] },
   { label: 'ניהול משתמשים', to: '/users',        icon: <Shield size={18} />,          allow: ['admin'] },
@@ -92,7 +94,7 @@ export default function Layout({ children }: LayoutProps) {
   return (
     <div className="flex min-h-screen bg-background">
       {/* Sidebar — rendered on the right in RTL */}
-      <aside className="w-64 flex flex-col bg-sidebar text-sidebar-foreground shrink-0">
+      <aside className="admin-sidebar w-64 h-screen flex flex-col bg-sidebar text-sidebar-foreground shrink-0 sticky top-0">
         {/* Logo / App title */}
         <div className="flex items-center gap-2 px-5 py-5 border-b border-sidebar-border">
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-sidebar-primary text-sidebar-primary-foreground font-bold text-sm select-none">
@@ -103,8 +105,9 @@ export default function Layout({ children }: LayoutProps) {
           </span>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {/* Navigation — min-h-0 lets the overflow-y-auto kick in inside a
+            flex column parent so the footer stays anchored at the bottom. */}
+        <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto">
           {visibleItems.map((item) => (
             <NavLink
               key={item.to}
@@ -125,31 +128,32 @@ export default function Layout({ children }: LayoutProps) {
           ))}
         </nav>
 
-        {/* User info + sign out */}
-        <div className="border-t border-sidebar-border px-4 py-4">
-          {user && (
-            <button
-              type="button"
-              onClick={() => navigate('/profile')}
-              className="w-full flex items-center gap-3 mb-3 text-right rounded-lg px-2 py-1.5 -mx-2 hover:bg-sidebar-accent/50 transition-colors"
-              title="הפרופיל שלי"
-            >
-              {/* Avatar placeholder */}
-              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-sidebar-primary text-sidebar-primary-foreground text-xs font-semibold shrink-0 select-none">
-                {((profile?.full_name || user.email) ?? '?').charAt(0).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-sidebar-foreground truncate">
-                  {profile?.full_name?.trim() || user.email}
+        {/* Phase E: profile + actions footer. mt-auto + shrink-0 anchors
+            it to the bottom; data-testid for the QA assertion. */}
+        <div
+          className="sidebar-footer mt-auto shrink-0 border-t border-sidebar-border px-4 py-4"
+          data-testid="sidebar-footer"
+        >
+          <button
+            type="button"
+            onClick={() => navigate('/profile')}
+            className="w-full flex items-center gap-3 mb-3 text-right rounded-lg px-2 py-1.5 -mx-2 hover:bg-sidebar-accent/50 transition-colors"
+            title="הפרופיל שלי"
+          >
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-sidebar-primary text-sidebar-primary-foreground text-xs font-semibold shrink-0 select-none">
+              {(((profile?.full_name?.trim() || user?.email) ?? '?')).charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-sidebar-foreground truncate">
+                {profile?.full_name?.trim() || user?.email || 'אורח'}
+              </p>
+              {profile?.role && (
+                <p className="text-[10px] tracking-wider text-sidebar-foreground/60">
+                  {ROLE_LABELS_HE[profile.role]}
                 </p>
-                {profile?.role && (
-                  <p className="text-[10px] tracking-wider text-sidebar-foreground/60">
-                    {ROLE_LABELS_HE[profile.role]}
-                  </p>
-                )}
-              </div>
-            </button>
-          )}
+              )}
+            </div>
+          </button>
 
           {installPrompt && !isStandalone && (
             <button
@@ -161,11 +165,16 @@ export default function Layout({ children }: LayoutProps) {
             </button>
           )}
           <button
-            onClick={() => navigate('/m/hours')}
-            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors mb-1"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem('bhr_force_desktop', '0')
+              }
+              navigate('/m/hours')
+            }}
+            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium border border-purple-400 text-purple-200 hover:bg-purple-600 hover:text-white transition-colors mb-1"
           >
             <Smartphone size={16} />
-            <span>תצוגה ניידת</span>
+            <span>תצוגת מובייל</span>
           </button>
           <button
             onClick={handleSignOut}

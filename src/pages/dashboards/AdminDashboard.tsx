@@ -33,6 +33,7 @@ import {
   Percent,
   Clock,
 } from 'lucide-react'
+import BonusWidget from '@/components/BonusWidget'
 
 // ── constants ──────────────────────────────────────────────────────────────
 const CHART_COLORS = ['#7c3aed', '#a855f7', '#c084fc', '#e9d5ff', '#8b5cf6']
@@ -201,6 +202,9 @@ export default function AdminDashboard() {
       <h1 className="text-2xl font-bold tracking-tight text-foreground">
         דשבורד
       </h1>
+
+      {/* Phase B mini-widget — bonus snapshot for the current month */}
+      <BonusWidget />
 
       {/* ── KPI grid ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
