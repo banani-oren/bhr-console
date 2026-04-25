@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/table'
 import {
   computeMonthlyBonusRows, transactionMonth, calculateBonus,
-  bonusBreakdown, filterRevenueTransactions,
+  bonusBreakdown, filterByEmployee,
 } from '@/lib/bonus'
 
 const HEBREW_MONTHS = [
@@ -48,13 +48,18 @@ export default function Bonuses() {
   const [periodYear, setPeriodYear] = useState<number>(TODAY.getFullYear())
   const [sortBy, setSortBy] = useState<SortKey>('bonus')
 
-  // 24 months back (per spec C2.1).
+  // 6 months forward (תחזית) + current + 23 months back = 30 entries.
   const monthOptions = useMemo(() => {
-    const out: { y: number; m: number; label: string }[] = []
-    let y = TODAY.getFullYear()
-    let m = TODAY.getMonth() + 1
-    for (let i = 0; i < 24; i++) {
-      out.push({ y, m, label: `${HEBREW_MONTHS[m - 1]} ${y}` })
+    const out: { y: number; m: number; label: string; future: boolean }[] = []
+    const todayM = TODAY.getMonth() + 1
+    const todayY = TODAY.getFullYear()
+    // Start 6 months ahead
+    let y = todayY
+    let m = todayM + 6
+    while (m > 12) { m -= 12; y += 1 }
+    for (let i = 0; i < 30; i++) {
+      const future = y > todayY || (y === todayY && m > todayM)
+      out.push({ y, m, future, label: `${HEBREW_MONTHS[m - 1]} ${y}${future ? ' (תחזית)' : ''}` })
       m -= 1
       if (m === 0) { m = 12; y -= 1 }
     }
@@ -106,7 +111,7 @@ export default function Bonuses() {
           reachedTier: false,
         }
       }
-      const filtered = filterRevenueTransactions(txns, p.bonus_model).filter((t) => {
+      const filtered = filterByEmployee(txns, p.full_name ?? '').filter((t) => {
         const tm = transactionMonth(t)
         return tm && tm.month === periodMonth && tm.year === periodYear
       })
@@ -307,14 +312,11 @@ function EmployeeCard({
   // YTD: sum of monthly bonuses for completed months in this calendar year.
   const ytdBonus = (() => {
     let total = 0
+    const empTxns = filterByEmployee(txns, row.profile.full_name ?? '')
     for (let m = 1; m <= periodMonth; m++) {
-      const monthTxns = txns.filter((t) => {
+      const monthTxns = empTxns.filter((t) => {
         const tm = transactionMonth(t)
-        if (!tm || tm.year !== periodYear || tm.month !== m) return false
-        const f = row.profile.bonus_model?.filter
-        if (!f) return false
-        const cell = (t as unknown as Record<string, unknown>)[f.field]
-        return cell != null && String(cell).toLowerCase().includes((f.contains ?? '').toLowerCase())
+        return tm && tm.year === periodYear && tm.month === m
       })
       const rev = monthTxns.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
       total += calculateBonus(rev, tiers)
@@ -323,18 +325,18 @@ function EmployeeCard({
   })()
 
   const trendData = (() => {
-    const arr: { month: string; bonus: number }[] = []
+    const empTxns = filterByEmployee(txns, row.profile.full_name ?? '')
+    const arr: { month: string; bonus: number; future: boolean }[] = []
+    const todayM = new Date().getMonth() + 1
+    const todayY = new Date().getFullYear()
     for (let m = 1; m <= 12; m++) {
-      const monthTxns = txns.filter((t) => {
+      const monthTxns = empTxns.filter((t) => {
         const tm = transactionMonth(t)
-        if (!tm || tm.year !== periodYear || tm.month !== m) return false
-        const f = row.profile.bonus_model?.filter
-        if (!f) return false
-        const cell = (t as unknown as Record<string, unknown>)[f.field]
-        return cell != null && String(cell).toLowerCase().includes((f.contains ?? '').toLowerCase())
+        return tm && tm.year === periodYear && tm.month === m
       })
       const rev = monthTxns.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
-      arr.push({ month: HEBREW_MONTHS[m - 1].slice(0, 3), bonus: calculateBonus(rev, tiers) })
+      const future = periodYear > todayY || (periodYear === todayY && m > todayM)
+      arr.push({ month: HEBREW_MONTHS[m - 1].slice(0, 3), bonus: calculateBonus(rev, tiers), future })
     }
     return arr
   })()
@@ -428,7 +430,12 @@ function EmployeeCard({
                 <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
                 <Tooltip formatter={(v) => ILS.format(Number(v) || 0)} />
-                <Bar dataKey="bonus" fill="#7c3aed" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="bonus" radius={[2, 2, 0, 0]} fill="#7c3aed"
+                  shape={(props: any) => {
+                    const fill = props.future ? '#c4b5fd' : '#7c3aed'
+                    return <rect x={props.x} y={props.y} width={props.width} height={props.height} fill={fill} rx={2} />
+                  }}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
