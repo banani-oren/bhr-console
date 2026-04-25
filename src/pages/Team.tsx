@@ -253,6 +253,14 @@ export default function Team() {
   })
   const saveMutation = useSafeMutation<{ id: string; payload: Partial<Profile> }, Profile[]>({
     mutationFn: async ({ id, payload }, signal) => {
+      const bm = payload.bonus_model
+      if (bm) {
+        for (const t of bm.tiers) {
+          if (!Number.isFinite(t.min) || !Number.isFinite(t.bonus) || t.min < 0 || t.bonus < 0) {
+            throw new Error('ערכי מדרגות לא תקינים — חובה מספרים אי-שליליים')
+          }
+        }
+      }
       const { data, error } = await supabase
         .from('profiles')
         .update(payload)
