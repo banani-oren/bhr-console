@@ -123,29 +123,6 @@ function EmployeeFormBody({ form, onChange }: FormBodyProps) {
 
       {form.bonus_enabled && (
         <div className="space-y-4 pl-2 border-r-2 border-purple-200 pr-3">
-          {/* Filter */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="tm-filter-field">שדה סינון</Label>
-              <Input
-                id="tm-filter-field"
-                value={form.bonus_filter_field}
-                onChange={(e) => set('bonus_filter_field', e.target.value)}
-                placeholder="service_lead"
-                dir="ltr"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="tm-filter-contains">מכיל</Label>
-              <Input
-                id="tm-filter-contains"
-                value={form.bonus_filter_contains}
-                onChange={(e) => set('bonus_filter_contains', e.target.value)}
-                placeholder="נועה"
-              />
-            </div>
-          </div>
-
           {/* Tiers table */}
           <div className="space-y-2">
             <Label>מדרגות בונוס</Label>
@@ -261,14 +238,17 @@ export default function Team() {
           }
         }
       }
-      const { data, error } = await supabase
-        .from('profiles')
-        .update(payload)
-        .eq('id', id)
-        .select()
-        .abortSignal(signal)
-      if (error) throw new Error(error.message)
-      return (data ?? []) as Profile[]
+      // Promise.race ensures the call is cancelled when signal fires even if
+      // Supabase's .abortSignal() doesn't propagate to the underlying fetch.
+      const result = await Promise.race<{ error: { message: string } | null }>([
+        supabase.from('profiles').update(payload).eq('id', id).abortSignal(signal) as Promise<any>,
+        new Promise<never>((_, rej) => {
+          if (signal.aborted) { rej(new DOMException('Aborted', 'AbortError')); return }
+          signal.addEventListener('abort', () => rej(new DOMException('Aborted', 'AbortError')), { once: true })
+        }),
+      ])
+      if (result.error) throw new Error(result.error.message)
+      return []
     },
     invalidate: [['team-employees']],
     onSuccess: () => {
