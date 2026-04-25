@@ -7,11 +7,10 @@ import SetPassword from '@/pages/SetPassword'
 import Dashboard from '@/pages/Dashboard'
 import Clients from '@/pages/Clients'
 import Transactions from '@/pages/Transactions'
-import HoursLog from '@/pages/HoursLog'
+import HoursPage from '@/pages/hours/HoursPage'
 import Team from '@/pages/Team'
 import Users from '@/pages/Users'
 import Services from '@/pages/Services'
-import HoursReport from '@/pages/HoursReport'
 import BillingReports from '@/pages/BillingReports'
 import Bonuses from '@/pages/Bonuses'
 import Profile from '@/pages/Profile'
@@ -67,7 +66,7 @@ export default function App() {
               path="/hours"
               element={
                 <RequireRole allow={['admin', 'administration', 'recruiter']}>
-                  <HoursLog />
+                  <HoursPage />
                 </RequireRole>
               }
             />
@@ -95,14 +94,9 @@ export default function App() {
                 </RequireRole>
               }
             />
-            <Route
-              path="/hours/report"
-              element={
-                <RequireRole allow={['admin']}>
-                  <HoursReport />
-                </RequireRole>
-              }
-            />
+            {/* Legacy /hours/report route — the report is now a dialog inside
+                the rebuilt /hours admin tab; redirect old bookmarks. */}
+            <Route path="/hours/report" element={<Navigate to="/hours" replace />} />
             <Route
               path="/billing-reports"
               element={

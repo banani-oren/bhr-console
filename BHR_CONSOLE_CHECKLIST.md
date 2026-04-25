@@ -1,7 +1,7 @@
 # BHR Console — Acceptance Checklist (v2)
 
 Every item below is a pass/fail check verifiable on the live site at
-https://bhr-console.vercel.app using the browser tools available via `--chrome`.
+https://app.banani-hr.com using the browser tools available via `--chrome`.
 Mark a box `[x]` ONLY after the check has been verified by real interaction against the
 live production URL — not localhost, not the `dist/` build output.
 
@@ -99,16 +99,63 @@ commit, push, wait ~90 seconds for Vercel to deploy, re-verify, then mark the bo
 - [x] Import button accepts Excel — preview → confirm → save
 - [x] Page does not hang or freeze on load; no console errors; no 4xx/5xx
 
-## 6. Hours Log (`/hours`)
+## 6. Hours Log (`/hours`) — REBUILT 2026-04-25 (`src/pages/hours/`)
 
-- [x] Tabs appear per retainer client (one tab per client) — `QA Test Client (autotest)` tab appeared after seeding hours_log rows
-- [x] Month/year selector defaults to current month — shows `4 / 2026` on mount (today is 2026-04-18)
-- [x] Table shows: date, hours, description, and category column only if the employee has `hours_category_enabled` — confirmed
-- [x] Add-visit form saves with success feedback and invalidates queries — `handleSaveVisit` + `insertHours` mutation in HoursLog.tsx
-- [x] "סגור חודש" button shows a confirmation dialog — clicked → dialog with `סגירת חודש` + total hours preview appeared
-- [x] Confirming "סגור חודש" upserts a Transaction for `client_name + month + year` — verified: DB has a single `ריטיינר` transaction for QA Test Client / Apr 2026 / net_invoice_amount=7.5
-- [x] Re-running "סגור חודש" for the same client+month updates (not duplicates) the Transaction — `closeMonth.mutationFn` branches on `existing.find()` → update vs insert; after confirm only 1 retainer txn exists
-- [x] Page does not hang or freeze on load; no console errors; no 4xx/5xx
+The hours module was rebuilt from scratch in REBUILD_HOURS_AND_CLEANUP.
+Three views: `השעות שלי` (everyone), `ניהול שעות` (admin only), and a
+`הפק דוח שעות` dialog (admin only, launched from the manage tab).
+
+**View 1 — `השעות שלי` (default for non-admin; admin tab):**
+
+- [ ] Filter row has a `<ClientPicker>` (placeholder `כל הלקוחות שלי`),
+      a month `<Select>`, a year `<Select>`, and a purple `+ הוסף דיווח`
+      button. The button is always visible regardless of selected client.
+- [ ] The picker filter restricts to clients in `client_time_log_permissions`
+      AND `time_log_enabled = true` for non-admin (admin: all
+      `time_log_enabled` clients).
+- [ ] The picker dropdown re-opens when the field is clicked even with a
+      value already selected (the swappable-in-place fix).
+- [ ] Empty client + a month with data → all my hours for the month.
+      Selected client → only that client's hours.
+- [ ] Table columns: תאריך / לקוח / משעה / עד שעה / שעות / תיאור /
+      פעולות (pencil edit, trash delete). Empty state:
+      `אין דיווחים בחודש זה`.
+- [ ] Footer: `סה"כ שעות — <חודש> <שנה>: X` updates after add/edit/delete.
+- [ ] `+ הוסף דיווח` opens a dialog with NO pre-selected client (even when
+      the page filter has one). First field is the same picker. Save uses
+      `useSafeMutation` (15 s timeout). Inserts with `profile_id =
+      auth.uid()` and computed `hours = (end - start) / 60`.
+- [ ] Pencil opens the same dialog pre-filled. Trash opens a confirm
+      dialog and deletes.
+
+**View 2 — `ניהול שעות` (admin only):**
+
+- [ ] Filter row has a `<ClientPicker filter={c => c.time_log_enabled}>`
+      (NOT permission-scoped), a month/year selector, conditional `+ הוסף
+      דיווח` (visible only when a client is selected), conditional
+      `סגור חודש` (visible only when a client is selected, disabled when
+      no hours). `הפק דוח שעות` is always visible.
+- [ ] No client selected → empty state: `בחר לקוח כדי להציג דיווחים`.
+- [ ] When a client is selected: table shows ALL employees' hours for
+      that client + month, with an extra `עובד` column.
+- [ ] `סגור חודש` upserts a `kind=service / service_type=ריטיינר`
+      transaction with `net_invoice_amount = totalHours`. If one already
+      exists for `<client + month + year>`, it's updated, not duplicated.
+
+**View 3 — `הפק דוח שעות` dialog (admin only):**
+
+- [ ] Opens with the manage-tab's currently selected client pre-filled
+      (still changeable via its own picker).
+- [ ] Period defaults to (first-of-current-month → today). Optional
+      employee multi-select (default: all permitted profiles for the
+      client). `הפק דוח` downloads a branded jspdf PDF; `צור עסקה
+      מהדוח` opens the TransactionDialog with `kind='time_period'`
+      pre-seeded.
+
+**Cross-cutting:**
+
+- [ ] Page does not hang or freeze on load; no console errors; no 4xx/5xx.
+- [ ] Mobile (`/m/hours`) follows the same View 1 layout, full-width.
 
 ## 7. Team (`/team`)
 

@@ -482,13 +482,38 @@ components (`src/pages/dashboards/*.tsx`) based on `profile.role`.
 - **Import button**: Excel import
 - Save handler: try-catch, success/error toast
 
-#### 4. `/hours` — Hours Log
-- Tabs per client (retainer clients)
-- Month/year selector
-- Table: date, hours, description, category (if applicable)
-- Add visit form with save feedback
-- **סגור חודש** button: upserts Transaction record for client/month
-- Close month has confirmation dialog with success/error feedback
+#### 4. `/hours` — Hours Log (rebuilt 2026-04-25)
+
+`src/pages/hours/HoursPage.tsx` is the entry point. Three views:
+
+- **`השעות שלי` (default for non-admin; first tab for admin)** —
+  `MyHoursView`. Filter row: `<ClientPicker>` (placeholder
+  `כל הלקוחות שלי`, predicate = clients in
+  `client_time_log_permissions` ∩ `time_log_enabled = true`; for admins,
+  every `time_log_enabled` client) + month/year selectors + a
+  `+ הוסף דיווח` button (always visible). Table of
+  `hours_log` rows scoped to `profile_id = auth.uid()` for the chosen
+  month/year and (optionally) client. Footer total recomputes on
+  add/edit/delete.
+- **`ניהול שעות` (admin only)** — `ManageHoursView`. Filter row:
+  `<ClientPicker filter={c => c.time_log_enabled}>` over ALL
+  time-logged clients + month/year. When a client is selected the
+  table shows every employee's hours for that client + month with an
+  extra `עובד` column; `+ הוסף דיווח`, `סגור חודש`, and `הפק דוח שעות`
+  buttons appear next to the filter. `סגור חודש` upserts a
+  `service_type='ריטיינר'` transaction for the client+month with
+  `net_invoice_amount = totalHours`.
+- **`הפק דוח שעות` (admin only, dialog)** — `HoursReportDialog`.
+  Picker (filter `time_log_enabled`), period (default first-of-month
+  → today), optional employee multi-select. Renders a branded jspdf
+  PDF. `צור עסקה מהדוח` opens `TransactionDialog` with
+  `kind='time_period'` pre-filled.
+
+The add-entry dialog (`HoursEntryDialog`) is shared by both views.
+Wraps the insert/update via `useSafeMutation` with the standard 15 s
+timeout. The first field is the same `<ClientPicker>` as the page;
+clicking it (even with a value selected) re-opens the search dropdown
+so the user can swap clients without first clearing.
 
 #### 5. `/team` — Team (non-admin users)
 - Admin-only page. Queries `profiles WHERE role IN ('recruiter','administration')`.
@@ -1107,10 +1132,40 @@ _(none)_
 
 - **GitHub → Vercel auto-deploy**: ✅ `banani-oren/bhr-console` is connected to Vercel. Every `git push origin main` triggers an automatic deploy. No manual `vercel --prod` needed.
 - **Resend verified sender** (`banani-hr.com`, eu-west-1): ✅ wired into both the `invite-user` edge function (`INVITE_FROM_EMAIL` override available) and Supabase Auth SMTP (`smtp_sender_name=BHR Console`, `smtp_admin_email=no-reply@banani-hr.com`). See `EMAIL_FIX_REPORT.md`.
-- **Three-role access control + role-aware RLS**: ✅ see §"User Roles (three-role model — v8)", §"RLS Policies (v8)", and `SECURITY_FIX_REPORT.md`. Invite-link bypass closed.
+- **Three-role access control + role-aware RLS**: ✅ see §"User Roles (three-role model — v8)", §"RLS Policies (v8)", and `_archive/SECURITY_FIX_REPORT.md`. Invite-link bypass closed.
 
 ---
 
-*Last updated: April 18 2026 — v8 (three-role access control, role-aware RLS, `/set-password` invite flow, `/portal` + `portal_token` removed)*
+## Historical references
+
+Every prior autonomous-run prompt and report lives in `_archive/`
+(see `_archive/INDEX.md` for a one-line description per file).
+Highlights for understanding the current state:
+
+- `_archive/IMPROVEMENTS_BATCH_2.md` — service_types + transactions
+  wizard + time-log + PDF agreement extraction.
+- `_archive/REFINEMENTS_BATCH_3.md` — `transactions.kind` model
+  (`service` vs `time_period`), single-panel transaction dialog,
+  billing reports.
+- `_archive/REFINEMENTS_BATCH_4.md` — PWA / `/m` mobile shell /
+  ClientPicker / useSafeMutation / DateInput.
+- `_archive/REFINEMENTS_BATCH_5.md` — universal `dd/mm/yy` dates +
+  bonus dashboard + sidebar footer.
+- `_archive/IMPORT_REPORT_2026-04-23.md` — one-time import of Oren's
+  master spreadsheet (28 transactions + 40 hours_log).
+- `_archive/URGENT_FIXES_REPORT.md` — Noa invite root-cause fix
+  (always-upsert profile in invite-user).
+- `_archive/QUICK_FIXES_REPORT.md` — admin-update-user edge function
+  + ClientPicker swap-in-place fix + tighter mobile guide.
+
+The `/hours` module documented in §4 above replaces what the prior
+batches built — see `REBUILD_HOURS_AND_CLEANUP.md` (after this
+batch is archived, also under `_archive/`).
+
+---
+
+*Last updated: April 25 2026 — v9 (rebuilt /hours module under
+`src/pages/hours/`, archived historical prompts/reports under
+`_archive/`)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*
