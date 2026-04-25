@@ -22,6 +22,7 @@ authoritative current state lives in:
 | `REFINEMENTS_BATCH_5.md` | 2026-04-25 | dd/mm/yy dates, bonus dashboard, mobile rethink, ClientCombobox everywhere, sidebar footer, full QA pass |
 | `URGENT_FIXES_NOA_HOURS_BONUS.md` | 2026-04-25 | Noa root-cause + always-upsert profile, hours picker always visible, /bonuses rebuild |
 | `QUICK_FIXES_NAME_HOURS.md` | 2026-04-25 | admin-update-user edge function + UserEditDialog, ClientPicker swappable in place, mobile guide v1 |
+| `REBUILD_HOURS_AND_CLEANUP.md` | 2026-04-25 | hard-reset rebuild of the /hours module; archive root prompts/reports under `_archive/`; full employee onboarding guide |
 | `SECURITY_FIX_AND_ROLES.md` | 2026-04-18 | three-role access model + role-aware RLS + invite-link bypass closure |
 | `DOMAIN_SETUP.md` | 2026-04-18 | move from bhr-console.vercel.app to app.banani-hr.com |
 | `DOMAIN_BLANK_FIX.md` | 2026-04-22 | white-screen fix on the new domain |
@@ -54,3 +55,4 @@ authoritative current state lives in:
 | `EMAIL_FIX_REPORT.md` | 2026-04-18 | Resend sender configuration verification |
 | `VERCEL_BUILD_FIX_REPORT.md` | 2026-04-22 | why Fix C (.npmrc) was the surgical option |
 | `RUN_REPORT.md` | 2026-04-18 | first autonomous full-checklist run |
+| `REBUILD_REPORT.md` | 2026-04-25 | execution log for REBUILD_HOURS_AND_CLEANUP — file moves, new file tree, Phase A spec compliance table, full mobile-guide quote |
