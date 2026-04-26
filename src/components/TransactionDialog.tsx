@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Clock, RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import type { Client, HoursLog, Profile, Transaction, TransactionKind } from '@/lib/types'
+import type { Client, HoursLog, Profile, Supplier, Transaction, TransactionKind } from '@/lib/types'
 import {
   type ServiceField,
   type ServiceType,
@@ -105,6 +105,10 @@ type DialogState = {
   hourly_rate_used: number | null
   net_invoice_amount: number | null
   selectedHoursIds: Set<string>
+
+  // supplier
+  supplier_id: string | null
+  supplier_percent: number | null
 }
 
 function today(): string {
@@ -162,6 +166,8 @@ function emptyState(profileName: string): DialogState {
     hourly_rate_used: null,
     net_invoice_amount: null,
     selectedHoursIds: new Set(),
+    supplier_id: null,
+    supplier_percent: null,
   }
 }
 
@@ -208,6 +214,18 @@ export default function TransactionDialog({
         .order('full_name', { ascending: true })
       if (error) throw error
       return data as Profile[]
+    },
+  })
+
+  const { data: suppliers = [] } = useQuery<Supplier[]>({
+    queryKey: ['suppliers'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('suppliers')
+        .select('*')
+        .order('last_name', { ascending: true })
+      if (error) throw error
+      return data as Supplier[]
     },
   })
 
@@ -262,6 +280,8 @@ export default function TransactionDialog({
         hourly_rate_used: editing.hourly_rate_used,
         net_invoice_amount: editing.net_invoice_amount,
         selectedHoursIds: new Set(),
+        supplier_id: editing.supplier_id ?? null,
+        supplier_percent: editing.supplier_percent ?? null,
       })
     } else {
       const s = emptyState(profile?.full_name ?? '')
@@ -445,6 +465,8 @@ export default function TransactionDialog({
         payment_due_date: state.payment_due_date,
         notes: state.notes,
         custom_fields: state.custom,
+        supplier_id: state.supplier_id,
+        supplier_percent: state.supplier_percent,
         ...mirrored,
       }
       if (state.kind === 'time_period') {
@@ -606,14 +628,16 @@ export default function TransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent dir="rtl" className="sm:max-w-6xl max-h-[92vh] overflow-y-auto">
+      <DialogContent dir="rtl" className="sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>
             {editing ? 'עריכת עסקה' : 'הוספת עסקה'}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          {/* LEFT panel: kind, client, auto-fields, kind-specific */}
+          <div className="space-y-5">
           {/* Kind pills */}
           <section className="space-y-2">
             <Label className="text-purple-700 text-sm">סוג</Label>
@@ -761,7 +785,7 @@ export default function TransactionDialog({
               </div>
             )}
             {!isTimePeriod && !selectedServiceType && (
-              <p className="text-sm text-muted-foreground">בחר סוג שירות כדי להציג שדות.</p>
+              <p className="text-sm text-muted-foreground">בחר סוג שירות.</p>
             )}
             {isTimePeriod && (
               <TimePeriodForm
@@ -773,7 +797,10 @@ export default function TransactionDialog({
               />
             )}
           </Card>
+          </div>
 
+          {/* RIGHT panel: invoicing, supplier */}
+          <div className="space-y-5">
           {/* Invoicing & payment */}
           <Card className="p-3">
             <h3 className="text-sm font-semibold text-purple-700 mb-2">חשבונית ותשלום</h3>
@@ -841,6 +868,51 @@ export default function TransactionDialog({
               </div>
             </div>
           </Card>
+
+          {/* Supplier */}
+          <Card className="p-3">
+            <h3 className="text-sm font-semibold text-purple-700 mb-2">ספק</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">ספק</Label>
+                <Select
+                  value={state.supplier_id ?? '__none__'}
+                  onValueChange={(v) =>
+                    setState((s) => ({ ...s, supplier_id: v === '__none__' ? null : v }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="ללא ספק" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">ללא ספק</SelectItem>
+                    {suppliers.map((sp) => (
+                      <SelectItem key={sp.id} value={sp.id}>
+                        {sp.last_name} {sp.first_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">אחוז ספק (%)</Label>
+                <Input
+                  type="number"
+                  dir="ltr"
+                  value={state.supplier_percent ?? ''}
+                  onChange={(e) =>
+                    setState((s) => ({
+                      ...s,
+                      supplier_percent: e.target.value === '' ? null : Number(e.target.value),
+                    }))
+                  }
+                  disabled={!state.supplier_id}
+                  placeholder={state.supplier_id ? '' : 'בחר ספק קודם'}
+                />
+              </div>
+            </div>
+          </Card>
+          </div>
         </div>
 
         <DialogFooter className="flex flex-col gap-2">

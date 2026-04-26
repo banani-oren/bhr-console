@@ -13,6 +13,7 @@ import {
   LogOut,
   Download,
   Smartphone,
+  Handshake,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
@@ -47,6 +48,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'בונוסים',       to: '/bonuses',      icon: <Trophy size={18} />,          allow: ['admin'] },
   { label: 'צוות',          to: '/team',         icon: <UserCog size={18} />,         allow: ['admin'] },
   { label: 'שירותים',       to: '/services',     icon: <Briefcase size={18} />,       allow: ['admin'] },
+  { label: 'ספקים',         to: '/suppliers',    icon: <Handshake size={18} />,       allow: ['admin'] },
   { label: 'ניהול משתמשים', to: '/users',        icon: <Shield size={18} />,          allow: ['admin'] },
 ]
 

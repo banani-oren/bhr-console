@@ -1136,6 +1136,59 @@ _(none)_
 
 ---
 
+## Claude Code — Autonomous Task Pattern
+
+All non-trivial tasks (imports, batch fixes, autonomous QA runs) follow this
+pattern so Cowork can prepare the work and Code can execute it cleanly:
+
+### Pattern
+
+1. **Cowork** reads the project context and creates a **prompt `.md` file**
+   in `App Dev/` root with:
+   - A **Read first** section listing the files Code must read before acting.
+   - **Hard rules** (secrets handling, target table, idempotency tagging).
+   - **Phased execution**: match → preview/gate → action → verify. Each
+     phase writes a file and the gate stops the run if issues exist.
+   - A **Rollback recipe** so any import can be undone.
+   - A **Termination** section that names the final report file.
+
+2. **Code** is given the prompt file path and runs it end-to-end without
+   asking questions, writing all output to the named report file.
+
+3. **After the run**, the prompt file + report are moved to `_archive/`
+   (manually or in the next Cowork session).
+
+### Prompt files (current + archive)
+
+| File | Status | Description |
+|------|--------|-------------|
+| `ONE_TIME_CSV_IMPORT.md` | archived | Import of 28 transactions + 40 hours from master CSV |
+| `CLAUDE_CODE_AUTONOMOUS.md` | active | Standing autonomous QA + bug-fix loop |
+| `IMPORT_AGREEMENTS_FROM_EXCEL.md` | **active** | Import agreement terms from "כרטיסי לקוחות" → `clients` |
+
+### One-time data imports — key rules
+
+- **Target the right table.** Agreement terms live on the `clients` table.
+  The `agreements` table is DEPRECATED — never write to it.
+- **Non-overwrite rule.** Only fill DB columns that are currently `null` /
+  empty / `false`. Never clobber values Oren has entered manually.
+- **Idempotency.** Running a script twice must produce the same DB state.
+- **Match gate.** If any source row cannot be fuzzy-matched to a DB client
+  above the threshold (0.40 Dice), write an `*_UNMATCHED.md` file and stop.
+  Resolve manually → add to `*_MATCH_REPORT.md` → re-run.
+- **Manual overrides.** Confirmed mappings are stored in `*_MATCH_REPORT.md`
+  and injected as a `MANUAL_OVERRIDES` map at the top of the script before
+  the live run.
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/import-agreements.mjs` | Import agreement terms from Excel → `clients` |
+| `scripts/generate-icons.mjs` | Regenerate PWA icons from SVG template |
+
+---
+
 ## Historical references
 
 Every prior autonomous-run prompt and report lives in `_archive/`
@@ -1164,8 +1217,6 @@ batch is archived, also under `_archive/`).
 
 ---
 
-*Last updated: April 25 2026 — v9 (rebuilt /hours module under
-`src/pages/hours/`, archived historical prompts/reports under
-`_archive/`)*
+*Last updated: April 26 2026 — v10 (added Claude Code task pattern + agreement import workflow)*
 *Repo: github.com/banani-oren/bhr-console*
 *Supabase project: szunbwkmldepkwpxojma (Frankfurt)*

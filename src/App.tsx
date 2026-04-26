@@ -11,6 +11,7 @@ import HoursPage from '@/pages/hours/HoursPage'
 import Team from '@/pages/Team'
 import Users from '@/pages/Users'
 import Services from '@/pages/Services'
+import Suppliers from '@/pages/Suppliers'
 import BillingReports from '@/pages/BillingReports'
 import Bonuses from '@/pages/Bonuses'
 import Profile from '@/pages/Profile'
@@ -91,6 +92,14 @@ export default function App() {
               element={
                 <RequireRole allow={['admin']}>
                   <Services />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/suppliers"
+              element={
+                <RequireRole allow={['admin']}>
+                  <Suppliers />
                 </RequireRole>
               }
             />

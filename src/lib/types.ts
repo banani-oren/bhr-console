@@ -1,5 +1,14 @@
 export type UserRole = 'admin' | 'administration' | 'recruiter'
 
+export type Supplier = {
+  id: string
+  first_name: string
+  last_name: string
+  email: string | null
+  mobile: string | null
+  created_at: string
+}
+
 export type Profile = {
   id: string
   full_name: string
@@ -103,6 +112,8 @@ export type Transaction = {
   hourly_rate_used: number | null
   time_sheet_pdf_path: string | null
   notes: string | null
+  supplier_id: string | null
+  supplier_percent: number | null
   created_at: string
 }
 
