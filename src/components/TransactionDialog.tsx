@@ -414,25 +414,30 @@ export default function TransactionDialog({
     }))
   }
 
-  const canSave = () => {
-    if (!state.client_id) return false
+  const missingFields = (): string[] => {
+    const m: string[] = []
+    if (!state.client_id) m.push('לקוח')
     if (state.kind === 'service') {
-      if (!state.service_type_id) return false
+      if (!state.service_type_id) m.push('סוג שירות')
       if (selectedServiceType) {
         for (const f of selectedServiceType.fields) {
-          if (f.required && (state.custom[f.key] == null || state.custom[f.key] === '')) return false
+          if (f.required && (state.custom[f.key] == null || state.custom[f.key] === '')) {
+            m.push(f.label)
+          }
         }
       }
     }
     if (state.kind === 'time_period') {
-      if (!state.period_start || !state.period_end) return false
-      if (state.hourly_rate_used == null) return false
+      if (!state.period_start) m.push('תחילת תקופה')
+      if (!state.period_end) m.push('סוף תקופה')
+      if (state.hourly_rate_used == null) m.push('תעריף שעה')
     }
-    return true
+    return m
   }
+  const missing = missingFields()
 
   const handleSave = async () => {
-    if (!canSave()) return
+    if (missing.length > 0) return
     setSaveStatus('saving')
     try {
       const mirrored: Record<string, unknown> = {}
@@ -864,10 +869,16 @@ export default function TransactionDialog({
         <DialogFooter className="flex flex-col gap-2">
           {saveStatus === 'success' && <p className="text-green-600 text-sm text-right">נשמר ✓</p>}
           {saveStatus === 'error' && <p className="text-red-600 text-sm text-right">שגיאה בשמירה</p>}
+          {saveStatus !== 'saving' && saveStatus !== 'success' && missing.length > 0 && (
+            <p className="text-amber-700 text-sm text-right">
+              לא ניתן לשמור — חסר: {missing.join(', ')}
+            </p>
+          )}
           <div className="flex gap-2 flex-row-reverse">
             <Button
               onClick={handleSave}
-              disabled={!canSave() || saveStatus === 'saving'}
+              disabled={saveStatus === 'saving' || saveStatus === 'success' || missing.length > 0}
+              title={missing.length > 0 ? `חסר: ${missing.join(', ')}` : undefined}
               className="bg-purple-600 hover:bg-purple-700 text-white"
             >
               {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
