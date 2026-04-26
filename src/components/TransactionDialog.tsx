@@ -629,7 +629,7 @@ export default function TransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent dir="rtl" className="max-w-4xl max-h-[92vh] overflow-y-auto">
+      <DialogContent dir="rtl" className="max-w-6xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {editing ? 'עריכת עסקה' : 'הוספת עסקה'}
@@ -877,7 +877,7 @@ export default function TransactionDialog({
           <div className="flex gap-2 flex-row-reverse">
             <Button
               onClick={handleSave}
-              disabled={saveStatus === 'saving' || saveStatus === 'success' || missing.length > 0}
+              disabled={saveStatus === 'saving' || saveStatus === 'success'}
               title={missing.length > 0 ? `חסר: ${missing.join(', ')}` : undefined}
               className="bg-purple-600 hover:bg-purple-700 text-white"
             >
