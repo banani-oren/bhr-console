@@ -629,7 +629,7 @@ export default function TransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent dir="rtl" className="max-w-6xl max-h-[92vh] overflow-y-auto">
+      <DialogContent dir="rtl" className="sm:max-w-6xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {editing ? 'עריכת עסקה' : 'הוספת עסקה'}
