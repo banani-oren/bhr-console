@@ -113,11 +113,6 @@ export default function HoursEntryDialog({
   })
 
   const computed = computeHours(startTime, endTime)
-  const missing: string[] = []
-  if (!clientId) missing.push('לקוח')
-  if (!startTime) missing.push('משעה')
-  if (!endTime) missing.push('עד שעה')
-  if (clientId && startTime && endTime && computed <= 0) missing.push('משך חיובי (עד-שעה אחרי משעה)')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -182,17 +177,11 @@ export default function HoursEntryDialog({
           {mut.saveStatus === 'success' && (
             <p className="text-sm text-green-600">{mode === 'edit' ? 'עודכן ✓' : 'נשמר ✓'}</p>
           )}
-          {mut.saveStatus !== 'saving' && mut.saveStatus !== 'success' && missing.length > 0 && (
-            <p className="text-sm text-amber-700">
-              לא ניתן לשמור — חסר: {missing.join(', ')}
-            </p>
-          )}
         </div>
         <DialogFooter className="flex gap-2 flex-row-reverse">
           <Button
-            disabled={missing.length > 0 || mut.saveStatus === 'saving'}
+            disabled={mut.saveStatus === 'saving'}
             onClick={() => void mut.mutate()}
-            title={missing.length > 0 ? `חסר: ${missing.join(', ')}` : undefined}
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
             {mut.saveStatus === 'saving' ? 'שומר...' : mode === 'edit' ? 'עדכן' : 'שמור'}

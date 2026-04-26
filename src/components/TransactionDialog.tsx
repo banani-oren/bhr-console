@@ -414,30 +414,7 @@ export default function TransactionDialog({
     }))
   }
 
-  const missingFields = (): string[] => {
-    const m: string[] = []
-    if (!state.client_id) m.push('לקוח')
-    if (state.kind === 'service') {
-      if (!state.service_type_id) m.push('סוג שירות')
-      if (selectedServiceType) {
-        for (const f of selectedServiceType.fields) {
-          if (f.required && (state.custom[f.key] == null || state.custom[f.key] === '')) {
-            m.push(f.label)
-          }
-        }
-      }
-    }
-    if (state.kind === 'time_period') {
-      if (!state.period_start) m.push('תחילת תקופה')
-      if (!state.period_end) m.push('סוף תקופה')
-      if (state.hourly_rate_used == null) m.push('תעריף שעה')
-    }
-    return m
-  }
-  const missing = missingFields()
-
   const handleSave = async () => {
-    if (missing.length > 0) return
     setSaveStatus('saving')
     try {
       const mirrored: Record<string, unknown> = {}
@@ -532,7 +509,7 @@ export default function TransactionDialog({
   const renderField = (f: ServiceField) => {
     const value = state.custom[f.key]
     const widthCls = f.width === 'full' ? 'md:col-span-2' : ''
-    const label = `${f.label}${f.required ? ' *' : ''}${f.derived ? ' 🔄' : ''}`
+    const label = `${f.label}${f.derived ? ' 🔄' : ''}`
     const wrap = (child: React.ReactNode) => (
       <div key={f.key} className={`space-y-1 ${widthCls}`}>
         <Label className="text-purple-700">{label}</Label>
@@ -869,16 +846,10 @@ export default function TransactionDialog({
         <DialogFooter className="flex flex-col gap-2">
           {saveStatus === 'success' && <p className="text-green-600 text-sm text-right">נשמר ✓</p>}
           {saveStatus === 'error' && <p className="text-red-600 text-sm text-right">שגיאה בשמירה</p>}
-          {saveStatus !== 'saving' && saveStatus !== 'success' && missing.length > 0 && (
-            <p className="text-amber-700 text-sm text-right">
-              לא ניתן לשמור — חסר: {missing.join(', ')}
-            </p>
-          )}
           <div className="flex gap-2 flex-row-reverse">
             <Button
               onClick={handleSave}
               disabled={saveStatus === 'saving' || saveStatus === 'success'}
-              title={missing.length > 0 ? `חסר: ${missing.join(', ')}` : undefined}
               className="bg-purple-600 hover:bg-purple-700 text-white"
             >
               {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
