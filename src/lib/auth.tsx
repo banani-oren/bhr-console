@@ -40,13 +40,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
-  // Detect recovery flow immediately from the URL hash (implicit flow) so
-  // there is no flicker between getSession() resolving and the
-  // PASSWORD_RECOVERY event arriving.
-  const [recoveryMode, setRecoveryMode] = useState<boolean>(() =>
-    typeof window !== 'undefined' &&
-    window.location.hash.includes('type=recovery'),
-  )
+  // Detect recovery flow before render. The URL hash (#type=recovery) is
+  // already consumed by the supabase client's detectSessionInUrl by the time
+  // AuthProvider mounts, so the hash check alone is unreliable. supabase.ts
+  // captures the flag synchronously at module-load time and persists it to
+  // sessionStorage; we read both sources here.
+  const [recoveryMode, setRecoveryMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    if (window.location.hash.includes('type=recovery')) return true
+    try {
+      return window.sessionStorage.getItem('bhr_recovery_mode') === '1'
+    } catch {
+      return false
+    }
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -179,6 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) {
           // Clear recovery mode whenever the session ends.
           setRecoveryMode(false)
+          try { window.sessionStorage.removeItem('bhr_recovery_mode') } catch { /* ignore */ }
           setUser(null)
           setProfile(null)
         }
