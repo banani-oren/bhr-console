@@ -17,6 +17,10 @@ type AuthContextValue = {
   user: User | null
   profile: Profile | null
   loading: boolean
+  /** True when the current session originated from a password-reset link.
+   *  Components use this to force the user through /set-password even if
+   *  profile.password_set is already true. Cleared on sign-out. */
+  recoveryMode: boolean
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
@@ -36,6 +40,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+  // Detect recovery flow immediately from the URL hash (implicit flow) so
+  // there is no flicker between getSession() resolving and the
+  // PASSWORD_RECOVERY event arriving.
+  const [recoveryMode, setRecoveryMode] = useState<boolean>(() =>
+    typeof window !== 'undefined' &&
+    window.location.hash.includes('type=recovery'),
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -106,15 +117,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 10000)
 
     // 2. Subscribe for subsequent auth state changes (sign-in / sign-out /
-    //    token-refresh). Do NOT touch `loading` here — only the initial
-    //    resolution above controls the loading flag. This prevents a
-    //    transient null-session event from toggling loading back on and
-    //    triggering a premature redirect.
+    //    token-refresh / password-recovery).
+    //
+    //    PASSWORD_RECOVERY must be handled even during the initial boot
+    //    sequence (before initialResolved), because the Supabase SDK fires
+    //    this event while getSession() is still in flight when the user
+    //    arrives via a reset-password link.  All other events are still
+    //    suppressed during init to avoid double-processing.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (cancelled) return
-      if (!initialResolved) return // let the initial resolution handle mount
+
+      if (event === 'PASSWORD_RECOVERY') {
+        // Mark recovery mode so RequireRole and SetPassword can react.
+        setRecoveryMode(true)
+        if (session?.user) {
+          const { data: profileRow } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .single()
+          if (cancelled) return
+          const reconciled = await syncProfileEmailIfStale(
+            session.user,
+            profileRow as Profile | null,
+          )
+          if (cancelled) return
+          setUser(session.user)
+          setProfile(reconciled)
+          // If getSession() hasn't resolved yet, complete initialisation now
+          // so the loading spinner doesn't hang.
+          if (!initialResolved) {
+            initialResolved = true
+            setLoading(false)
+          }
+        }
+        return
+      }
+
+      // For all other events, let the initial getSession() resolution handle
+      // the mount to avoid double-processing.
+      if (!initialResolved) return
 
       if (session?.user) {
         const { data: profileRow } = await supabase
@@ -133,6 +177,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else {
         if (!cancelled) {
+          // Clear recovery mode whenever the session ends.
+          setRecoveryMode(false)
           setUser(null)
           setProfile(null)
         }
@@ -178,7 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, recoveryMode, signIn, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   )

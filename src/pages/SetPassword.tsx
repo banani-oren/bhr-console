@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 
 export default function SetPassword() {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, recoveryMode } = useAuth()
   const navigate = useNavigate()
 
   const [password, setPassword] = useState('')
@@ -22,10 +22,14 @@ export default function SetPassword() {
       navigate('/login', { replace: true })
       return
     }
-    if (profile?.password_set) {
+    // Only redirect away when the password is already set AND we are NOT in a
+    // password-reset (recovery) flow.  If recoveryMode is true the user
+    // arrived via a reset-password link and must go through the form even if
+    // password_set is already true.
+    if (profile?.password_set && !recoveryMode) {
       navigate('/', { replace: true })
     }
-  }, [loading, user, profile, navigate])
+  }, [loading, user, profile, recoveryMode, navigate])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

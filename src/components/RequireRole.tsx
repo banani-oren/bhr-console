@@ -20,7 +20,7 @@ type Props = {
 }
 
 export default function RequireRole({ allow, children, withLayout = true }: Props) {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, recoveryMode } = useAuth()
 
   if (loading) {
     return (
@@ -34,7 +34,10 @@ export default function RequireRole({ allow, children, withLayout = true }: Prop
     return <Navigate to="/login" replace />
   }
 
-  if (!profile?.password_set) {
+  // Recovery-mode sessions must go through /set-password before anything else,
+  // even if password_set is already true (they need to actually change their
+  // password — not just reuse the recovery session to enter the app).
+  if (recoveryMode || !profile?.password_set) {
     return <Navigate to="/set-password" replace />
   }
 
