@@ -101,7 +101,8 @@ export default function Users() {
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
   // Reset-password transient
-  const [resetStatus, setResetStatus] = useState<{ email: string; ok: boolean } | null>(null)
+  const [resetStatus, setResetStatus] = useState<{ email: string; ok: boolean; errorMsg?: string } | null>(null)
+  const [resetLoading, setResetLoading] = useState<string | null>(null)
 
   // Role-change transient
   const [togglingRoleId, setTogglingRoleId] = useState<string | null>(null)
@@ -156,9 +157,25 @@ export default function Users() {
 
   async function handleResetPassword(email: string) {
     setResetStatus(null)
-    const { error } = await supabase.auth.resetPasswordForEmail(email)
-    setResetStatus({ email, ok: !error })
-    setTimeout(() => setResetStatus(null), 4000)
+    setResetLoading(email)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        // Direct the user to /set-password so the recovery session is handled
+        // correctly (the page reads the #type=recovery hash before it's stripped).
+        redirectTo: `${window.location.origin}/set-password`,
+      })
+      if (error) {
+        setResetStatus({ email, ok: false, errorMsg: error.message })
+      } else {
+        setResetStatus({ email, ok: true })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'שגיאה לא ידועה'
+      setResetStatus({ email, ok: false, errorMsg: msg })
+    } finally {
+      setResetLoading(null)
+      setTimeout(() => setResetStatus(null), 6000)
+    }
   }
 
   async function handleDelete() {
@@ -272,17 +289,28 @@ export default function Users() {
                           <Button
                             size="icon"
                             variant="ghost"
-                            title="איפוס סיסמה"
-                            disabled={!row.email}
+                            title={
+                              resetStatus?.email === row.email && !resetStatus.ok
+                                ? (resetStatus.errorMsg ?? 'שגיאה בשליחת האימייל')
+                                : 'שלח איפוס סיסמה'
+                            }
+                            disabled={!row.email || resetLoading === row.email}
                             onClick={() => handleResetPassword(row.email)}
                             className={
-                              resetStatus?.email === row.email && resetStatus.ok
-                                ? 'text-green-600'
+                              resetStatus?.email === row.email
+                                ? resetStatus.ok
+                                  ? 'text-green-600'
+                                  : 'text-destructive'
                                 : ''
                             }
                           >
                             <KeyRound className="h-4 w-4" />
                           </Button>
+                          {resetStatus?.email === row.email && !resetStatus.ok && (
+                            <span className="text-[11px] text-destructive max-w-[120px] leading-tight">
+                              {resetStatus.errorMsg ?? 'שגיאה'}
+                            </span>
+                          )}
                           <Button
                             size="icon"
                             variant="ghost"
