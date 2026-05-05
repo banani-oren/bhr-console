@@ -59,10 +59,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
     let initialResolved = false
 
-    // Batch 4.1 profile fix: when the Supabase auth row's email differs from
-    // the cached profiles.email (i.e. the user completed an email-change
-    // verification), reconcile the profile row so /users, /team, and the
-    // sidebar reflect the new address.
     const syncProfileEmailIfStale = async (
       authUser: User,
       loadedProfile: Profile | null,
@@ -82,11 +78,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return (data as Profile | null) ?? loadedProfile
     }
 
-    // 1. Prime the session synchronously from storage (or a short-lived
-    //    background refresh for near-expiry tokens). getSession() reads the
-    //    persisted session from localStorage and returns it WITHOUT a network
-    //    round-trip in the normal case — exactly what we need to avoid the
-    //    "no session → redirect to /login" flicker when a route changes.
     ;(async () => {
       try {
         const { data } = await supabase.auth.getSession()
@@ -117,27 +108,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })()
 
-    // 10s safety timeout — well above any normal latency, only trips if
-    // getSession() above truly never resolves (network hang).
     const timeout = setTimeout(() => {
       if (!cancelled && !initialResolved) setLoading(false)
     }, 10000)
 
-    // 2. Subscribe for subsequent auth state changes (sign-in / sign-out /
-    //    token-refresh / password-recovery).
-    //
-    //    PASSWORD_RECOVERY must be handled even during the initial boot
-    //    sequence (before initialResolved), because the Supabase SDK fires
-    //    this event while getSession() is still in flight when the user
-    //    arrives via a reset-password link.  All other events are still
-    //    suppressed during init to avoid double-processing.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (cancelled) return
 
       if (event === 'PASSWORD_RECOVERY') {
-        // Mark recovery mode so RequireRole and SetPassword can react.
         setRecoveryMode(true)
         if (session?.user) {
           const { data: profileRow } = await supabase
@@ -153,8 +133,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (cancelled) return
           setUser(session.user)
           setProfile(reconciled)
-          // If getSession() hasn't resolved yet, complete initialisation now
-          // so the loading spinner doesn't hang.
           if (!initialResolved) {
             initialResolved = true
             setLoading(false)
@@ -163,8 +141,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
 
-      // For all other events, let the initial getSession() resolution handle
-      // the mount to avoid double-processing.
       if (!initialResolved) return
 
       if (session?.user) {
@@ -184,7 +160,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else {
         if (!cancelled) {
-          // Clear recovery mode whenever the session ends.
           setRecoveryMode(false)
           try { window.sessionStorage.removeItem('bhr_recovery_mode') } catch { /* ignore */ }
           setUser(null)
@@ -203,13 +178,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string): Promise<void> => {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
-    // Don't manually set user/profile here — onAuthStateChange handles it
   }
 
   const signOut = async (): Promise<void> => {
     const { error } = await supabase.auth.signOut()
     if (error) throw error
-    // Don't manually clear state — onAuthStateChange handles it
   }
 
   const refreshProfile = async (): Promise<void> => {
