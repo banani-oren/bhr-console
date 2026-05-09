@@ -900,7 +900,7 @@ export default function Clients() {
       {/* Unified Client Card Dialog                                         */}
       {/* ================================================================== */}
       <Dialog open={cardOpen} onOpenChange={(open) => { if (!open) closeCard() }}>
-        <DialogContent dir="rtl" className="max-w-5xl w-[90vw] max-h-[92vh] overflow-y-auto">
+        <DialogContent dir="rtl" className="sm:max-w-5xl w-[90vw] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingClient ? `עריכת ${editingClient.name}` : 'לקוח חדש'}</DialogTitle>
           </DialogHeader>
