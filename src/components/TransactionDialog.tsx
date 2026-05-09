@@ -462,6 +462,18 @@ export default function TransactionDialog({
           serviceType: state.service_type_name,
         })
         await upsertBillingEvents(txnId, events)
+
+        // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
+        const txnApproved = approvalFields.approved_at != null || (editing && editing.approved_at)
+        if (txnApproved) {
+          const todayIso = new Date().toISOString().slice(0, 10)
+          await supabase
+            .from('billing_events')
+            .update({ status: 'to_bill' })
+            .eq('transaction_id', txnId)
+            .eq('status', 'pending')
+            .lte('billing_date', todayIso)
+        }
       }
 
       // Cancel future billing events when work_end_date is set.
