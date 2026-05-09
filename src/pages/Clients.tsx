@@ -900,7 +900,7 @@ export default function Clients() {
       {/* Unified Client Card Dialog                                         */}
       {/* ================================================================== */}
       <Dialog open={cardOpen} onOpenChange={(open) => { if (!open) closeCard() }}>
-        <DialogContent dir="rtl" className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent dir="rtl" className="max-w-5xl w-[90vw] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingClient ? `עריכת ${editingClient.name}` : 'לקוח חדש'}</DialogTitle>
           </DialogHeader>
@@ -909,7 +909,8 @@ export default function Clients() {
             {/* Section 1 — פרטי החברה */}
             <div>
               <h3 className="text-sm font-semibold text-purple-700 mb-3">פרטי החברה</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Row 1 */}
                 <div className="space-y-1.5">
                   <Label>שם לקוח *</Label>
                   <Input value={form.name} onChange={(e) => setField('name', e.target.value)} />
@@ -917,10 +918,6 @@ export default function Clients() {
                 <div className="space-y-1.5">
                   <Label>ח.פ.</Label>
                   <Input value={form.company_id} onChange={(e) => setField('company_id', e.target.value)} dir="ltr" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>כתובת</Label>
-                  <Input value={form.address} onChange={(e) => setField('address', e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>סטטוס</Label>
@@ -932,6 +929,17 @@ export default function Clients() {
                     </SelectContent>
                   </Select>
                 </div>
+                {/* Row 2 */}
+                <div className="space-y-1.5">
+                  <Label>כתובת</Label>
+                  <Input value={form.address} onChange={(e) => setField('address', e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>קבוצה</Label>
+                  <Input value={form.group_name} onChange={(e) => setField('group_name', e.target.value)} />
+                </div>
+                <div className="hidden md:block" />
+                {/* Row 3 */}
                 <div className="space-y-1.5">
                   <Label>איש קשר</Label>
                   <Input value={form.contact_name} onChange={(e) => setField('contact_name', e.target.value)} />
@@ -940,19 +948,15 @@ export default function Clients() {
                   <Label>טלפון</Label>
                   <Input value={form.phone} onChange={(e) => setField('phone', e.target.value)} dir="ltr" />
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
+                <div className="space-y-1.5">
                   <Label>מייל</Label>
                   <Input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} dir="ltr" />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>קבוצה</Label>
-                  <Input value={form.group_name} onChange={(e) => setField('group_name', e.target.value)} />
+                {/* Row 4 — full width */}
+                <div className="space-y-1.5 md:col-span-3">
+                  <Label>הערות</Label>
+                  <Textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} rows={2} />
                 </div>
-                <div />
-              </div>
-              <div className="space-y-1.5 mt-4">
-                <Label>הערות</Label>
-                <Textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} rows={2} />
               </div>
             </div>
 
@@ -961,7 +965,7 @@ export default function Clients() {
             {/* Section 2 — תנאי הסכם */}
             <div>
               <h3 className="text-sm font-semibold text-purple-700 mb-3">תנאי הסכם</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <Label>אחוז עמלה %</Label>
                   <Input
@@ -980,7 +984,7 @@ export default function Clients() {
                     onChange={(e) => setField('warranty_days', e.target.value)}
                   />
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
+                <div className="space-y-1.5">
                   <Label>תנאי תשלום</Label>
                   <Input
                     value={form.payment_terms}
@@ -988,24 +992,24 @@ export default function Clients() {
                     placeholder="שוטף + 30"
                   />
                 </div>
-              </div>
 
-              <div className="space-y-1.5 mt-4">
-                <Label>פיצול תשלום</Label>
-                <PaymentSplitEditor
-                  value={form.payment_split_json}
-                  onChange={(v) => setField('payment_split_json', v)}
-                />
-              </div>
+                <div className="space-y-1.5 md:col-span-3">
+                  <Label>פיצול תשלום</Label>
+                  <PaymentSplitEditor
+                    value={form.payment_split_json}
+                    onChange={(v) => setField('payment_split_json', v)}
+                  />
+                </div>
 
-              <div className="space-y-1.5 mt-4">
-                <Label>מקדמה</Label>
-                <AdvanceEditor
-                  advanceType={form.advance_type}
-                  advanceAmount={form.advance_amount}
-                  onTypeChange={(t) => setField('advance_type', t)}
-                  onAmountChange={(v) => setField('advance_amount', v)}
-                />
+                <div className="space-y-1.5 md:col-span-3">
+                  <Label>מקדמה</Label>
+                  <AdvanceEditor
+                    advanceType={form.advance_type}
+                    advanceAmount={form.advance_amount}
+                    onTypeChange={(t) => setField('advance_type', t)}
+                    onAmountChange={(v) => setField('advance_amount', v)}
+                  />
+                </div>
               </div>
             </div>
 
