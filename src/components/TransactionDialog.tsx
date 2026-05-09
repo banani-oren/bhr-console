@@ -60,6 +60,14 @@ const MIRRORED_KEYS = new Set([
   'service_lead',
 ])
 
+// Fields managed by Section 2 ("תאריכים") — skip in renderField to avoid duplicates.
+const SECTION2_MANAGED_KEYS = new Set([
+  'close_date',
+  'work_start_date',
+  'work_end_date',
+  'warranty_end_date',
+])
+
 export type DialogInitial = {
   kind?: TransactionKind
   service_type_id?: string | null
@@ -514,6 +522,7 @@ export default function TransactionDialog({
   }
 
   const renderField = (f: ServiceField) => {
+    if (SECTION2_MANAGED_KEYS.has(f.key)) return null
     const value = state.custom[f.key]
     const widthCls = f.width === 'full' ? 'md:col-span-2' : ''
     const label = `${f.label}${f.derived ? ' 🔄' : ''}`
@@ -624,7 +633,13 @@ export default function TransactionDialog({
                   onValueChange={(v) => v && handleServiceTypePick(v)}
                   disabled={isTimePeriod}
                 >
-                  <SelectTrigger><SelectValue placeholder={isTimePeriod ? 'דיווח שעות' : 'בחר סוג שירות'} /></SelectTrigger>
+                  <SelectTrigger>
+                    <span className="truncate text-sm">
+                      {isTimePeriod
+                        ? 'דיווח שעות'
+                        : state.service_type_name || 'בחר סוג שירות'}
+                    </span>
+                  </SelectTrigger>
                   <SelectContent>
                     {serviceTypes.map((st) => (
                       <SelectItem key={st.id} value={st.id}>{st.name}</SelectItem>
@@ -802,6 +817,8 @@ export default function TransactionDialog({
                 events={txnBillingEvents}
                 approved={transactionApproved}
                 onChange={() => refetchEvents()}
+                transaction={editing}
+                selectedClient={selectedClient}
               />
             </>
           )}
@@ -844,10 +861,14 @@ function BillingEventsPanel({
   events,
   approved,
   onChange,
+  transaction,
+  selectedClient,
 }: {
   events: BillingEvent[]
   approved: boolean
   onChange: () => void
+  transaction: Transaction
+  selectedClient: Client | null
 }) {
   return (
     <div>
@@ -855,12 +876,96 @@ function BillingEventsPanel({
         חיובים ותשלומים{!approved && <span className="text-amber-600 text-xs ms-2">(העסקה ממתינה לאישור)</span>}
       </h3>
       {events.length === 0 ? (
-        <p className="text-xs text-muted-foreground">אין אירועי חיוב לעסקה זו.</p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">אין אירועי חיוב לעסקה זו.</p>
+          {transaction.kind === 'service' && transaction.work_start_date && (
+            <GenerateBillingEventsButton
+              transaction={transaction}
+              selectedClient={selectedClient}
+              onGenerated={onChange}
+            />
+          )}
+        </div>
       ) : (
         <div className="space-y-2">
           {events.map((e) => <BillingEventRow key={e.id} event={e} onSaved={onChange} />)}
         </div>
       )}
+    </div>
+  )
+}
+
+function GenerateBillingEventsButton({
+  transaction,
+  selectedClient,
+  onGenerated,
+}: {
+  transaction: Transaction
+  selectedClient: Client | null
+  onGenerated: () => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleGenerate = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const cf = (transaction.custom_fields ?? {}) as Record<string, unknown>
+      const salary = Number(cf.salary ?? transaction.salary ?? 0)
+      const commissionPct = Number(cf.commission_percent ?? transaction.commission_percent ?? 0)
+      const supplierPct = transaction.supplier_percent ?? 0
+      const paymentSplit = selectedClient?.payment_split_json ?? []
+      const candidateName = String(cf.candidate_name ?? transaction.candidate_name ?? '')
+      const serviceType = transaction.service_type ?? ''
+
+      const events = generateServiceBillingEvents({
+        transactionId: transaction.id,
+        salary,
+        commissionPercent: commissionPct,
+        workStartDate: transaction.work_start_date!,
+        paymentSplit,
+        advanceAmount: 0,
+        supplierPercent: supplierPct,
+        candidateName,
+        serviceType,
+      })
+      await upsertBillingEvents(transaction.id, events)
+
+      const isApproved = !transaction.needs_approval || !!transaction.approved_at
+      if (isApproved) {
+        const todayIso = new Date().toISOString().slice(0, 10)
+        await supabase
+          .from('billing_events')
+          .update({ status: 'to_bill' })
+          .eq('transaction_id', transaction.id)
+          .eq('status', 'pending')
+          .lte('billing_date', todayIso)
+      }
+
+      onGenerated()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'שגיאה')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-amber-700">
+        עסקה זו נוצרה לפני מערכת החיובים האוטומטית. לחץ ליצירת אירועי חיוב.
+      </p>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-purple-700 border-purple-300"
+        disabled={loading}
+        onClick={handleGenerate}
+      >
+        {loading ? 'יוצר...' : 'צור אירועי חיוב'}
+      </Button>
     </div>
   )
 }

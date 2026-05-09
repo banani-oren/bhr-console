@@ -311,6 +311,7 @@ export default function Transactions() {
                   <TableHead className="text-right text-purple-800 font-semibold">שכר</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">% עמלה</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">מוביל</TableHead>
+                  <TableHead className="text-right text-purple-800 font-semibold">תאריך סגירה</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">תחילת עבודה</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">סכום נטו</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">חיובים</TableHead>
@@ -348,6 +349,9 @@ export default function Transactions() {
                         {t.kind === 'service' && t.commission_percent ? `${t.commission_percent}%` : '—'}
                       </TableCell>
                       <TableCell className="text-right">{t.service_lead || '—'}</TableCell>
+                      <TableCell className="text-right">
+                        <DateCell value={t.close_date} />
+                      </TableCell>
                       <TableCell className="text-right">
                         <DateCell value={t.work_start_date} />
                       </TableCell>
