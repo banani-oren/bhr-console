@@ -132,6 +132,24 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
   }
 
+  // Parse extracted advance text (e.g. "1500 ₪", "30%") into structured fields.
+  const parseAdvance = (
+    raw: string | null | undefined,
+  ): { advance_type: 'fixed' | 'percent' | null; advance_amount: number | null } => {
+    if (!raw) return { advance_type: null, advance_amount: null }
+    const text = String(raw)
+    const numMatch = text.match(/(\d+(?:[.,]\d+)?)/)
+    if (!numMatch) return { advance_type: null, advance_amount: null }
+    const num = Number(numMatch[1].replace(',', '.'))
+    if (!Number.isFinite(num)) return { advance_type: null, advance_amount: null }
+    if (text.includes('%')) return { advance_type: 'percent', advance_amount: num }
+    if (text.includes('₪') || /\bILS\b/i.test(text) || /ש["״"]?ח/.test(text)) {
+      return { advance_type: 'fixed', advance_amount: num }
+    }
+    // Default: treat bare numbers as a fixed amount.
+    return { advance_type: 'fixed', advance_amount: num }
+  }
+
   const mergeAgreementFields = (current: Client, ex: ExtractedAgreement): Partial<Client> => {
     const patch: Partial<Client> = {}
     // Only set a DB field if it is currently null/empty AND the extraction provided a value.
@@ -144,15 +162,15 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
     }
     set('company_id', ex.company_id ?? null)
     set('address', ex.client_address ?? null)
-    set('agreement_type', ex.agreement_type ?? null)
     set('commission_percent', ex.commission_percent ?? null)
-    set('salary_basis', ex.salary_basis ?? null)
     set('warranty_days', ex.warranty_days ?? null)
     set('payment_terms', ex.payment_terms ?? null)
-    set('payment_split', ex.payment_split ?? null)
-    set('advance', ex.advance ?? null)
     set('hourly_rate', ex.hourly_rate ?? null)
-    if (ex.exclusivity != null && !current.exclusivity) patch.exclusivity = ex.exclusivity
+    const adv = parseAdvance(ex.advance)
+    if (adv.advance_type && current.advance_type == null) {
+      patch.advance_type = adv.advance_type
+      patch.advance_amount = adv.advance_amount
+    }
     return patch
   }
 
@@ -163,20 +181,18 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
       // Create a new client stub from extracted fields.
       const name = item.extracted.matched_client_name?.trim()
       if (!name) return
+      const adv = parseAdvance(item.extracted.advance)
       const { data: created, error: cErr } = await supabase
         .from('clients')
         .insert({
           name,
           company_id: item.extracted.company_id ?? null,
           address: item.extracted.client_address ?? null,
-          agreement_type: item.extracted.agreement_type ?? null,
           commission_percent: item.extracted.commission_percent ?? null,
-          salary_basis: item.extracted.salary_basis ?? null,
           warranty_days: item.extracted.warranty_days ?? null,
           payment_terms: item.extracted.payment_terms ?? null,
-          payment_split: item.extracted.payment_split ?? null,
-          advance: item.extracted.advance ?? null,
-          exclusivity: !!item.extracted.exclusivity,
+          advance_type: adv.advance_type,
+          advance_amount: adv.advance_amount,
           hourly_rate: item.extracted.hourly_rate ?? null,
           status: 'פעיל',
         })
@@ -215,10 +231,6 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
         await supabase.storage.from('client-agreements').remove([item.tempPath])
       }
     }
-    await supabase
-      .from('clients')
-      .update({ agreement_storage_path: destPath, agreement_file: safeName })
-      .eq('id', clientId)
     updateItem(item.id, { status: 'confirmed' })
     queryClient.invalidateQueries({ queryKey: ['clients'] })
   }

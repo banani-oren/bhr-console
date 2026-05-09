@@ -272,7 +272,7 @@ export default function TransactionDialog({
         kind: editing.kind ?? 'service',
         service_type_id: editing.service_type_id,
         service_type_name: editing.service_type ?? '',
-        client_id: clients.find((c) => c.name === editing.client_name)?.id ?? null,
+        client_id: editing.client_id ?? clients.find((c) => c.name === editing.client_name)?.id ?? null,
         client_name: editing.client_name ?? '',
         service_lead: editing.service_lead ?? profile?.full_name ?? '',
         entry_date: editing.entry_date ?? today(),
@@ -474,6 +474,7 @@ export default function TransactionDialog({
       }
       const payload: Record<string, unknown> = {
         kind: state.kind,
+        client_id: state.client_id,
         client_name: state.client_name,
         service_type: state.service_type_name,
         service_type_id: state.service_type_id,
@@ -1111,4 +1112,38 @@ function TimePeriodForm({
                 <TableRow>
                   <TableHead className="w-8"></TableHead>
                   <TableHead className="text-right text-xs">תאריך</TableHead>
-                  <TableHead className="text-right text-xs">משעה</TableHea
+                  <TableHead className="text-right text-xs">משעה</TableHead>
+                  <TableHead className="text-right text-xs">עד</TableHead>
+                  <TableHead className="text-right text-xs">שעות</TableHead>
+                  <TableHead className="text-right text-xs">עובד/ת</TableHead>
+                  <TableHead className="text-right text-xs">תיאור</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {unbilledHours.map((h) => (
+                  <TableRow key={h.id}>
+                    <TableCell className="w-8">
+                      <input
+                        type="checkbox"
+                        checked={state.selectedHoursIds.has(h.id)}
+                        onChange={() => toggleHourRow(h.id)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-xs"><DateCell value={h.visit_date} /></TableCell>
+                    <TableCell className="text-xs" dir="ltr">{h.start_time ?? '—'}</TableCell>
+                    <TableCell className="text-xs" dir="ltr">{h.end_time ?? '—'}</TableCell>
+                    <TableCell className="text-xs">{h.hours}</TableCell>
+                    <TableCell className="text-xs">
+                      {h.profile_id ? profileNameById.get(h.profile_id) ?? '—' : '—'}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{h.description ?? '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

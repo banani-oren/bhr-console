@@ -190,7 +190,6 @@ export default function ClientPicker({
                   <div className="text-sm font-medium">{c.name}</div>
                   <div className="text-xs text-muted-foreground">
                     {c.company_id ?? '—'}
-                    {c.agreement_type ? ` · ${c.agreement_type}` : ''}
                     {c.commission_percent != null ? ` · ${c.commission_percent}%` : ''}
                   </div>
                 </div>

@@ -22,6 +22,11 @@ export type Profile = {
   created_at: string
 }
 
+export type PaymentSplit = {
+  percent: number
+  days: number
+}
+
 export type Client = {
   id: string
   name: string
@@ -34,16 +39,12 @@ export type Client = {
   email: string | null
   status: string
   notes: string | null
-  agreement_type: string | null
   commission_percent: number | null
-  salary_basis: string | null
   warranty_days: number | null
   payment_terms: string | null
-  payment_split: string | null
-  advance: string | null
-  exclusivity: boolean
-  agreement_file: string | null
-  agreement_storage_path: string | null
+  payment_split_json: PaymentSplit[] | null
+  advance_type: 'fixed' | 'percent' | null
+  advance_amount: number | null
   hourly_rate: number | null
   time_log_enabled: boolean
   created_at: string
@@ -79,6 +80,7 @@ export type TransactionKind = 'service' | 'time_period'
 export type Transaction = {
   id: string
   kind: TransactionKind
+  client_id: string | null
   client_name: string
   position_name: string
   candidate_name: string

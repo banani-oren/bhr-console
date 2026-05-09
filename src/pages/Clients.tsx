@@ -2,7 +2,7 @@ import { useState, useRef, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import type { Client } from '@/lib/types'
+import type { Client, PaymentSplit } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -33,7 +33,7 @@ import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import LabeledToggle from '@/components/LabeledToggle'
-import { Plus, Upload, Search, Pencil, Trash2, Download } from 'lucide-react'
+import { Plus, Upload, Search, Pencil, Trash2, X } from 'lucide-react'
 import AgreementUploader from '@/components/AgreementUploader'
 import { useSafeMutation } from '@/hooks/useSafeMutation'
 
@@ -44,21 +44,21 @@ import { useSafeMutation } from '@/hooks/useSafeMutation'
 type ClientForm = {
   name: string
   company_id: string
+  group_name: string
   address: string
   contact_name: string
   phone: string
   email: string
   status: string
   notes: string
-  agreement_type: string
+  // Contract
   commission_percent: string
-  salary_basis: string
   warranty_days: string
   payment_terms: string
-  payment_split: string
-  advance: string
-  exclusivity: boolean
-  agreement_file: string
+  payment_split_json: PaymentSplit[]
+  advance_type: 'fixed' | 'percent' | ''
+  advance_amount: string
+  // Hours
   hourly_rate: string
   time_log_enabled: boolean
   time_log_permissions: string[]
@@ -67,21 +67,19 @@ type ClientForm = {
 const emptyForm: ClientForm = {
   name: '',
   company_id: '',
+  group_name: '',
   address: '',
   contact_name: '',
   phone: '',
   email: '',
   status: 'פעיל',
   notes: '',
-  agreement_type: '',
   commission_percent: '',
-  salary_basis: '',
   warranty_days: '',
   payment_terms: '',
-  payment_split: '',
-  advance: '',
-  exclusivity: false,
-  agreement_file: '',
+  payment_split_json: [],
+  advance_type: '',
+  advance_amount: '',
   hourly_rate: '',
   time_log_enabled: false,
   time_log_permissions: [],
@@ -91,21 +89,19 @@ function clientToForm(c: Client): ClientForm {
   return {
     name: c.name,
     company_id: c.company_id ?? '',
+    group_name: c.group_name ?? '',
     address: c.address ?? '',
     contact_name: c.contact_name ?? '',
     phone: c.phone ?? '',
     email: c.email ?? '',
     status: c.status ?? 'פעיל',
     notes: c.notes ?? '',
-    agreement_type: c.agreement_type ?? '',
     commission_percent: c.commission_percent != null ? String(c.commission_percent) : '',
-    salary_basis: c.salary_basis ?? '',
     warranty_days: c.warranty_days != null ? String(c.warranty_days) : '',
     payment_terms: c.payment_terms ?? '',
-    payment_split: c.payment_split ?? '',
-    advance: c.advance ?? '',
-    exclusivity: c.exclusivity ?? false,
-    agreement_file: c.agreement_file ?? '',
+    payment_split_json: Array.isArray(c.payment_split_json) ? c.payment_split_json : [],
+    advance_type: c.advance_type ?? '',
+    advance_amount: c.advance_amount != null ? String(c.advance_amount) : '',
     hourly_rate: c.hourly_rate != null ? String(c.hourly_rate) : '',
     time_log_enabled: c.time_log_enabled ?? false,
     time_log_permissions: [],
@@ -116,21 +112,19 @@ function formToPayload(form: ClientForm) {
   return {
     name: form.name,
     company_id: form.company_id || null,
+    group_name: form.group_name || null,
     address: form.address || null,
     contact_name: form.contact_name || null,
     phone: form.phone || null,
     email: form.email || null,
     status: form.status || 'פעיל',
     notes: form.notes || null,
-    agreement_type: form.agreement_type || null,
     commission_percent: form.commission_percent ? Number(form.commission_percent) : null,
-    salary_basis: form.salary_basis || null,
     warranty_days: form.warranty_days ? Number(form.warranty_days) : null,
     payment_terms: form.payment_terms || null,
-    payment_split: form.payment_split || null,
-    advance: form.advance || null,
-    exclusivity: form.exclusivity,
-    agreement_file: form.agreement_file || null,
+    payment_split_json: form.payment_split_json ?? [],
+    advance_type: form.advance_type || null,
+    advance_amount: form.advance_amount ? Number(form.advance_amount) : null,
     hourly_rate: form.hourly_rate ? Number(form.hourly_rate) : null,
     time_log_enabled: form.time_log_enabled,
   }
@@ -144,7 +138,199 @@ function statusVariant(s: string): 'default' | 'secondary' {
   return s === 'פעיל' || s === 'active' ? 'default' : 'secondary'
 }
 
-const AGREEMENT_TYPES = ['השמה', 'ריטיינר', 'ליווי', 'אחר']
+// ---------------------------------------------------------------------------
+// PaymentSplitEditor — list of {percent, days} rows + sum indicator + presets
+// ---------------------------------------------------------------------------
+function PaymentSplitEditor({
+  value,
+  onChange,
+}: {
+  value: PaymentSplit[]
+  onChange: (v: PaymentSplit[]) => void
+}) {
+  const total = value.reduce((s, r) => s + (Number(r.percent) || 0), 0)
+  const sumOk = total === 100
+
+  const updateRow = (idx: number, patch: Partial<PaymentSplit>) => {
+    const next = value.map((r, i) => (i === idx ? { ...r, ...patch } : r))
+    onChange(next)
+  }
+  const removeRow = (idx: number) => {
+    onChange(value.filter((_, i) => i !== idx))
+  }
+  const addRow = () => {
+    onChange([...value, { percent: 0, days: 0 }])
+  }
+
+  return (
+    <div className="space-y-2 rounded border border-purple-100 bg-purple-50/40 p-3">
+      {value.length === 0 ? (
+        <p className="text-xs text-muted-foreground">לא הוגדר פיצול תשלום</p>
+      ) : (
+        <div className="space-y-2">
+          {value.map((row, idx) => (
+            <div key={idx} className="flex items-center gap-2 flex-wrap">
+              <Input
+                type="number"
+                dir="ltr"
+                className="w-20"
+                value={row.percent}
+                onChange={(e) => {
+                  const raw = e.target.value === '' ? 0 : Number(e.target.value)
+                  const clamped = Math.max(0, Math.min(100, raw))
+                  updateRow(idx, { percent: clamped })
+                }}
+              />
+              <span className="text-sm">%</span>
+              <span className="text-sm text-muted-foreground">·</span>
+              <Input
+                type="number"
+                dir="ltr"
+                className="w-24"
+                value={row.days}
+                onChange={(e) => {
+                  const raw = e.target.value === '' ? 0 : Number(e.target.value)
+                  updateRow(idx, { days: Math.max(0, raw) })
+                }}
+              />
+              <span className="text-sm">ימים מהמשמה</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => removeRow(idx)}
+                title="הסר שורה"
+                className="text-destructive hover:text-destructive ms-auto"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+        <div className="flex gap-2 flex-wrap">
+          <Button type="button" size="sm" variant="outline" onClick={addRow}>
+            הוסף פיצול +
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => onChange([{ percent: 100, days: 0 }])}
+            className="text-purple-700"
+          >
+            100% ביום אחד
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              onChange([
+                { percent: 30, days: 0 },
+                { percent: 70, days: 90 },
+              ])
+            }
+            className="text-purple-700"
+          >
+            30%+70% (90 יום)
+          </Button>
+        </div>
+        {value.length > 0 && (
+          <span
+            className={`text-sm font-medium ${sumOk ? 'text-green-600' : 'text-red-600'}`}
+          >
+            סה״כ: {total}%
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AdvanceEditor — none / fixed amount / percent of salary
+// ---------------------------------------------------------------------------
+function AdvanceEditor({
+  advanceType,
+  advanceAmount,
+  onTypeChange,
+  onAmountChange,
+}: {
+  advanceType: 'fixed' | 'percent' | ''
+  advanceAmount: string
+  onTypeChange: (t: 'fixed' | 'percent' | '') => void
+  onAmountChange: (v: string) => void
+}) {
+  const tabClass = (active: boolean) =>
+    `flex-1 px-3 py-2 text-sm rounded-md border transition-colors ${
+      active
+        ? 'bg-purple-600 text-white border-purple-600'
+        : 'bg-white text-purple-700 border-purple-200 hover:bg-purple-50'
+    }`
+
+  return (
+    <div className="space-y-2 rounded border border-purple-100 bg-purple-50/40 p-3">
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            onTypeChange('')
+            onAmountChange('')
+          }}
+          className={tabClass(advanceType === '')}
+        >
+          ללא מקדמה
+        </button>
+        <button
+          type="button"
+          onClick={() => onTypeChange('fixed')}
+          className={tabClass(advanceType === 'fixed')}
+        >
+          סכום קבוע
+        </button>
+        <button
+          type="button"
+          onClick={() => onTypeChange('percent')}
+          className={tabClass(advanceType === 'percent')}
+        >
+          אחוז מהשכר
+        </button>
+      </div>
+
+      {advanceType === 'fixed' && (
+        <div className="space-y-1">
+          <Label className="text-xs">סכום מקדמה (₪)</Label>
+          <Input
+            type="number"
+            dir="ltr"
+            value={advanceAmount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            placeholder="למשל 1500"
+          />
+          <p className="text-xs text-muted-foreground">המקדמה תנוכה מחשבון הסופי</p>
+        </div>
+      )}
+
+      {advanceType === 'percent' && (
+        <div className="space-y-1">
+          <Label className="text-xs">אחוז מהשכר (%)</Label>
+          <Input
+            type="number"
+            dir="ltr"
+            value={advanceAmount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            placeholder="למשל 30"
+          />
+          <p className="text-xs text-muted-foreground">
+            % מהשכר הברוטו יגבה מראש וינוכה מהעמלה
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -662,7 +848,7 @@ export default function Clients() {
                 <TableHead className="text-right">שם לקוח</TableHead>
                 <TableHead className="text-right">איש קשר</TableHead>
                 <TableHead className="text-right">נייד</TableHead>
-                <TableHead className="text-right">סוג הסכם</TableHead>
+                <TableHead className="text-right">עמלה %</TableHead>
                 <TableHead className="text-right">תעריף/שעה</TableHead>
                 <TableHead className="text-right">סטטוס</TableHead>
                 <TableHead className="text-right">פעולות</TableHead>
@@ -681,7 +867,9 @@ export default function Clients() {
                     <TableCell className="font-medium">{client.name}</TableCell>
                     <TableCell>{client.contact_name ?? '—'}</TableCell>
                     <TableCell dir="ltr" className="text-right">{client.phone ?? '—'}</TableCell>
-                    <TableCell>{client.agreement_type ?? '—'}</TableCell>
+                    <TableCell dir="ltr" className="text-right">
+                      {client.commission_percent != null ? `${client.commission_percent}%` : '—'}
+                    </TableCell>
                     <TableCell dir="ltr" className="text-right">
                       {client.hourly_rate != null
                         ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(client.hourly_rate)
@@ -712,7 +900,7 @@ export default function Clients() {
       {/* Unified Client Card Dialog                                         */}
       {/* ================================================================== */}
       <Dialog open={cardOpen} onOpenChange={(open) => { if (!open) closeCard() }}>
-        <DialogContent dir="rtl" className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent dir="rtl" className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingClient ? `עריכת ${editingClient.name}` : 'לקוח חדש'}</DialogTitle>
           </DialogHeader>
@@ -756,6 +944,11 @@ export default function Clients() {
                   <Label>מייל</Label>
                   <Input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} dir="ltr" />
                 </div>
+                <div className="space-y-1.5">
+                  <Label>קבוצה</Label>
+                  <Input value={form.group_name} onChange={(e) => setField('group_name', e.target.value)} />
+                </div>
+                <div />
               </div>
               <div className="space-y-1.5 mt-4">
                 <Label>הערות</Label>
@@ -770,48 +963,59 @@ export default function Clients() {
               <h3 className="text-sm font-semibold text-purple-700 mb-3">תנאי הסכם</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>סוג הסכם</Label>
-                  <Select value={form.agreement_type} onValueChange={(v) => setField('agreement_type', v ?? '')}>
-                    <SelectTrigger><SelectValue placeholder="בחר סוג" /></SelectTrigger>
-                    <SelectContent>
-                      {AGREEMENT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
                   <Label>אחוז עמלה %</Label>
-                  <Input type="number" dir="ltr" value={form.commission_percent} onChange={(e) => setField('commission_percent', e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>בסיס משכורות</Label>
-                  <Input value={form.salary_basis} onChange={(e) => setField('salary_basis', e.target.value)} dir="ltr" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>תקופת אחריות בימים</Label>
-                  <Input type="number" dir="ltr" value={form.warranty_days} onChange={(e) => setField('warranty_days', e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>תנאי תשלום</Label>
-                  <Input value={form.payment_terms} onChange={(e) => setField('payment_terms', e.target.value)} placeholder="שוטף + 30" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>חלוקת תשלום</Label>
-                  <Input value={form.payment_split} onChange={(e) => setField('payment_split', e.target.value)} dir="ltr" placeholder="30/70" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>מקדמה</Label>
-                  <Input value={form.advance} onChange={(e) => setField('advance', e.target.value)} />
-                </div>
-                <div className="space-y-1.5 flex items-center pt-6">
-                  <LabeledToggle
-                    label="בלעדיות"
-                    checked={form.exclusivity}
-                    onCheckedChange={(v) => setField('exclusivity', v)}
-                    offText="ללא בלעדיות"
-                    onText="בלעדי"
+                  <Input
+                    type="number"
+                    dir="ltr"
+                    value={form.commission_percent}
+                    onChange={(e) => setField('commission_percent', e.target.value)}
                   />
                 </div>
                 <div className="space-y-1.5">
+                  <Label>תקופת אחריות (ימים)</Label>
+                  <Input
+                    type="number"
+                    dir="ltr"
+                    value={form.warranty_days}
+                    onChange={(e) => setField('warranty_days', e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>תנאי תשלום</Label>
+                  <Input
+                    value={form.payment_terms}
+                    onChange={(e) => setField('payment_terms', e.target.value)}
+                    placeholder="שוטף + 30"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5 mt-4">
+                <Label>פיצול תשלום</Label>
+                <PaymentSplitEditor
+                  value={form.payment_split_json}
+                  onChange={(v) => setField('payment_split_json', v)}
+                />
+              </div>
+
+              <div className="space-y-1.5 mt-4">
+                <Label>מקדמה</Label>
+                <AdvanceEditor
+                  advanceType={form.advance_type}
+                  advanceAmount={form.advance_amount}
+                  onTypeChange={(t) => setField('advance_type', t)}
+                  onAmountChange={(v) => setField('advance_amount', v)}
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Section 3 — דיווח שעות */}
+            <div>
+              <h3 className="text-sm font-semibold text-purple-700 mb-3">דיווח שעות</h3>
+              <div className="space-y-3">
+                <div className="space-y-1.5 max-w-xs">
                   <Label>תעריף שעת עבודה (₪)</Label>
                   <Input
                     type="number"
@@ -822,39 +1026,6 @@ export default function Clients() {
                     placeholder="למשל 200"
                   />
                 </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label>שם קובץ הסכם</Label>
-                  <div className="flex gap-2 items-center">
-                    <Input value={form.agreement_file} onChange={(e) => setField('agreement_file', e.target.value)} className="flex-1" />
-                    {editingClient?.agreement_storage_path && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="border-purple-300 text-purple-700"
-                        onClick={async () => {
-                          const { data, error } = await supabase.storage
-                            .from('client-agreements')
-                            .createSignedUrl(editingClient.agreement_storage_path!, 60)
-                          if (error || !data?.signedUrl) return
-                          window.open(data.signedUrl, '_blank', 'noopener')
-                        }}
-                      >
-                        <Download className="h-4 w-4 ml-1" />
-                        הורד PDF
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <Separator />
-
-            {/* Section 3 — דיווח שעות */}
-            <div>
-              <h3 className="text-sm font-semibold text-purple-700 mb-3">דיווח שעות</h3>
-              <div className="space-y-3">
                 <LabeledToggle
                   label="דיווח שעות ללקוח זה"
                   checked={form.time_log_enabled}

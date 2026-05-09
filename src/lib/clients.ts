@@ -1,10 +1,9 @@
 import { supabase } from '@/lib/supabase'
-import type { ClientWithAgreement } from '@/lib/types'
+import type { ClientWithAgreement, PaymentSplit } from '@/lib/types'
 
 export type ClientFormData = {
-  // Client fields
   name: string
-  tax_id?: string
+  company_id?: string
   group_name?: string
   address?: string
   phone?: string
@@ -12,21 +11,17 @@ export type ClientFormData = {
   contact_name?: string
   status: string
   notes?: string
-  // Agreement fields
-  agreement_type?: string
-  commission_pct?: number | null
-  salary_base?: number | null
-  payment_split?: string
+  // Contract terms (kept)
+  commission_percent?: number | null
   warranty_days?: number | null
   payment_terms?: string
-  advance?: string
-  exclusivity?: boolean
-  agreement_contact_name?: string
-  agreement_contact_email?: string
-  agreement_contact_phone?: string
-  contract_file?: string
-  agreement_status?: string
-  agreement_notes?: string
+  // New structured fields
+  payment_split_json?: PaymentSplit[]
+  advance_type?: 'fixed' | 'percent' | null
+  advance_amount?: number | null
+  // Hours billing
+  hourly_rate?: number | null
+  time_log_enabled?: boolean
 }
 
 export async function getClients(filters?: {
@@ -70,7 +65,7 @@ export async function upsertClient(
 ): Promise<{ clientId: string }> {
   const clientPayload = {
     name: formData.name,
-    tax_id: formData.tax_id || null,
+    company_id: formData.company_id || null,
     group_name: formData.group_name || null,
     address: formData.address || null,
     phone: formData.phone || null,
@@ -78,6 +73,14 @@ export async function upsertClient(
     contact_name: formData.contact_name || null,
     status: formData.status || 'פעיל',
     notes: formData.notes || null,
+    commission_percent: formData.commission_percent ?? null,
+    warranty_days: formData.warranty_days ?? null,
+    payment_terms: formData.payment_terms || null,
+    payment_split_json: formData.payment_split_json ?? [],
+    advance_type: formData.advance_type || null,
+    advance_amount: formData.advance_amount ?? null,
+    hourly_rate: formData.hourly_rate ?? null,
+    time_log_enabled: formData.time_log_enabled ?? false,
   }
 
   let clientId: string
@@ -98,30 +101,6 @@ export async function upsertClient(
     if (error) throw error
     clientId = data.id
   }
-
-  // Upsert agreement (1:1 with client)
-  const agreementPayload = {
-    client_id: clientId,
-    agreement_type: formData.agreement_type || null,
-    commission_pct: formData.commission_pct ?? null,
-    salary_base: formData.salary_base ?? null,
-    payment_split: formData.payment_split || null,
-    warranty_days: formData.warranty_days ?? null,
-    payment_terms: formData.payment_terms || null,
-    advance: formData.advance || null,
-    exclusivity: formData.exclusivity ?? false,
-    contact_name: formData.agreement_contact_name || null,
-    contact_email: formData.agreement_contact_email || null,
-    contact_phone: formData.agreement_contact_phone || null,
-    contract_file: formData.contract_file || null,
-    status: formData.agreement_status || 'active',
-    notes: formData.agreement_notes || null,
-  }
-
-  const { error: agErr } = await supabase
-    .from('agreements')
-    .upsert(agreementPayload, { onConflict: 'client_id' })
-  if (agErr) throw agErr
 
   return { clientId }
 }
