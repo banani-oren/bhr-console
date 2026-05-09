@@ -1,17 +1,31 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import type { Client, HoursLog, Profile, Supplier, Transaction, TransactionKind } from '@/lib/types'
+import type {
+  BillingEvent,
+  Client,
+  Profile,
+  Supplier,
+  Transaction,
+  TransactionKind,
+} from '@/lib/types'
 import {
   type ServiceField,
   type ServiceType,
   evalDerived,
 } from '@/lib/serviceTypes'
+import {
+  addDays,
+  cancelFutureBillingEvents,
+  generateServiceBillingEvents,
+  resolveAdvanceAmount,
+  upsertBillingEvents,
+} from '@/lib/billingEvents'
 import ClientPicker from '@/components/ClientPicker'
-import LabeledToggle from '@/components/LabeledToggle'
+import AdvanceEditor, { type AdvanceType } from '@/components/AdvanceEditor'
 import { DateCell } from '@/components/ui/date-cell'
 import {
   Dialog,
@@ -26,6 +40,8 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
@@ -33,19 +49,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-
-const HEBREW_MONTHS = [
-  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
-  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
-]
 
 const MIRRORED_KEYS = new Set([
   'position_name',
@@ -86,50 +89,29 @@ type DialogState = {
   service_lead: string
   entry_date: string
   close_date: string | null
-  payment_status: string
-  is_billable: boolean
-  invoice_number_transaction: string | null
-  invoice_number_receipt: string | null
-  work_start_date: string | null
-  warranty_end_date: string | null
-  invoice_sent_date: string | null
-  payment_due_date: string | null
-  payment_date: string | null
   notes: string | null
   custom: Record<string, unknown>
 
-  // time_period-specific
+  work_start_date: string | null
+  work_end_date: string | null
+  warranty_end_date: string | null
+
+  advance_type_override: AdvanceType
+  advance_amount_override: string
+
+  supplier_id: string | null
+  supplier_percent: number | null
+
+  // time_period read-only state for editing existing time_period transactions
   period_start: string | null
   period_end: string | null
   hours_total: number | null
   hourly_rate_used: number | null
   net_invoice_amount: number | null
-  selectedHoursIds: Set<string>
-
-  // supplier
-  supplier_id: string | null
-  supplier_percent: number | null
-
-  // billing split
-  billing_percent: number | null
 }
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
-}
-
-function parsePaymentTermDays(terms: string | null): number | null {
-  if (!terms) return null
-  const m = /([0-9]+)/.exec(terms)
-  if (!m) return terms.includes('שוטף') ? 0 : null
-  return Number(m[1])
-}
-
-function addDays(iso: string | null, days: number | null): string | null {
-  if (!iso || days == null) return null
-  const d = new Date(iso)
-  d.setDate(d.getDate() + days)
-  return d.toISOString().slice(0, 10)
 }
 
 function monthOf(iso: string | null): number | null {
@@ -142,6 +124,11 @@ function yearOf(iso: string | null): number | null {
   return new Date(iso).getFullYear()
 }
 
+function fmt(n: number | null | undefined): string {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n)
+}
+
 function emptyState(profileName: string): DialogState {
   return {
     kind: 'service',
@@ -152,32 +139,21 @@ function emptyState(profileName: string): DialogState {
     service_lead: profileName || '',
     entry_date: today(),
     close_date: null,
-    payment_status: 'ממתין',
-    is_billable: true,
-    invoice_number_transaction: null,
-    invoice_number_receipt: null,
-    work_start_date: null,
-    warranty_end_date: null,
-    invoice_sent_date: null,
-    payment_due_date: null,
-    payment_date: null,
     notes: null,
     custom: {},
+    work_start_date: null,
+    work_end_date: null,
+    warranty_end_date: null,
+    advance_type_override: '',
+    advance_amount_override: '',
+    supplier_id: null,
+    supplier_percent: null,
     period_start: null,
     period_end: null,
     hours_total: null,
     hourly_rate_used: null,
     net_invoice_amount: null,
-    selectedHoursIds: new Set(),
-    supplier_id: null,
-    supplier_percent: null,
-    billing_percent: null,
   }
-}
-
-function fmt(n: number | null | undefined): string {
-  if (n == null) return '—'
-  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(n)
 }
 
 export default function TransactionDialog({
@@ -235,6 +211,7 @@ export default function TransactionDialog({
 
   const [state, setState] = useState<DialogState>(() => emptyState(profile?.full_name ?? ''))
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const selectedClient = useMemo(
     () => clients.find((c) => c.id === state.client_id) ?? null,
@@ -246,20 +223,25 @@ export default function TransactionDialog({
     [serviceTypes, state.service_type_id],
   )
 
-  // Auto-compute invoice amount: salary × commission% × billing%
-  const autoInvoiceAmount = useMemo(() => {
-    if (state.kind !== 'service') return null
-    const salary = Number(state.custom.salary) || null
-    const commPct = Number(state.custom.commission_percent) || null
-    const billPct = state.billing_percent
-    if (salary == null || commPct == null || billPct == null) return null
-    return Math.round(salary * (commPct / 100) * (billPct / 100))
-  }, [state.kind, state.custom.salary, state.custom.commission_percent, state.billing_percent])
+  // Billing events for the editing transaction
+  const { data: txnBillingEvents = [], refetch: refetchEvents } = useQuery<BillingEvent[]>({
+    queryKey: ['billing_events', editing?.id ?? 'none'],
+    enabled: !!editing?.id,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('billing_events')
+        .select('*')
+        .eq('transaction_id', editing!.id)
+        .order('event_index', { ascending: true })
+      if (error) throw error
+      return data as BillingEvent[]
+    },
+  })
 
-  // Initialize when dialog opens.
   useEffect(() => {
     if (!open) return
     setSaveStatus('idle')
+    setSaveError(null)
     if (editing) {
       const custom = typeof editing.custom_fields === 'object' && editing.custom_fields
         ? { ...(editing.custom_fields as Record<string, unknown>) }
@@ -277,26 +259,20 @@ export default function TransactionDialog({
         service_lead: editing.service_lead ?? profile?.full_name ?? '',
         entry_date: editing.entry_date ?? today(),
         close_date: editing.close_date,
-        payment_status: editing.payment_status ?? 'ממתין',
-        is_billable: editing.is_billable ?? true,
-        invoice_number_transaction: editing.invoice_number_transaction ?? editing.invoice_number ?? null,
-        invoice_number_receipt: editing.invoice_number_receipt,
-        work_start_date: editing.work_start_date,
-        warranty_end_date: editing.warranty_end_date,
-        invoice_sent_date: editing.invoice_sent_date,
-        payment_due_date: editing.payment_due_date,
-        payment_date: editing.payment_date,
         notes: editing.notes,
         custom,
+        work_start_date: editing.work_start_date,
+        work_end_date: editing.work_end_date,
+        warranty_end_date: editing.warranty_end_date,
+        advance_type_override: '',
+        advance_amount_override: '',
+        supplier_id: editing.supplier_id ?? null,
+        supplier_percent: editing.supplier_percent ?? null,
         period_start: editing.period_start,
         period_end: editing.period_end,
         hours_total: editing.hours_total,
         hourly_rate_used: editing.hourly_rate_used,
         net_invoice_amount: editing.net_invoice_amount,
-        selectedHoursIds: new Set(),
-        supplier_id: editing.supplier_id ?? null,
-        supplier_percent: editing.supplier_percent ?? null,
-        billing_percent: editing.billing_percent ?? null,
       })
     } else {
       const s = emptyState(profile?.full_name ?? '')
@@ -316,7 +292,7 @@ export default function TransactionDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing?.id])
 
-  // Hydrate from client selection.
+  // Hydrate from client selection: auto-fill commission_percent if empty.
   useEffect(() => {
     if (!selectedClient) return
     setState((s) => {
@@ -324,19 +300,12 @@ export default function TransactionDialog({
       if (next.custom.commission_percent == null && selectedClient.commission_percent != null) {
         next.custom = { ...next.custom, commission_percent: selectedClient.commission_percent }
       }
-      if (
-        next.kind === 'time_period' &&
-        next.hourly_rate_used == null &&
-        selectedClient.hourly_rate != null
-      ) {
-        next.hourly_rate_used = selectedClient.hourly_rate
-      }
       return next
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClient?.id])
 
-  // Derived fields recompute when sources change.
+  // Derived custom fields per service type definition.
   useEffect(() => {
     if (!selectedServiceType) return
     setState((s) => {
@@ -354,7 +323,6 @@ export default function TransactionDialog({
           changed = true
         }
       }
-      // Warranty end date derived from work_start_date + client.warranty_days.
       if (s.work_start_date && selectedClient?.warranty_days) {
         const d = addDays(s.work_start_date, selectedClient.warranty_days)
         if (d && s.warranty_end_date !== d) {
@@ -371,107 +339,56 @@ export default function TransactionDialog({
     selectedClient?.warranty_days,
   ])
 
-  // Sync net_invoice_amount + commission_amount into custom when autoInvoiceAmount changes.
-  useEffect(() => {
-    if (autoInvoiceAmount == null) return
-    setState((s) => {
-      if (
-        s.custom.net_invoice_amount === autoInvoiceAmount &&
-        s.custom.commission_amount === autoInvoiceAmount
-      ) return s
-      return {
-        ...s,
-        custom: { ...s.custom, net_invoice_amount: autoInvoiceAmount, commission_amount: autoInvoiceAmount },
-      }
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoInvoiceAmount])
-
-  // Payment-due derived from invoice_sent_date + client.payment_terms.
-  useEffect(() => {
-    if (!state.invoice_sent_date || !selectedClient?.payment_terms) return
-    const days = parsePaymentTermDays(selectedClient.payment_terms)
-    if (days == null) return
-    const due = addDays(state.invoice_sent_date, days)
-    if (due && state.payment_due_date !== due) {
-      setState((s) => ({ ...s, payment_due_date: due }))
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.invoice_sent_date, selectedClient?.payment_terms])
-
-  // --- time_period: unbilled hours preview ---
-  const shouldFetchHours =
-    state.kind === 'time_period' && !!state.client_id && !!state.period_start && !!state.period_end
-  const { data: unbilledHours = [] } = useQuery<HoursLog[]>({
-    queryKey: ['unbilled-hours', state.client_id, state.period_start, state.period_end, editing?.id],
-    enabled: shouldFetchHours,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('hours_log')
-        .select('*')
-        .eq('client_id', state.client_id)
-        .gte('visit_date', state.period_start!)
-        .lte('visit_date', state.period_end!)
-        .or(`billed_transaction_id.is.null${editing?.id ? `,billed_transaction_id.eq.${editing.id}` : ''}`)
-        .order('visit_date', { ascending: true })
-      if (error) throw error
-      return data as HoursLog[]
-    },
-  })
-
-  useEffect(() => {
-    if (state.kind !== 'time_period') return
-    // Default all unbilled hours checked; editing: default to currently-billed rows + any unbilled.
-    setState((s) => {
-      if (unbilledHours.length === 0 && s.selectedHoursIds.size === 0) return s
-      const next = new Set<string>(s.selectedHoursIds)
-      let changed = false
-      for (const h of unbilledHours) {
-        if (!next.has(h.id)) {
-          next.add(h.id)
-          changed = true
-        }
-      }
-      return changed ? { ...s, selectedHoursIds: next } : s
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unbilledHours.length, state.kind])
-
-  // Recompute hours_total + amount when selection or rate changes.
-  useEffect(() => {
-    if (state.kind !== 'time_period') return
-    const rows = unbilledHours.filter((h) => state.selectedHoursIds.has(h.id))
-    const total = rows.reduce((s, h) => s + (h.hours ?? 0), 0)
-    const amount = state.hourly_rate_used != null ? total * state.hourly_rate_used : null
-    setState((s) => {
-      if (s.hours_total === total && s.net_invoice_amount === amount) return s
-      return { ...s, hours_total: total, net_invoice_amount: amount }
-    })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.kind, state.hourly_rate_used, state.selectedHoursIds, unbilledHours])
-
   const setCustom = (key: string, val: unknown) => {
     setState((s) => ({ ...s, custom: { ...s.custom, [key]: val } }))
   }
 
-  const pickKind = (kind: TransactionKind, serviceTypeId?: string | null) => {
+  const handleServiceTypePick = (serviceTypeId: string) => {
+    const st = serviceTypes.find((s) => s.id === serviceTypeId)
     setState((s) => ({
       ...s,
-      kind,
-      service_type_id: kind === 'service' ? (serviceTypeId ?? null) : null,
-      service_type_name: kind === 'service'
-        ? serviceTypes.find((st) => st.id === serviceTypeId)?.name ?? ''
-        : '',
+      kind: 'service',
+      service_type_id: serviceTypeId,
+      service_type_name: st?.name ?? '',
     }))
   }
 
+  // Effective advance source: override (non-empty) or client default
+  const effectiveAdvanceType: AdvanceType =
+    state.advance_type_override !== '' || state.advance_amount_override !== ''
+      ? state.advance_type_override
+      : ((selectedClient?.advance_type ?? '') as AdvanceType)
+  const effectiveAdvanceAmount =
+    state.advance_type_override !== '' || state.advance_amount_override !== ''
+      ? state.advance_amount_override
+      : selectedClient?.advance_amount != null
+      ? String(selectedClient.advance_amount)
+      : ''
+
+  const transactionApproved = !!editing?.approved_at || !editing?.needs_approval
+
   const handleSave = async () => {
     setSaveStatus('saving')
+    setSaveError(null)
     try {
       const mirrored: Record<string, unknown> = {}
       for (const k of MIRRORED_KEYS) {
         if (state.custom[k] !== undefined) mirrored[k] = state.custom[k]
       }
+
+      const isRecruiter = profile?.role === 'recruiter'
+      const nowIso = new Date().toISOString()
+      const approvalFields: Record<string, unknown> = editing
+        ? {} // don't reset approval on edit
+        : isRecruiter
+        ? { needs_approval: true, created_by: profile!.id }
+        : {
+            needs_approval: false,
+            created_by: profile!.id,
+            approved_by: profile!.id,
+            approved_at: nowIso,
+          }
+
       const payload: Record<string, unknown> = {
         kind: state.kind,
         client_id: state.client_id,
@@ -485,35 +402,29 @@ export default function TransactionDialog({
         close_date: state.close_date,
         closing_month: monthOf(state.close_date),
         closing_year: yearOf(state.close_date),
-        payment_date: state.payment_date,
-        payment_status: state.payment_status,
-        is_billable: state.is_billable,
-        invoice_number: state.invoice_number_transaction,
-        invoice_number_transaction: state.invoice_number_transaction,
-        invoice_number_receipt: state.invoice_number_receipt,
         work_start_date: state.work_start_date,
+        work_end_date: state.work_end_date,
         warranty_end_date: state.warranty_end_date,
-        invoice_sent_date: state.invoice_sent_date,
-        payment_due_date: state.payment_due_date,
         notes: state.notes,
         custom_fields: state.custom,
         supplier_id: state.supplier_id,
         supplier_percent: state.supplier_percent,
-        billing_percent: state.billing_percent,
         ...mirrored,
+        ...approvalFields,
       }
-      if (state.kind === 'time_period') {
-        payload.period_start = state.period_start
-        payload.period_end = state.period_end
-        payload.hours_total = state.hours_total
-        payload.hourly_rate_used = state.hourly_rate_used
-        payload.net_invoice_amount = state.net_invoice_amount
-        // close_date defaults to period_end.
-        if (!payload.close_date) payload.close_date = state.period_end
-        if (!payload.closing_month) payload.closing_month = monthOf(state.period_end)
-        if (!payload.closing_year) payload.closing_year = yearOf(state.period_end)
+
+      // For service kind: compute net_invoice_amount from salary × commission% (no billing_percent)
+      if (state.kind === 'service') {
+        const salary = Number(state.custom.salary) || 0
+        const commPct = Number(state.custom.commission_percent) || 0
+        if (salary > 0 && commPct > 0) {
+          const totalCommission = Math.round(salary * (commPct / 100) * 100) / 100
+          payload.net_invoice_amount = totalCommission
+          payload.commission_amount = totalCommission
+        }
       }
-      for (const k of ['commission_percent', 'billing_percent', 'salary', 'net_invoice_amount', 'commission_amount']) {
+
+      for (const k of ['commission_percent', 'salary', 'net_invoice_amount', 'commission_amount']) {
         if (payload[k] !== undefined && payload[k] !== null && payload[k] !== '') {
           payload[k] = Number(payload[k])
         }
@@ -529,34 +440,63 @@ export default function TransactionDialog({
         txnId = (data as { id: string } | null)?.id ?? null
       }
 
-      // time_period: mark selected hours_log rows as billed.
-      if (state.kind === 'time_period' && txnId) {
-        // First, clear prior billing for rows no longer selected (edit scenario).
-        if (editing?.id) {
-          const stillSelected = Array.from(state.selectedHoursIds)
-          await supabase
-            .from('hours_log')
-            .update({ billed_transaction_id: null })
-            .eq('billed_transaction_id', editing.id)
-            .not('id', 'in', `(${stillSelected.map((i) => `"${i}"`).join(',') || `""`})`)
-        }
-        const ids = Array.from(state.selectedHoursIds)
-        if (ids.length > 0) {
-          await supabase.from('hours_log').update({ billed_transaction_id: txnId }).in('id', ids)
+      // Generate billing events for service transactions when work_start_date is set.
+      if (state.kind === 'service' && state.work_start_date && txnId) {
+        const salary = Number(state.custom.salary) || 0
+        const commissionPct = Number(state.custom.commission_percent) || 0
+        const supplierPct = state.supplier_percent ?? 0
+        const paymentSplit = selectedClient?.payment_split_json ?? []
+        const advType: AdvanceType = effectiveAdvanceType
+        const advAmount = effectiveAdvanceAmount ? Number(effectiveAdvanceAmount) : null
+        const advance = resolveAdvanceAmount(advType || null, advAmount, salary, commissionPct)
+
+        const events = generateServiceBillingEvents({
+          transactionId: txnId,
+          salary,
+          commissionPercent: commissionPct,
+          workStartDate: state.work_start_date,
+          paymentSplit,
+          advanceAmount: advance,
+          supplierPercent: supplierPct,
+          candidateName: String(state.custom.candidate_name ?? ''),
+          serviceType: state.service_type_name,
+        })
+        await upsertBillingEvents(txnId, events)
+      }
+
+      // Cancel future billing events when work_end_date is set.
+      if (state.work_end_date && txnId) {
+        await cancelFutureBillingEvents(txnId, state.work_end_date)
+      }
+
+      // Email approval recipients if a recruiter created a new transaction.
+      if (!editing && isRecruiter && txnId) {
+        try {
+          await supabase.functions.invoke('send-approval-email', {
+            body: {
+              transactionId: txnId,
+              createdByName: profile!.full_name,
+              clientName: state.client_name,
+              serviceType: state.service_type_name,
+              amount: payload.net_invoice_amount ?? 0,
+            },
+          })
+        } catch (e) {
+          console.warn('approval email skipped:', e)
         }
       }
 
       queryClient.invalidateQueries({ queryKey: ['transactions'] })
-      queryClient.invalidateQueries({ queryKey: ['hours_log'] })
-      queryClient.invalidateQueries({ queryKey: ['unbilled-hours'] })
+      queryClient.invalidateQueries({ queryKey: ['billing_events'] })
       setSaveStatus('success')
       setTimeout(() => {
         setSaveStatus('idle')
         onOpenChange(false)
         if (txnId) onSaved?.(txnId)
-      }, 1200)
+      }, 1000)
     } catch (err) {
       console.error('TransactionDialog save error:', err)
+      setSaveError(err instanceof Error ? err.message : 'שגיאה')
       setSaveStatus('error')
     }
   }
@@ -571,9 +511,7 @@ export default function TransactionDialog({
         {child}
       </div>
     )
-    const inputProps = {
-      disabled: !!f.derived,
-    }
+    const inputProps = { disabled: !!f.derived }
     switch (f.type) {
       case 'text':
         return wrap(
@@ -600,30 +538,6 @@ export default function TransactionDialog({
           <DateInput
             value={(value as string) ?? ''}
             onChange={(e) => setCustom(f.key, e.target.value || null)}
-            {...inputProps}
-          />,
-        )
-      case 'month':
-        return wrap(
-          <Select
-            value={value != null ? String(value) : 'none'}
-            onValueChange={(v) => setCustom(f.key, v === 'none' ? null : Number(v))}
-            disabled={!!f.derived}
-          >
-            <SelectTrigger><SelectValue placeholder="בחר חודש" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">לא נבחר</SelectItem>
-              {HEBREW_MONTHS.map((n, i) => <SelectItem key={i + 1} value={String(i + 1)}>{n}</SelectItem>)}
-            </SelectContent>
-          </Select>,
-        )
-      case 'year':
-        return wrap(
-          <Input
-            type="number"
-            dir="ltr"
-            value={(value as number | string | undefined) ?? ''}
-            onChange={(e) => setCustom(f.key, e.target.value === '' ? null : Number(e.target.value))}
             {...inputProps}
           />,
         )
@@ -654,6 +568,8 @@ export default function TransactionDialog({
             </SelectContent>
           </Select>,
         )
+      default:
+        return null
     }
   }
 
@@ -661,130 +577,122 @@ export default function TransactionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent dir="rtl" className="sm:max-w-6xl">
+      <DialogContent dir="rtl" className="sm:max-w-5xl w-[90vw] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
-            {editing ? 'עריכת עסקה' : 'הוספת עסקה'}
-          </DialogTitle>
+          <DialogTitle>{editing ? 'עריכת עסקה' : 'הוספת עסקה'}</DialogTitle>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* LEFT panel: kind, client, auto-fields, kind-specific */}
-          <div className="space-y-5">
-          {/* Kind pills */}
-          <section className="space-y-2">
-            <Label className="text-purple-700 text-sm">סוג</Label>
-            <div className="flex items-center gap-2 flex-wrap">
-              {serviceTypes.map((st) => {
-                const active = state.kind === 'service' && state.service_type_id === st.id
-                return (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => pickKind('service', st.id)}
-                    className={`px-4 py-1.5 rounded-full border text-sm ${
-                      active
-                        ? 'bg-purple-600 text-white border-purple-600'
-                        : 'bg-white text-purple-700 border-purple-200 hover:bg-purple-50'
-                    }`}
-                  >
-                    {st.name}
-                  </button>
-                )
-              })}
-              <div className="w-px h-6 bg-purple-200 mx-1" />
-              <button
-                type="button"
-                onClick={() => pickKind('time_period')}
-                className={`px-4 py-1.5 rounded-full border text-sm flex items-center gap-1 ${
-                  isTimePeriod
-                    ? 'bg-amber-500 text-white border-amber-500'
-                    : 'bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100'
-                }`}
-              >
-                <Clock className="h-4 w-4" />
-                דיווח שעות
-              </button>
-            </div>
-          </section>
-
-          {/* Client autocomplete (Batch 4 A1: centralized ClientPicker) */}
-          <section className="space-y-2">
-            <Label className="text-purple-700 text-sm">לקוח</Label>
-            <ClientPicker
-              value={state.client_id}
-              onChange={(id, c) =>
-                setState((s) => ({ ...s, client_id: id, client_name: c?.name ?? '' }))
-              }
-              placeholder="חיפוש לקוח לפי שם או ח.פ. ..."
-            />
-            {selectedClient && (
-              <p className="text-[11px] text-muted-foreground">
-                מתוך פרטי הלקוח:{' '}
-                {selectedClient.commission_percent != null && <span>עמלה {selectedClient.commission_percent}% · </span>}
-                {selectedClient.warranty_days != null && <span>אחריות {selectedClient.warranty_days} ימים · </span>}
-                {selectedClient.payment_terms && <span>תנאי תשלום {selectedClient.payment_terms} · </span>}
-                {selectedClient.hourly_rate != null && <span>תעריף שעה {fmt(selectedClient.hourly_rate)}</span>}
-              </p>
-            )}
-          </section>
-
-          {/* Auto-fields */}
-          <Card className="p-3">
-            <h3 className="text-sm font-semibold text-purple-700 mb-2">שדות אוטומטיים (ניתן לערוך)</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">מוביל שירות</Label>
-                <Select value={state.service_lead ?? ''} onValueChange={(v) => setState((s) => ({ ...s, service_lead: v ?? '' }))}>
-                  <SelectTrigger><SelectValue placeholder="בחר" /></SelectTrigger>
+        <div className="space-y-6 py-2">
+          {/* Section 1 — פרטי עסקה */}
+          <div>
+            <h3 className="text-sm font-semibold text-purple-700 mb-3">פרטי עסקה</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5 md:col-span-2">
+                <Label>לקוח *</Label>
+                <ClientPicker
+                  value={state.client_id}
+                  onChange={(id, c) =>
+                    setState((s) => ({ ...s, client_id: id, client_name: c?.name ?? '' }))
+                  }
+                  placeholder="חיפוש לקוח לפי שם או ח.פ. ..."
+                />
+                {selectedClient && (
+                  <p className="text-[11px] text-muted-foreground">
+                    {selectedClient.commission_percent != null && <span>עמלה {selectedClient.commission_percent}% · </span>}
+                    {selectedClient.warranty_days != null && <span>אחריות {selectedClient.warranty_days} ימים · </span>}
+                    {selectedClient.payment_terms && <span>תנאי תשלום {selectedClient.payment_terms} · </span>}
+                    {selectedClient.hourly_rate != null && <span>תעריף שעה {fmt(selectedClient.hourly_rate)}</span>}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label>סוג שירות *</Label>
+                <Select
+                  value={state.service_type_id ?? ''}
+                  onValueChange={(v) => v && handleServiceTypePick(v)}
+                  disabled={isTimePeriod}
+                >
+                  <SelectTrigger><SelectValue placeholder={isTimePeriod ? 'דיווח שעות' : 'בחר סוג שירות'} /></SelectTrigger>
                   <SelectContent>
-                    {employees.map((e) => (
-                      <SelectItem key={e.id} value={e.full_name}>{e.full_name}</SelectItem>
+                    {serviceTypes.map((st) => (
+                      <SelectItem key={st.id} value={st.id}>{st.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">תאריך פתיחה</Label>
+              <div className="space-y-1.5">
+                <Label>תאריך פתיחה</Label>
                 <DateInput
                   value={state.entry_date}
                   onChange={(e) => setState((s) => ({ ...s, entry_date: e.target.value }))}
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">תאריך סגירה</Label>
-                <DateInput
-                  value={state.close_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
-                />
+            </div>
+
+            {!isTimePeriod && selectedServiceType && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                {selectedServiceType.fields.map(renderField)}
               </div>
-              <div className="space-y-1 flex flex-col justify-center">
-                <LabeledToggle
-                  label="חיוב"
-                  checked={state.is_billable}
-                  onCheckedChange={(v) => setState((s) => ({ ...s, is_billable: v }))}
-                  offText="ללא חיוב"
-                  onText="לחיוב"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">תאריך תחילת עבודה</Label>
+            )}
+            {!isTimePeriod && !selectedServiceType && (
+              <p className="text-sm text-muted-foreground mt-3">בחר סוג שירות להצגת שדות.</p>
+            )}
+            {isTimePeriod && (
+              <Card className="p-3 mt-4 bg-amber-50/50">
+                <h4 className="text-xs font-semibold text-amber-800 mb-2">דיווח שעות</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <Label className="text-xs">תקופה</Label>
+                    <p>{state.period_start ?? '—'} → {state.period_end ?? '—'}</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">סה"כ שעות</Label>
+                    <p>{state.hours_total ?? 0}</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">סכום נטו</Label>
+                    <p>{fmt(state.net_invoice_amount)}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Section 2 — תאריכים */}
+          <div>
+            <h3 className="text-sm font-semibold text-purple-700 mb-3">תאריכים</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>תאריך התחלת עבודה</Label>
                 <DateInput
                   value={state.work_start_date ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, work_start_date: e.target.value || null }))}
                 />
+                <p className="text-[11px] text-muted-foreground">בעת שמירה — נוצרים אירועי חיוב לפי פיצול התשלום של הלקוח.</p>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs flex items-center gap-1">
-                  תאריך תום אחריות
+              <div className="space-y-1.5">
+                <Label>תאריך סיום עבודה</Label>
+                <DateInput
+                  value={state.work_end_date ?? ''}
+                  onChange={(e) => setState((s) => ({ ...s, work_end_date: e.target.value || null }))}
+                />
+                <p className="text-[11px] text-muted-foreground">בעת שמירה — אירועי חיוב עתידיים מבוטלים.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="flex items-center gap-1">
+                  תקופת אחריות מסתיימת
                   <button
                     type="button"
                     onClick={() => {
-                      const d = addDays(state.work_start_date, selectedClient?.warranty_days ?? null)
-                      setState((s) => ({ ...s, warranty_end_date: d }))
+                      const days = selectedClient?.warranty_days ?? null
+                      if (state.work_start_date && days != null) {
+                        setState((s) => ({ ...s, warranty_end_date: addDays(state.work_start_date!, days) }))
+                      }
                     }}
                     className="text-purple-500 hover:text-purple-700"
-                    title="חשב מחדש מתאריך תחילת עבודה + תקופת אחריות"
+                    title="חשב מחדש מתחילת עבודה + תקופת אחריות"
                   >
                     <RefreshCw className="h-3 w-3" />
                   </button>
@@ -794,130 +702,15 @@ export default function TransactionDialog({
                   onChange={(e) => setState((s) => ({ ...s, warranty_end_date: e.target.value || null }))}
                 />
               </div>
-            </div>
-          </Card>
-
-          {/* Kind-specific fields */}
-          <Card className="p-3">
-            <h3 className="text-sm font-semibold text-purple-700 mb-2">שדות ייחודיים</h3>
-            {!isTimePeriod && selectedServiceType && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {selectedServiceType.fields.map(renderField)}
-              </div>
-            )}
-            {!isTimePeriod && !selectedServiceType && (
-              <p className="text-sm text-muted-foreground">בחר סוג שירות.</p>
-            )}
-            {isTimePeriod && (
-              <TimePeriodForm
-                state={state}
-                setState={setState}
-                unbilledHours={unbilledHours}
-                selectedClient={selectedClient}
-                employees={employees}
-              />
-            )}
-          </Card>
-          </div>
-
-          {/* RIGHT panel: invoicing, supplier */}
-          <div className="space-y-5">
-          {/* Invoicing & payment */}
-          <Card className="p-3">
-            <h3 className="text-sm font-semibold text-purple-700 mb-2">חשבונית ותשלום</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">אחוז גבייה לחשבונית (%)</Label>
-                <Input
-                  type="number"
-                  dir="ltr"
-                  placeholder="לדוגמה: 30, 70, 100"
-                  value={state.billing_percent ?? ''}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      billing_percent: e.target.value === '' ? null : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">סכום לתשלום לחשבונית</Label>
-                <div
-                  dir="ltr"
-                  className="flex items-center h-10 px-3 rounded-md border border-input bg-muted text-sm font-medium text-muted-foreground"
-                >
-                  {autoInvoiceAmount != null ? fmt(autoInvoiceAmount) : '—'}
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">סטטוס תשלום</Label>
-                <Select value={state.payment_status} onValueChange={(v) => setState((s) => ({ ...s, payment_status: v ?? 'ממתין' }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ממתין">ממתין</SelectItem>
-                    <SelectItem value="שולם">שולם</SelectItem>
-                    <SelectItem value="פיגור">פיגור</SelectItem>
-                    <SelectItem value="ללא חיוב">ללא חיוב</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1" />
-              <div className="space-y-1">
-                <Label className="text-xs">חשבונית עסקה</Label>
-                <Input
-                  value={state.invoice_number_transaction ?? ''}
-                  onChange={(e) =>
-                    setState((s) => ({ ...s, invoice_number_transaction: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">חשבונית מס קבלה</Label>
-                <Input
-                  value={state.invoice_number_receipt ?? ''}
-                  onChange={(e) =>
-                    setState((s) => ({ ...s, invoice_number_receipt: e.target.value || null }))
-                  }
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">תאריך שליחת חשבונית</Label>
+              <div className="space-y-1.5">
+                <Label>תאריך סגירה</Label>
                 <DateInput
-                  value={state.invoice_sent_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, invoice_sent_date: e.target.value || null }))}
+                  value={state.close_date ?? ''}
+                  onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs flex items-center gap-1">
-                  מועד לתשלום
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const days = parsePaymentTermDays(selectedClient?.payment_terms ?? null)
-                      const d = addDays(state.invoice_sent_date, days)
-                      setState((s) => ({ ...s, payment_due_date: d }))
-                    }}
-                    className="text-purple-500 hover:text-purple-700"
-                    title="חשב מחדש מתאריך שליחה + תנאי תשלום"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                  </button>
-                </Label>
-                <DateInput
-                  value={state.payment_due_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, payment_due_date: e.target.value || null }))}
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">תאריך תשלום בפועל</Label>
-                <DateInput
-                  value={state.payment_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, payment_date: e.target.value || null }))}
-                />
-              </div>
-              <div className="space-y-1 md:col-span-2">
-                <Label className="text-xs">הערות</Label>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label>הערות</Label>
                 <Textarea
                   value={state.notes ?? ''}
                   onChange={(e) => setState((s) => ({ ...s, notes: e.target.value || null }))}
@@ -925,23 +718,41 @@ export default function TransactionDialog({
                 />
               </div>
             </div>
-          </Card>
+          </div>
 
-          {/* Supplier */}
-          <Card className="p-3">
-            <h3 className="text-sm font-semibold text-purple-700 mb-2">ספק</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">ספק</Label>
+          {/* Section 3 — מקדמה (only for service when client has advance configured OR override set) */}
+          {!isTimePeriod && (selectedClient?.advance_type || state.advance_type_override) && (
+            <>
+              <Separator />
+              <div>
+                <h3 className="text-sm font-semibold text-purple-700 mb-3">מקדמה</h3>
+                <p className="text-[11px] text-muted-foreground mb-2">
+                  ברירת מחדל לפי הסכם לקוח — ניתן לשנות לעסקה זו
+                </p>
+                <AdvanceEditor
+                  advanceType={effectiveAdvanceType}
+                  advanceAmount={effectiveAdvanceAmount}
+                  onTypeChange={(t) => setState((s) => ({ ...s, advance_type_override: t }))}
+                  onAmountChange={(v) => setState((s) => ({ ...s, advance_amount_override: v }))}
+                />
+              </div>
+            </>
+          )}
+
+          {/* Section 4 — קפס (supplier) */}
+          <Separator />
+          <div>
+            <h3 className="text-sm font-semibold text-purple-700 mb-3">קפס</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>ספק</Label>
                 <Select
                   value={state.supplier_id ?? '__none__'}
                   onValueChange={(v) =>
                     setState((s) => ({ ...s, supplier_id: v === '__none__' ? null : v }))
                   }
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder="ללא ספק" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="ללא ספק" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">ללא ספק</SelectItem>
                     {suppliers.map((sp) => (
@@ -952,8 +763,8 @@ export default function TransactionDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">אחוז ספק (%)</Label>
+              <div className="space-y-1.5">
+                <Label>% עמלת קפס</Label>
                 <Input
                   type="number"
                   dir="ltr"
@@ -969,17 +780,36 @@ export default function TransactionDialog({
                 />
               </div>
             </div>
-          </Card>
           </div>
+
+          {/* Section 5 — חיובים ותשלומים (only when editing) */}
+          {editing && (
+            <>
+              <Separator />
+              <BillingEventsPanel
+                events={txnBillingEvents}
+                approved={transactionApproved}
+                onChange={() => refetchEvents()}
+              />
+            </>
+          )}
+
+          {!editing && (
+            <p className="text-xs text-muted-foreground">
+              פרטי החיוב יחושבו לאחר שמירת העסקה
+            </p>
+          )}
         </div>
 
         <DialogFooter className="flex flex-col gap-2">
           {saveStatus === 'success' && <p className="text-green-600 text-sm text-right">נשמר ✓</p>}
-          {saveStatus === 'error' && <p className="text-red-600 text-sm text-right">שגיאה בשמירה</p>}
+          {saveStatus === 'error' && (
+            <p className="text-red-600 text-sm text-right">{saveError ?? 'שגיאה בשמירה'}</p>
+          )}
           <div className="flex gap-2 flex-row-reverse">
             <Button
               onClick={handleSave}
-              disabled={saveStatus === 'saving' || saveStatus === 'success'}
+              disabled={saveStatus === 'saving' || saveStatus === 'success' || !state.client_id}
               className="bg-purple-600 hover:bg-purple-700 text-white"
             >
               {saveStatus === 'saving' ? 'שומר...' : 'שמור'}
@@ -994,156 +824,121 @@ export default function TransactionDialog({
   )
 }
 
-function TimePeriodForm({
-  state,
-  setState,
-  unbilledHours,
-  selectedClient,
-  employees,
+// ─────────────────────────────────────────────────────────────────────────────
+// Billing events read + inline edit (when editing existing transaction)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function BillingEventsPanel({
+  events,
+  approved,
+  onChange,
 }: {
-  state: DialogState
-  setState: React.Dispatch<React.SetStateAction<DialogState>>
-  unbilledHours: HoursLog[]
-  selectedClient: Client | null
-  employees: Profile[]
+  events: BillingEvent[]
+  approved: boolean
+  onChange: () => void
 }) {
-  const firstOfMonth = new Date()
-  firstOfMonth.setDate(1)
-  const lastOfMonth = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth() + 1, 0)
+  return (
+    <div>
+      <h3 className="text-sm font-semibold text-purple-700 mb-3">
+        חיובים ותשלומים{!approved && <span className="text-amber-600 text-xs ms-2">(העסקה ממתינה לאישור)</span>}
+      </h3>
+      {events.length === 0 ? (
+        <p className="text-xs text-muted-foreground">אין אירועי חיוב לעסקה זו.</p>
+      ) : (
+        <div className="space-y-2">
+          {events.map((e) => <BillingEventRow key={e.id} event={e} onSaved={onChange} />)}
+        </div>
+      )}
+    </div>
+  )
+}
 
-  const setPeriodThisMonth = () => {
-    setState((s) => ({
-      ...s,
-      period_start: firstOfMonth.toISOString().slice(0, 10),
-      period_end: lastOfMonth.toISOString().slice(0, 10),
-    }))
-  }
+const STATUS_COLOR: Record<BillingEvent['status'], string> = {
+  pending: 'bg-amber-400',
+  to_bill: 'bg-blue-500',
+  billed: 'bg-green-500',
+  cancelled: 'bg-red-400',
+}
 
-  const profileNameById = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const e of employees) m.set(e.id, e.full_name)
-    return m
-  }, [employees])
+const STATUS_LABEL: Record<BillingEvent['status'], string> = {
+  pending: 'ממתין',
+  to_bill: 'לחיוב',
+  billed: 'חויב',
+  cancelled: 'מבוטל',
+}
 
-  const toggleHourRow = (id: string) => {
-    setState((s) => {
-      const next = new Set(s.selectedHoursIds)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return { ...s, selectedHoursIds: next }
-    })
-  }
+function BillingEventRow({ event, onSaved }: { event: BillingEvent; onSaved: () => void }) {
+  const [invoice, setInvoice] = useState(event.invoice_number ?? '')
+  const [paymentDate, setPaymentDate] = useState(event.payment_date ?? '')
+  const [receipt, setReceipt] = useState(event.receipt_number ?? '')
+  const [savingField, setSavingField] = useState<string | null>(null)
 
-  const allChecked = unbilledHours.length > 0 && unbilledHours.every((h) => state.selectedHoursIds.has(h.id))
-  const toggleAll = () => {
-    setState((s) => {
-      if (allChecked) return { ...s, selectedHoursIds: new Set() }
-      return { ...s, selectedHoursIds: new Set(unbilledHours.map((h) => h.id)) }
-    })
+  useEffect(() => {
+    setInvoice(event.invoice_number ?? '')
+    setPaymentDate(event.payment_date ?? '')
+    setReceipt(event.receipt_number ?? '')
+  }, [event.id, event.invoice_number, event.payment_date, event.receipt_number])
+
+  const saveField = async (
+    field: 'invoice_number' | 'payment_date' | 'receipt_number',
+    value: string,
+  ) => {
+    setSavingField(field)
+    const patch: Record<string, unknown> = { [field]: value || null }
+    if (field === 'invoice_number' && value && event.status !== 'billed') {
+      patch.status = 'billed'
+    }
+    const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id)
+    setSavingField(null)
+    if (error) {
+      console.error(error)
+      return
+    }
+    onSaved()
   }
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">תחילת תקופה</Label>
-          <DateInput
-            value={state.period_start ?? ''}
-            onChange={(e) => setState((s) => ({ ...s, period_start: e.target.value || null }))}
-          />
+    <Card className="p-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${STATUS_COLOR[event.status]}`} />
+          <span className="text-sm font-medium">{event.description ?? '—'}</span>
+          <Badge variant="outline" className="text-xs">{STATUS_LABEL[event.status]}</Badge>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">סוף תקופה</Label>
-          <DateInput
-            value={state.period_end ?? ''}
-            onChange={(e) => setState((s) => ({ ...s, period_end: e.target.value || null }))}
-          />
-        </div>
-        <div className="space-y-1 flex flex-col justify-end">
-          <Button variant="outline" size="sm" onClick={setPeriodThisMonth}>החודש</Button>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">
-            תעריף שעה (₪)
-            {selectedClient?.hourly_rate != null && state.hourly_rate_used !== selectedClient.hourly_rate && (
-              <span className="text-[10px] text-amber-600 ms-1">
-                ≠ {fmt(selectedClient.hourly_rate)} של הלקוח
-              </span>
-            )}
-          </Label>
-          <Input
-            type="number"
-            dir="ltr"
-            value={state.hourly_rate_used ?? ''}
-            onChange={(e) =>
-              setState((s) => ({ ...s, hourly_rate_used: e.target.value === '' ? null : Number(e.target.value) }))
-            }
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">סה"כ שעות</Label>
-          <Input dir="ltr" value={state.hours_total?.toFixed(2) ?? ''} readOnly />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">סכום נטו (מחושב)</Label>
-          <Input dir="ltr" value={state.net_invoice_amount != null ? fmt(state.net_invoice_amount) : ''} readOnly />
-        </div>
-      </div>
-
-      <div className="rounded-md border">
-        <div className="flex items-center justify-between px-3 py-2 border-b bg-purple-50">
-          <span className="text-xs font-semibold text-purple-800">
-            דיווחי שעות לא מחויבים ({unbilledHours.length})
+        <div className="text-sm flex items-center gap-3">
+          <span className="text-muted-foreground"><DateCell value={event.billing_date} /></span>
+          <span className="font-semibold">
+            {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(event.amount)}
           </span>
-          {unbilledHours.length > 0 && (
-            <button type="button" className="text-xs text-purple-700 hover:underline" onClick={toggleAll}>
-              {allChecked ? 'בטל בחירה' : 'בחר הכל'}
-            </button>
-          )}
         </div>
-        {unbilledHours.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground text-center">
-            אין דיווחים בתקופה שנבחרה ללקוח זה.
-          </p>
-        ) : (
-          <div className="max-h-64 overflow-y-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8"></TableHead>
-                  <TableHead className="text-right text-xs">תאריך</TableHead>
-                  <TableHead className="text-right text-xs">משעה</TableHead>
-                  <TableHead className="text-right text-xs">עד</TableHead>
-                  <TableHead className="text-right text-xs">שעות</TableHead>
-                  <TableHead className="text-right text-xs">עובד/ת</TableHead>
-                  <TableHead className="text-right text-xs">תיאור</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {unbilledHours.map((h) => (
-                  <TableRow key={h.id}>
-                    <TableCell className="w-8">
-                      <input
-                        type="checkbox"
-                        checked={state.selectedHoursIds.has(h.id)}
-                        onChange={() => toggleHourRow(h.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-xs"><DateCell value={h.visit_date} /></TableCell>
-                    <TableCell className="text-xs" dir="ltr">{h.start_time ?? '—'}</TableCell>
-                    <TableCell className="text-xs" dir="ltr">{h.end_time ?? '—'}</TableCell>
-                    <TableCell className="text-xs">{h.hours}</TableCell>
-                    <TableCell className="text-xs">
-                      {h.profile_id ? profileNameById.get(h.profile_id) ?? '—' : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{h.description ?? '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
       </div>
-    </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs">חשבון עסקה</Label>
+          <Input
+            value={invoice}
+            onChange={(e) => setInvoice(e.target.value)}
+            onBlur={() => invoice !== (event.invoice_number ?? '') && saveField('invoice_number', invoice)}
+            placeholder={savingField === 'invoice_number' ? 'שומר...' : ''}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">תאריך תשלום</Label>
+          <DateInput
+            value={paymentDate}
+            onChange={(e) => setPaymentDate(e.target.value)}
+            onBlur={() => paymentDate !== (event.payment_date ?? '') && saveField('payment_date', paymentDate)}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">קבלה</Label>
+          <Input
+            value={receipt}
+            onChange={(e) => setReceipt(e.target.value)}
+            onBlur={() => receipt !== (event.receipt_number ?? '') && saveField('receipt_number', receipt)}
+          />
+        </div>
+      </div>
+    </Card>
   )
 }

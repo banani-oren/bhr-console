@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Pencil, Trash2, Lock, FileText } from 'lucide-react'
+import { Plus, Pencil, Trash2, Receipt, FileText } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import type { Client, HoursLog, Profile, Transaction } from '@/lib/types'
+import { useAuth } from '@/lib/auth'
+import type { Client, HoursLog, Profile } from '@/lib/types'
+import { addDays, parsePaymentTermDays } from '@/lib/billingEvents'
 import { useSafeMutation } from '@/hooks/useSafeMutation'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -26,6 +29,7 @@ import {
 
 export default function ManageHoursView() {
   const queryClient = useQueryClient()
+  const { profile } = useAuth()
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [month, setMonth] = useState<number>(CURRENT_MONTH)
@@ -33,7 +37,7 @@ export default function ManageHoursView() {
   const [entryOpen, setEntryOpen] = useState(false)
   const [editing, setEditing] = useState<HoursLog | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<HoursLog | null>(null)
-  const [closeMonthOpen, setCloseMonthOpen] = useState(false)
+  const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
 
   const { data: hoursData = [], isLoading } = useQuery<HoursLog[]>({
@@ -77,28 +81,23 @@ export default function ManageHoursView() {
   })
   const selectedClient = clients.find((c) => c.id === clientId) ?? null
 
-  // Existing close-month transaction for this client+month?
-  const { data: existingClose } = useQuery<Transaction | null>({
-    queryKey: ['hours-close-existing', clientId, month, year],
-    enabled: !!clientId && !!selectedClient,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('client_name', selectedClient!.name)
-        .eq('billing_month', month)
-        .eq('billing_year', year)
-        .eq('service_type', 'ריטיינר')
-        .maybeSingle()
-      if (error) throw error
-      return (data as Transaction | null) ?? null
-    },
-  })
-
+  const unbilledHours = useMemo(
+    () => hoursData.filter((h) => !h.billed_transaction_id),
+    [hoursData],
+  )
   const totalHours = useMemo(
     () => hoursData.reduce((s, h) => s + (Number(h.hours) || 0), 0),
     [hoursData],
   )
+  const totalUnbilledHours = useMemo(
+    () => unbilledHours.reduce((s, h) => s + (Number(h.hours) || 0), 0),
+    [unbilledHours],
+  )
+  const billingAmount = selectedClient?.hourly_rate
+    ? Math.round(totalUnbilledHours * selectedClient.hourly_rate * 100) / 100
+    : 0
+  const termDays = parsePaymentTermDays(selectedClient?.payment_terms ?? null)
+  const billingDate = addDays(new Date().toISOString().slice(0, 10), termDays)
 
   const deleteMut = useSafeMutation<{ id: string }, void>({
     mutationFn: async ({ id }) => {
@@ -113,41 +112,73 @@ export default function ManageHoursView() {
     },
   })
 
-  const closeMonthMut = useSafeMutation<void, void>({
+  const hoursBillingMut = useSafeMutation<void, void>({
     mutationFn: async () => {
-      if (!selectedClient) throw new Error('לא נבחר לקוח')
-      const payload = {
-        net_invoice_amount: totalHours,
-      }
-      if (existingClose) {
-        const { error } = await supabase
-          .from('transactions')
-          .update(payload)
-          .eq('id', existingClose.id)
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from('transactions').insert({
+      if (!selectedClient || !clientId) throw new Error('לא נבחר לקוח')
+      if (!selectedClient.hourly_rate) throw new Error('תעריף שעה לא הוגדר ללקוח')
+      if (unbilledHours.length === 0) throw new Error('אין שעות לא מחויבות לתקופה זו')
+
+      const periodStart = unbilledHours[0]?.visit_date ?? ''
+      const periodEnd = unbilledHours[unbilledHours.length - 1]?.visit_date ?? ''
+      const nowIso = new Date().toISOString()
+
+      const { data: txn, error: txnErr } = await supabase
+        .from('transactions')
+        .insert({
+          kind: 'time_period',
+          client_id: clientId,
           client_name: selectedClient.name,
+          service_type: 'שעות עבודה',
+          period_start: periodStart,
+          period_end: periodEnd,
+          hours_total: totalUnbilledHours,
+          hourly_rate_used: selectedClient.hourly_rate,
+          net_invoice_amount: billingAmount,
           billing_month: month,
           billing_year: year,
-          service_type: 'ריטיינר',
-          ...payload,
+          entry_date: new Date().toISOString().slice(0, 10),
+          payment_status: 'ממתין',
+          needs_approval: false,
+          approved_at: nowIso,
+          approved_by: profile?.id ?? null,
+          created_by: profile?.id ?? null,
           position_name: '',
           candidate_name: '',
           salary: 0,
           commission_percent: 0,
           commission_amount: 0,
-          service_lead: '',
-          entry_date: new Date().toISOString().slice(0, 10),
-          payment_status: 'ממתין',
-          is_billable: true,
+          service_lead: profile?.full_name ?? '',
         })
-        if (error) throw error
+        .select('id')
+        .single()
+      if (txnErr || !txn) throw txnErr ?? new Error('שגיאה ביצירת עסקה')
+
+      const txnId = (txn as { id: string }).id
+
+      const hourIds = unbilledHours.map((h) => h.id)
+      if (hourIds.length > 0) {
+        const { error: linkErr } = await supabase
+          .from('hours_log')
+          .update({ billed_transaction_id: txnId })
+          .in('id', hourIds)
+        if (linkErr) throw linkErr
       }
+
+      const { error: evtErr } = await supabase.from('billing_events').insert({
+        transaction_id: txnId,
+        event_index: 1,
+        amount: billingAmount,
+        description: `שעות עבודה · ${selectedClient.name} · ${periodStart} – ${periodEnd}`,
+        billing_date: billingDate,
+        status: 'pending',
+        advance_applied: 0,
+        supplier_amount: 0,
+      })
+      if (evtErr) throw evtErr
     },
-    invalidate: [['transactions'], ['hours-close-existing']],
+    invalidate: [['transactions'], ['billing_events'], ['hours-manage']],
     onSuccess: () => {
-      setTimeout(() => setCloseMonthOpen(false), 1000)
+      setTimeout(() => setBillingDialogOpen(false), 1000)
     },
   })
 
@@ -199,13 +230,20 @@ export default function ManageHoursView() {
           )}
           {clientId && (
             <Button
-              onClick={() => setCloseMonthOpen(true)}
+              onClick={() => setBillingDialogOpen(true)}
               variant="outline"
               className="border-amber-300 text-amber-700 hover:bg-amber-50"
-              disabled={hoursData.length === 0}
+              disabled={unbilledHours.length === 0}
+              title={
+                !selectedClient?.hourly_rate
+                  ? 'תעריף שעה לא הוגדר ללקוח'
+                  : unbilledHours.length === 0
+                  ? 'אין שעות לא מחויבות'
+                  : ''
+              }
             >
-              <Lock className="w-4 h-4 ml-1" />
-              {existingClose ? 'עדכן סגירת חודש' : 'סגור חודש'}
+              <Receipt className="w-4 h-4 ml-1" />
+              הפק חיוב שעות
             </Button>
           )}
           <Button
@@ -241,34 +279,46 @@ export default function ManageHoursView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {hoursData.map((entry) => (
-                  <TableRow key={entry.id} className="hover:bg-purple-50/40">
-                    <TableCell><DateCell value={entry.visit_date} /></TableCell>
-                    <TableCell dir="ltr" className="text-right">{entry.start_time ?? '—'}</TableCell>
-                    <TableCell dir="ltr" className="text-right">{entry.end_time ?? '—'}</TableCell>
-                    <TableCell>{entry.hours}</TableCell>
-                    <TableCell>{entry.profile_id ? profileNameById.get(entry.profile_id) ?? '—' : '—'}</TableCell>
-                    <TableCell className="text-muted-foreground">{entry.description ?? '—'}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1 justify-end">
-                        <Button
-                          size="icon" variant="ghost" className="h-8 w-8 text-purple-600 hover:bg-purple-100"
-                          onClick={() => { setEditing(entry); setEntryOpen(true) }}
-                          title="עריכה"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="icon" variant="ghost" className="h-8 w-8 text-red-500 hover:bg-red-50"
-                          onClick={() => setDeleteTarget(entry)}
-                          title="מחיקה"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {hoursData.map((entry) => {
+                  const billed = !!entry.billed_transaction_id
+                  return (
+                    <TableRow key={entry.id} className={billed ? 'bg-green-50/30' : 'hover:bg-purple-50/40'}>
+                      <TableCell><DateCell value={entry.visit_date} /></TableCell>
+                      <TableCell dir="ltr" className="text-right">{entry.start_time ?? '—'}</TableCell>
+                      <TableCell dir="ltr" className="text-right">{entry.end_time ?? '—'}</TableCell>
+                      <TableCell>{entry.hours}</TableCell>
+                      <TableCell>{entry.profile_id ? profileNameById.get(entry.profile_id) ?? '—' : '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {entry.description ?? '—'}
+                        {billed && (
+                          <Badge variant="outline" className="ms-2 text-green-700 border-green-300 text-[10px]">
+                            חויב ✓
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1 justify-end">
+                          <Button
+                            size="icon" variant="ghost" className="h-8 w-8 text-purple-600 hover:bg-purple-100"
+                            onClick={() => { setEditing(entry); setEntryOpen(true) }}
+                            title="עריכה"
+                            disabled={billed}
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            size="icon" variant="ghost" className="h-8 w-8 text-red-500 hover:bg-red-50"
+                            onClick={() => setDeleteTarget(entry)}
+                            title={billed ? 'נעול — חויב' : 'מחיקה'}
+                            disabled={billed}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}
@@ -314,41 +364,59 @@ export default function ManageHoursView() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={closeMonthOpen} onOpenChange={setCloseMonthOpen}>
-        <DialogContent dir="rtl" className="max-w-sm">
+      <Dialog open={billingDialogOpen} onOpenChange={setBillingDialogOpen}>
+        <DialogContent dir="rtl" className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Lock className="w-4 h-4 text-amber-500" />
-              {existingClose ? 'עדכן סגירת חודש' : 'סגור חודש'}
+              <Receipt className="w-4 h-4 text-amber-500" />
+              הפק חיוב שעות
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-2 text-sm">
-            <p>
-              לקוח: <strong>{selectedClient?.name}</strong>
-            </p>
-            <p>תקופה: {monthLabel(month, year)}</p>
-            <p>סה"כ שעות: <strong>{totalHours.toFixed(2)}</strong></p>
-            {existingClose && (
-              <p className="text-xs text-amber-700">
-                כבר קיימת עסקת ריטיינר לתקופה — היא תעודכן.
-              </p>
+            <div className="grid grid-cols-2 gap-y-2">
+              <span className="text-muted-foreground">לקוח:</span>
+              <span className="font-medium">{selectedClient?.name}</span>
+              <span className="text-muted-foreground">תקופה:</span>
+              <span>{monthLabel(month, year)}</span>
+              <span className="text-muted-foreground">סה"כ שעות:</span>
+              <span className="font-medium">{totalUnbilledHours.toFixed(2)}</span>
+              <span className="text-muted-foreground">תעריף שעה:</span>
+              <span>
+                {selectedClient?.hourly_rate != null
+                  ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(selectedClient.hourly_rate)
+                  : '—'}
+              </span>
+            </div>
+            <div className="border-t pt-2 flex justify-between">
+              <span className="text-muted-foreground">סכום לחיוב:</span>
+              <span className="font-bold text-lg">
+                {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(billingAmount)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">תאריך חיוב:</span>
+              <span>{billingDate}</span>
+            </div>
+            {hoursBillingMut.saveStatus === 'error' && (
+              <p className="text-destructive">{hoursBillingMut.errorMessage ?? 'שגיאה'}</p>
             )}
-            {closeMonthMut.saveStatus === 'error' && (
-              <p className="text-destructive">{closeMonthMut.errorMessage ?? 'שגיאה'}</p>
-            )}
-            {closeMonthMut.saveStatus === 'success' && (
-              <p className="text-green-600">{existingClose ? 'עודכן ✓' : 'נסגר ✓'}</p>
+            {hoursBillingMut.saveStatus === 'success' && (
+              <p className="text-green-600">החיוב הופק ✓</p>
             )}
           </div>
           <DialogFooter className="flex gap-2 flex-row-reverse">
             <Button
               className="bg-amber-500 hover:bg-amber-600 text-white"
-              onClick={() => void closeMonthMut.mutate()}
-              disabled={closeMonthMut.saveStatus === 'saving' || hoursData.length === 0}
+              onClick={() => void hoursBillingMut.mutate()}
+              disabled={
+                hoursBillingMut.saveStatus === 'saving' ||
+                unbilledHours.length === 0 ||
+                !selectedClient?.hourly_rate
+              }
             >
-              {closeMonthMut.saveStatus === 'saving' ? 'מעבד...' : existingClose ? 'עדכן' : 'סגור חודש'}
+              {hoursBillingMut.saveStatus === 'saving' ? 'מעבד...' : 'אשר הפקת חיוב'}
             </Button>
-            <Button variant="outline" onClick={() => setCloseMonthOpen(false)}>ביטול</Button>
+            <Button variant="outline" onClick={() => setBillingDialogOpen(false)}>ביטול</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

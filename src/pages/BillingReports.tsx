@@ -1,22 +1,17 @@
 import { useMemo, useState, useEffect } from 'react'
 import { DateInput } from '@/components/ui/date-input'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, FileText, Plus, TriangleAlert } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { FileText, Search, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/lib/auth'
-import type { BillingReport, Client, HoursLog, Transaction } from '@/lib/types'
+import type {
+  BillingEvent,
+  BillingEventStatus,
+  Transaction,
+} from '@/lib/types'
 import type { ServiceType } from '@/lib/serviceTypes'
-import {
-  buildBillingReportPdf,
-  uploadBillingReportPdf,
-  signedUrl,
-  formatCurrency,
-} from '@/lib/pdf'
 import ClientPicker from '@/components/ClientPicker'
 import { DateCell } from '@/components/ui/date-cell'
-import { formatDate } from '@/lib/dates'
-import LabeledToggle from '@/components/LabeledToggle'
-import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -28,13 +23,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import {
   Table,
   TableBody,
   TableCell,
@@ -43,263 +31,105 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const WARN_ROW_THRESHOLD = 200
+type EventWithTxn = BillingEvent & {
+  transactions: Pick<
+    Transaction,
+    'client_name' | 'client_id' | 'service_type' | 'service_type_id' | 'needs_approval' | 'approved_at'
+  >
+}
+
+const STATUS_LABEL: Record<BillingEventStatus, string> = {
+  pending: 'ממתין',
+  to_bill: 'לחיוב',
+  billed: 'חויב',
+  cancelled: 'מבוטל',
+}
+const STATUS_BADGE: Record<BillingEventStatus, string> = {
+  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
+  billed: 'bg-green-50 text-green-700 border-green-200',
+  cancelled: 'bg-red-50 text-red-700 border-red-200',
+}
+
+const formatCurrency = (n: number | null | undefined) => {
+  if (n == null) return '—'
+  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n)
+}
 
 export default function BillingReports() {
-  const queryClient = useQueryClient()
-  const { profile } = useAuth()
-
-  // Filter state (no required fields — every combination is valid).
   const [clientId, setClientId] = useState<string | null>(null)
-  const [periodStart, setPeriodStart] = useState<string>('')
-  const [periodEnd, setPeriodEnd] = useState<string>('')
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState<string>('all')
-  const [includeService, setIncludeService] = useState<boolean>(true)
-  const [includeTimePeriod, setIncludeTimePeriod] = useState<boolean>(true)
-  const [showCandidates, setShowCandidates] = useState(false)
-  const [selectedTxnIds, setSelectedTxnIds] = useState<Set<string>>(new Set())
-  const [issueStatus, setIssueStatus] = useState<'idle' | 'issuing' | 'success' | 'error'>('idle')
-  const [issueError, setIssueError] = useState<string | null>(null)
-  const [broadWarningOpen, setBroadWarningOpen] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [serviceTypeFilter, setServiceTypeFilter] = useState<string>('all')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchDebounced, setSearchDebounced] = useState('')
 
-  const { data: clients = [] } = useQuery<Client[]>({
-    queryKey: ['clients'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('clients').select('*').order('name', { ascending: true })
-      if (error) throw error
-      return data as Client[]
-    },
-  })
-  const clientNameById = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const c of clients) m.set(c.id, c.name)
-    return m
-  }, [clients])
-  const selectedClient = useMemo(
-    () => clients.find((c) => c.id === clientId) ?? null,
-    [clients, clientId],
-  )
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   const { data: serviceTypes = [] } = useQuery<ServiceType[]>({
     queryKey: ['service_types'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('service_types').select('*')
+      const { data, error } = await supabase.from('service_types').select('*').order('display_order', { ascending: true })
       if (error) throw error
       return data as ServiceType[]
     },
   })
-  const serviceTypeNames = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const s of serviceTypes) m.set(s.id, s.name)
-    return m
-  }, [serviceTypes])
 
-  const { data: pastReports = [] } = useQuery<BillingReport[]>({
-    queryKey: ['billing_reports'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('billing_reports')
-        .select('*')
-        .order('issued_at', { ascending: false })
-      if (error) throw error
-      return data as BillingReport[]
-    },
-  })
-
-  // Candidate transactions based on the filter strip.
-  const { data: candidates = [] } = useQuery<Transaction[]>({
-    queryKey: [
-      'br-candidates',
-      clientId,
-      periodStart || 'any',
-      periodEnd || 'any',
-      paymentStatusFilter,
-      includeService,
-      includeTimePeriod,
-    ],
-    enabled: showCandidates,
+  const { data: rawEvents = [], refetch } = useQuery<EventWithTxn[]>({
+    queryKey: ['billing_events_dashboard', clientId, statusFilter, dateFrom, dateTo, serviceTypeFilter],
     queryFn: async () => {
       let q = supabase
-        .from('transactions')
-        .select('*')
-        .eq('is_billable', true)
-      if (clientId) q = q.eq('client_name', selectedClient?.name ?? '')
-      if (paymentStatusFilter !== 'all') q = q.eq('payment_status', paymentStatusFilter)
+        .from('billing_events')
+        .select('*, transactions!inner(client_name, client_id, service_type, service_type_id, needs_approval, approved_at)')
+        .order('billing_date', { ascending: true })
+      if (clientId) q = q.eq('transactions.client_id', clientId)
+      if (statusFilter !== 'all') q = q.eq('status', statusFilter)
+      if (dateFrom) q = q.gte('billing_date', dateFrom)
+      if (dateTo) q = q.lte('billing_date', dateTo)
+      if (serviceTypeFilter !== 'all') q = q.eq('transactions.service_type', serviceTypeFilter)
       const { data, error } = await q
       if (error) throw error
-      return (data as Transaction[]).filter((t) => {
-        if (t.kind === 'service' && !includeService) return false
-        if (t.kind === 'time_period' && !includeTimePeriod) return false
-        if (periodStart || periodEnd) {
-          const d = t.kind === 'service'
-            ? (t.close_date ?? t.entry_date ?? null)
-            : (t.period_end ?? null)
-          if (!d) return false
-          if (periodStart && d < periodStart) return false
-          if (periodEnd && d > periodEnd) return false
-        }
-        return true
-      })
+      // Exclude events of unapproved transactions.
+      return ((data ?? []) as EventWithTxn[]).filter(
+        (e) => !e.transactions.needs_approval || e.transactions.approved_at,
+      )
     },
   })
 
-  // IDs already included in earlier reports for the same scope. De-dup when
-  // a single client is selected; for multi-client reports the admin can
-  // still re-issue, so we skip the grey-out.
-  const priorBilledIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (!clientId) return ids
-    for (const r of pastReports) {
-      if (r.client_id !== clientId && r.filter_client_id !== clientId) continue
-      for (const id of r.transaction_ids ?? []) ids.add(id)
-    }
-    return ids
-  }, [pastReports, clientId])
-
-  const selectableCandidates = useMemo(
-    () => candidates.filter((t) => !priorBilledIds.has(t.id)),
-    [candidates, priorBilledIds],
-  )
-
-  const onLoadCandidates = () => {
-    setShowCandidates(true)
-    setSelectedTxnIds(new Set())
-    setIssueStatus('idle')
-    setIssueError(null)
-  }
-
-  const toggleTxn = (id: string) => {
-    setSelectedTxnIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+  const filteredEvents = useMemo(() => {
+    if (!searchDebounced) return rawEvents
+    return rawEvents.filter((e) => {
+      const haystack = [
+        e.transactions.client_name,
+        e.description,
+        e.invoice_number,
+        e.receipt_number,
+        e.transactions.service_type,
+      ]
+        .filter(Boolean)
+        .map((s) => String(s).toLowerCase())
+      return haystack.some((s) => s.includes(searchDebounced))
     })
-  }
+  }, [rawEvents, searchDebounced])
 
-  useEffect(() => {
-    if (!showCandidates) return
-    if (selectableCandidates.length === 0) return
-    if (selectedTxnIds.size > 0) return
-    setSelectedTxnIds(new Set(selectableCandidates.map((t) => t.id)))
-  }, [selectableCandidates, showCandidates, selectedTxnIds.size])
+  const today = new Date().toISOString().slice(0, 10)
+  const isOverdue = (e: EventWithTxn) =>
+    e.billing_date != null && e.billing_date < today && e.status !== 'billed' && e.status !== 'cancelled'
 
-  const totalSelected = useMemo(() => {
-    return candidates
-      .filter((t) => selectedTxnIds.has(t.id))
-      .reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
-  }, [candidates, selectedTxnIds])
-
-  const describeTxn = (t: Transaction): string => {
-    if (t.kind === 'time_period') {
-      return `דוח שעות ${t.period_start ?? ''} → ${t.period_end ?? ''}`
+  // Totals
+  const totals = useMemo(() => {
+    let toBill = 0, billed = 0, outstanding = 0
+    for (const e of filteredEvents) {
+      if (e.status === 'to_bill') toBill += Number(e.amount) || 0
+      if (e.status === 'billed') billed += Number(e.amount) || 0
+      if (e.status === 'pending' || e.status === 'to_bill') outstanding += Number(e.amount) || 0
     }
-    const sn = serviceTypeNames.get(t.service_type_id ?? '') ?? t.service_type ?? ''
-    const extras = [t.position_name, t.candidate_name].filter(Boolean).join(' · ')
-    return extras ? `${sn} · ${extras}` : sn
-  }
-
-  const handleIssueReportConfirmed = async () => {
-    if (selectedTxnIds.size === 0) return
-    setIssueStatus('issuing')
-    setIssueError(null)
-    try {
-      const selected = candidates.filter((t) => selectedTxnIds.has(t.id))
-      const total = selected.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
-
-      const periodStartActual = periodStart || null
-      const periodEndActual = periodEnd || null
-
-      const { data: inserted, error: insErr } = await supabase
-        .from('billing_reports')
-        .insert({
-          client_id: clientId,
-          period_start: periodStartActual,
-          period_end: periodEndActual,
-          issued_by: profile?.id ?? null,
-          transaction_ids: selected.map((t) => t.id),
-          total_amount: total,
-          filter_client_id: clientId,
-          filter_period_start: periodStartActual,
-          filter_period_end: periodEndActual,
-          filter_payment_status: paymentStatusFilter === 'all' ? null : paymentStatusFilter,
-          filter_include_service: includeService,
-          filter_include_time_period: includeTimePeriod,
-        })
-        .select()
-        .single()
-      if (insErr || !inserted) throw insErr ?? new Error('insert failed')
-
-      const report = inserted as BillingReport
-
-      const timeIds = selected.filter((t) => t.kind === 'time_period').map((t) => t.id)
-      const hoursByTxn = new Map<string, HoursLog[]>()
-      if (timeIds.length > 0) {
-        const { data: hours } = await supabase
-          .from('hours_log')
-          .select('*')
-          .in('billed_transaction_id', timeIds)
-          .order('visit_date', { ascending: true })
-        for (const h of (hours as HoursLog[] | null) ?? []) {
-          const arr = hoursByTxn.get(h.billed_transaction_id!) ?? []
-          arr.push(h)
-          hoursByTxn.set(h.billed_transaction_id!, arr)
-        }
-      }
-      const { data: profiles } = await supabase.from('profiles').select('id, full_name')
-      const profileNameById = new Map<string, string>()
-      for (const p of (profiles as Array<{ id: string; full_name: string }> | null) ?? []) {
-        profileNameById.set(p.id, p.full_name)
-      }
-
-      const doc = buildBillingReportPdf({
-        report,
-        client: selectedClient,
-        clientNameById,
-        transactions: selected,
-        serviceTypeNames,
-        hoursByTransaction: hoursByTxn,
-        profileNameById,
-      })
-      const path = await uploadBillingReportPdf(report.id, doc)
-      await supabase.from('billing_reports').update({ pdf_storage_path: path }).eq('id', report.id)
-
-      queryClient.invalidateQueries({ queryKey: ['billing_reports'] })
-      setIssueStatus('success')
-      setSelectedTxnIds(new Set())
-      setShowCandidates(false)
-
-      const url = await signedUrl('billing-reports', path, 120)
-      if (url) window.open(url, '_blank', 'noopener')
-    } catch (err) {
-      console.error('issue billing report error:', err)
-      setIssueStatus('error')
-      setIssueError(err instanceof Error ? err.message : 'שגיאה')
-    }
-  }
-
-  const handleIssueReport = () => {
-    // Broad-scope warning: neither client nor period set AND >200 rows.
-    const broad = !clientId && !periodStart && !periodEnd
-    if (broad && selectedTxnIds.size > WARN_ROW_THRESHOLD) {
-      setBroadWarningOpen(true)
-      return
-    }
-    handleIssueReportConfirmed()
-  }
-
-  const openReportPdf = async (r: BillingReport) => {
-    if (!r.pdf_storage_path) return
-    const url = await signedUrl('billing-reports', r.pdf_storage_path, 120)
-    if (url) window.open(url, '_blank', 'noopener')
-  }
-
-  const kindBadge = (t: Transaction) =>
-    t.kind === 'time_period' ? (
-      <Badge className="bg-amber-50 text-amber-700 border-amber-200">שעות</Badge>
-    ) : (
-      <Badge className="bg-purple-50 text-purple-700 border-purple-200">שירות</Badge>
-    )
+    return { toBill, billed, outstanding }
+  }, [filteredEvents])
 
   return (
     <div dir="rtl" className="p-6 space-y-4">
@@ -309,222 +139,200 @@ export default function BillingReports() {
       </div>
 
       <Card className="p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+        <div className="space-y-1">
+          <Label className="text-xs text-purple-700">חיפוש חופשי</Label>
+          <div className="relative">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="חפש בתיאור / חשבונית / קבלה / לקוח..."
+              className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
+              dir="rtl"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
+                aria-label="נקה"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="space-y-1 lg:col-span-2">
-            <Label className="text-purple-700 text-sm">לקוח</Label>
+            <Label className="text-xs text-purple-700">לקוח</Label>
             <ClientPicker
               value={clientId}
               onChange={(id) => setClientId(id)}
               allSentinelLabel="כל הלקוחות"
-              placeholder="חיפוש לקוח (אופציונלי)..."
+              placeholder="כל הלקוחות"
             />
           </div>
           <div className="space-y-1">
-            <Label className="text-purple-700 text-sm">מתאריך</Label>
-            <DateInput value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-purple-700 text-sm">עד תאריך</Label>
-            <DateInput value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} />
-          </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="space-y-1">
-            <Label className="text-purple-700 text-sm">סטטוס חיוב</Label>
-            <Select value={paymentStatusFilter} onValueChange={(v) => setPaymentStatusFilter(v ?? 'all')}>
+            <Label className="text-xs text-purple-700">סטטוס</Label>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">הכל</SelectItem>
-                <SelectItem value="ממתין">ממתין</SelectItem>
-                <SelectItem value="שולם">שולם</SelectItem>
-                <SelectItem value="פיגור">פיגור</SelectItem>
+                <SelectItem value="pending">ממתין</SelectItem>
+                <SelectItem value="to_bill">לחיוב</SelectItem>
+                <SelectItem value="billed">חויב</SelectItem>
+                <SelectItem value="cancelled">מבוטל</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          <LabeledToggle
-            label="שירותים"
-            checked={includeService}
-            onCheckedChange={setIncludeService}
-            offText="לא"
-            onText="כלול"
-          />
-          <LabeledToggle
-            label="דיווחי שעות"
-            checked={includeTimePeriod}
-            onCheckedChange={setIncludeTimePeriod}
-            offText="לא"
-            onText="כלול"
-          />
-        </div>
-        <Button
-          onClick={onLoadCandidates}
-          disabled={!includeService && !includeTimePeriod}
-          className="bg-purple-600 hover:bg-purple-700 text-white"
-        >
-          הצג חיובים
-        </Button>
-      </Card>
-
-      {showCandidates && (
-        <Card>
-          <div className="px-4 py-2 bg-purple-50 border-b text-sm font-semibold text-purple-800 flex items-center justify-between flex-wrap gap-2">
-            <span>
-              {selectedClient ? selectedClient.name : 'כל הלקוחות'} ·{' '}
-              {periodStart || periodEnd
-                ? `${formatDate(periodStart) || '—'} → ${formatDate(periodEnd) || '—'}`
-                : 'כל התקופות'}
-            </span>
-            <span>
-              {candidates.length === 0
-                ? 'אין חיובים'
-                : `${selectableCandidates.length} חיובים זמינים מתוך ${candidates.length}`}
-            </span>
+          <div className="space-y-1">
+            <Label className="text-xs text-purple-700">מתאריך</Label>
+            <DateInput value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
           </div>
-          {candidates.length === 0 ? (
-            <p className="p-6 text-center text-muted-foreground">אין חיובים שמתאימים לסינון.</p>
-          ) : (
-            <div className="max-h-[60vh] overflow-y-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-8"></TableHead>
-                    <TableHead className="text-right">לקוח</TableHead>
-                    <TableHead className="text-right">סוג</TableHead>
-                    <TableHead className="text-right">תיאור</TableHead>
-                    <TableHead className="text-right">סטטוס</TableHead>
-                    <TableHead className="text-right">תאריך</TableHead>
-                    <TableHead className="text-right">סכום</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {candidates.map((t) => {
-                    const prior = priorBilledIds.has(t.id)
-                    const checked = selectedTxnIds.has(t.id)
-                    const date = t.close_date ?? t.period_end ?? t.entry_date ?? ''
-                    return (
-                      <TableRow key={t.id} className={prior ? 'opacity-50 bg-muted/30' : ''}>
-                        <TableCell className="w-8">
-                          <input
-                            type="checkbox"
-                            checked={checked && !prior}
-                            disabled={prior}
-                            onChange={() => toggleTxn(t.id)}
-                          />
-                        </TableCell>
-                        <TableCell className="font-medium">{t.client_name}</TableCell>
-                        <TableCell>{kindBadge(t)}</TableCell>
-                        <TableCell>
-                          {describeTxn(t)}
-                          {prior && (
-                            <span className="ms-2 text-[10px] text-muted-foreground">(כלול בדוח קודם)</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs">{t.payment_status}</TableCell>
-                        <TableCell><DateCell value={date} /></TableCell>
-                        <TableCell>{formatCurrency(Number(t.net_invoice_amount) || 0)}</TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-          {candidates.length > 0 && (
-            <div className="p-3 border-t flex items-center justify-between flex-wrap gap-2">
-              <div className="text-sm">
-                <span className="text-muted-foreground">סך הכל לדוח:</span>{' '}
-                <span className="font-semibold">{formatCurrency(totalSelected)}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                {issueStatus === 'success' && <span className="text-green-600 text-sm">דוח הופק ✓</span>}
-                {issueStatus === 'error' && (
-                  <span className="text-red-600 text-sm">{issueError ?? 'שגיאה'}</span>
-                )}
-                <Button
-                  onClick={handleIssueReport}
-                  disabled={selectedTxnIds.size === 0 || issueStatus === 'issuing'}
-                  className="bg-purple-600 hover:bg-purple-700 text-white"
-                >
-                  <Plus className="h-4 w-4 ml-1" />
-                  {issueStatus === 'issuing' ? 'מפיק...' : 'הפק דוח חיוב'}
-                </Button>
-              </div>
-            </div>
-          )}
-        </Card>
-      )}
+          <div className="space-y-1">
+            <Label className="text-xs text-purple-700">עד תאריך</Label>
+            <DateInput value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+          <div className="space-y-1 lg:col-span-2">
+            <Label className="text-xs text-purple-700">סוג שירות</Label>
+            <Select value={serviceTypeFilter} onValueChange={(v) => setServiceTypeFilter(v ?? 'all')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">הכל</SelectItem>
+                {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}
+                <SelectItem value="שעות עבודה">שעות עבודה</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </Card>
 
       <Card>
-        <div className="px-4 py-2 bg-muted/40 border-b text-sm font-semibold">דוחות שהופקו</div>
-        {pastReports.length === 0 ? (
-          <p className="p-6 text-center text-muted-foreground text-sm">אין דוחות.</p>
+        {filteredEvents.length === 0 ? (
+          <div className="p-8 text-center text-muted-foreground">אין חיובים להצגה</div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-right">לקוח</TableHead>
-                <TableHead className="text-right">תקופה</TableHead>
-                <TableHead className="text-right">פריטים</TableHead>
-                <TableHead className="text-right">סכום</TableHead>
-                <TableHead className="text-right">הופק</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pastReports.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">
-                    {r.client_id ? clientNameById.get(r.client_id) ?? '—' : 'כל הלקוחות'}
-                  </TableCell>
-                  <TableCell>
-                    {r.period_start || r.period_end
-                      ? `${formatDate(r.period_start) || '—'} → ${formatDate(r.period_end) || '—'}`
-                      : 'כל התקופות'}
-                  </TableCell>
-                  <TableCell>{r.transaction_ids?.length ?? 0}</TableCell>
-                  <TableCell>{formatCurrency(r.total_amount)}</TableCell>
-                  <TableCell><DateCell value={r.issued_at} /></TableCell>
-                  <TableCell>
-                    {r.pdf_storage_path && (
-                      <Button size="sm" variant="ghost" onClick={() => openReportPdf(r)}>
-                        <Download className="h-4 w-4 ml-1" /> הורד
-                      </Button>
-                    )}
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-purple-50">
+                  <TableHead className="text-right text-purple-800">לקוח</TableHead>
+                  <TableHead className="text-right text-purple-800">שירות</TableHead>
+                  <TableHead className="text-right text-purple-800">תיאור</TableHead>
+                  <TableHead className="text-right text-purple-800">תאריך חיוב</TableHead>
+                  <TableHead className="text-right text-purple-800">סכום</TableHead>
+                  <TableHead className="text-right text-purple-800">סטטוס</TableHead>
+                  <TableHead className="text-right text-purple-800">חשבון עסקה</TableHead>
+                  <TableHead className="text-right text-purple-800">תאריך תשלום</TableHead>
+                  <TableHead className="text-right text-purple-800">קבלה</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {filteredEvents.map((e) => (
+                  <BillingEventDashRow key={e.id} event={e} overdue={isOverdue(e)} onChanged={() => refetch()} />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {filteredEvents.length > 0 && (
+          <div className="flex items-center justify-between flex-wrap gap-3 px-4 py-3 border-t bg-purple-50/40 text-sm">
+            <div className="flex items-center gap-4">
+              <span className="text-muted-foreground">סה"כ לחיוב:</span>
+              <span className="font-semibold">{formatCurrency(totals.toBill)}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-muted-foreground">סה"כ חויב:</span>
+              <span className="font-semibold text-green-700">{formatCurrency(totals.billed)}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-muted-foreground">יתרה לגבייה:</span>
+              <span className="font-semibold text-amber-700">{formatCurrency(totals.outstanding)}</span>
+            </div>
+          </div>
         )}
       </Card>
-
-      {/* Broad-scope warning */}
-      <Dialog open={broadWarningOpen} onOpenChange={setBroadWarningOpen}>
-        <DialogContent dir="rtl" className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <TriangleAlert className="w-5 h-5 text-amber-500" />
-              דוח רחב היקף
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            אתה עומד להפיק דוח עם יותר מ-{WARN_ROW_THRESHOLD} שורות, ללא סינון לפי
-            לקוח או תקופה. להמשיך?
-          </p>
-          <DialogFooter className="flex gap-2 flex-row-reverse">
-            <Button
-              onClick={() => {
-                setBroadWarningOpen(false)
-                handleIssueReportConfirmed()
-              }}
-              className="bg-purple-600 hover:bg-purple-700 text-white"
-            >
-              המשך
-            </Button>
-            <Button variant="outline" onClick={() => setBroadWarningOpen(false)}>ביטול</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
+  )
+}
+
+function BillingEventDashRow({
+  event,
+  overdue,
+  onChanged,
+}: {
+  event: EventWithTxn
+  overdue: boolean
+  onChanged: () => void
+}) {
+  const [invoice, setInvoice] = useState(event.invoice_number ?? '')
+  const [paymentDate, setPaymentDate] = useState(event.payment_date ?? '')
+  const [receipt, setReceipt] = useState(event.receipt_number ?? '')
+  const [busy, setBusy] = useState<string | null>(null)
+
+  useEffect(() => {
+    setInvoice(event.invoice_number ?? '')
+    setPaymentDate(event.payment_date ?? '')
+    setReceipt(event.receipt_number ?? '')
+  }, [event.id, event.invoice_number, event.payment_date, event.receipt_number])
+
+  const saveField = async (
+    field: 'invoice_number' | 'payment_date' | 'receipt_number',
+    value: string,
+  ) => {
+    setBusy(field)
+    const patch: Record<string, unknown> = { [field]: value || null }
+    if (field === 'invoice_number' && value && event.status !== 'billed') {
+      patch.status = 'billed'
+    }
+    const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id)
+    setBusy(null)
+    if (error) {
+      console.error(error)
+      return
+    }
+    onChanged()
+  }
+
+  return (
+    <TableRow className="hover:bg-purple-50/30">
+      <TableCell className="font-medium">{event.transactions.client_name}</TableCell>
+      <TableCell>{event.transactions.service_type ?? '—'}</TableCell>
+      <TableCell className="text-xs">{event.description ?? '—'}</TableCell>
+      <TableCell className={overdue ? 'text-red-600 font-medium' : ''}>
+        <DateCell value={event.billing_date} />
+      </TableCell>
+      <TableCell>{formatCurrency(event.amount)}</TableCell>
+      <TableCell>
+        <Badge variant="outline" className={`${STATUS_BADGE[event.status]} text-xs`}>
+          {STATUS_LABEL[event.status]}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <Input
+          value={invoice}
+          onChange={(e) => setInvoice(e.target.value)}
+          onBlur={() => invoice !== (event.invoice_number ?? '') && saveField('invoice_number', invoice)}
+          className="h-8 text-xs"
+          placeholder={busy === 'invoice_number' ? 'שומר...' : ''}
+        />
+      </TableCell>
+      <TableCell>
+        <DateInput
+          value={paymentDate}
+          onChange={(e) => setPaymentDate(e.target.value)}
+          onBlur={() => paymentDate !== (event.payment_date ?? '') && saveField('payment_date', paymentDate)}
+          className="h-8 text-xs"
+        />
+      </TableCell>
+      <TableCell>
+        <Input
+          value={receipt}
+          onChange={(e) => setReceipt(e.target.value)}
+          onBlur={() => receipt !== (event.receipt_number ?? '') && saveField('receipt_number', receipt)}
+          className="h-8 text-xs"
+        />
+      </TableCell>
+    </TableRow>
   )
 }
