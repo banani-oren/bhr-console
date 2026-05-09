@@ -109,6 +109,9 @@ type DialogState = {
   // supplier
   supplier_id: string | null
   supplier_percent: number | null
+
+  // billing split
+  billing_percent: number | null
 }
 
 function today(): string {
@@ -168,6 +171,7 @@ function emptyState(profileName: string): DialogState {
     selectedHoursIds: new Set(),
     supplier_id: null,
     supplier_percent: null,
+    billing_percent: null,
   }
 }
 
@@ -282,6 +286,7 @@ export default function TransactionDialog({
         selectedHoursIds: new Set(),
         supplier_id: editing.supplier_id ?? null,
         supplier_percent: editing.supplier_percent ?? null,
+        billing_percent: editing.billing_percent ?? null,
       })
     } else {
       const s = emptyState(profile?.full_name ?? '')
@@ -467,6 +472,7 @@ export default function TransactionDialog({
         custom_fields: state.custom,
         supplier_id: state.supplier_id,
         supplier_percent: state.supplier_percent,
+        billing_percent: state.billing_percent,
         ...mirrored,
       }
       if (state.kind === 'time_period') {
@@ -480,7 +486,7 @@ export default function TransactionDialog({
         if (!payload.closing_month) payload.closing_month = monthOf(state.period_end)
         if (!payload.closing_year) payload.closing_year = yearOf(state.period_end)
       }
-      for (const k of ['commission_percent', 'salary', 'net_invoice_amount', 'commission_amount']) {
+      for (const k of ['commission_percent', 'billing_percent', 'salary', 'net_invoice_amount', 'commission_amount']) {
         if (payload[k] !== undefined && payload[k] !== null && payload[k] !== '') {
           payload[k] = Number(payload[k])
         }
@@ -805,6 +811,22 @@ export default function TransactionDialog({
           <Card className="p-3">
             <h3 className="text-sm font-semibold text-purple-700 mb-2">חשבונית ותשלום</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">אחוז גבייה (%)</Label>
+                <Input
+                  type="number"
+                  dir="ltr"
+                  placeholder="לדוגמה: 30, 70, 100"
+                  value={state.billing_percent ?? ''}
+                  onChange={(e) =>
+                    setState((s) => ({
+                      ...s,
+                      billing_percent: e.target.value === '' ? null : Number(e.target.value),
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1" />
               <div className="space-y-1">
                 <Label className="text-xs">חשבונית עסקה</Label>
                 <Input
