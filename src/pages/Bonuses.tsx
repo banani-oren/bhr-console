@@ -7,7 +7,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import { supabase } from '@/lib/supabase'
-import type { Profile, Transaction } from '@/lib/types'
+import type { Profile } from '@/lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -20,8 +20,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import {
-  computeMonthlyBonusRows, transactionMonth, calculateBonus,
-  bonusBreakdown, filterByEmployee,
+  computeMonthlyBonusRows, calculateBonus, bonusBreakdown,
+  fetchApprovedBillingEventRows, groupBillingRevenueByEmployeeMonth, getBillingRevenue,
+  type BillingEventRevenueRow,
 } from '@/lib/bonus'
 
 const HEBREW_MONTHS = [
@@ -81,14 +82,12 @@ export default function Bonuses() {
     },
   })
 
-  const { data: txns = [] } = useQuery<Transaction[]>({
-    queryKey: ['transactions'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('transactions').select('*')
-      if (error) throw error
-      return data as Transaction[]
-    },
+  const { data: billingRows = [] } = useQuery<BillingEventRevenueRow[]>({
+    queryKey: ['billing-event-revenue'],
+    queryFn: () => fetchApprovedBillingEventRows(supabase),
   })
+
+  const grouped = useMemo(() => groupBillingRevenueByEmployeeMonth(billingRows), [billingRows])
 
   // Per-employee breakdown for the selected period.
   type Row = {
@@ -112,11 +111,7 @@ export default function Bonuses() {
           reachedTier: false,
         }
       }
-      const filtered = filterByEmployee(txns, p.full_name ?? '').filter((t) => {
-        const tm = transactionMonth(t)
-        return tm && tm.month === periodMonth && tm.year === periodYear
-      })
-      const revenue = filtered.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
+      const revenue = getBillingRevenue(grouped, p.full_name ?? '', periodMonth, periodYear)
       const bd = bonusBreakdown(revenue, p.bonus_model.tiers ?? [])
       return {
         profile: p,
@@ -127,7 +122,7 @@ export default function Bonuses() {
         reachedTier: bd.tierIndex >= 0 && bd.bonus > 0,
       }
     })
-  }, [profiles, txns, periodMonth, periodYear])
+  }, [profiles, grouped, periodMonth, periodYear])
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -227,7 +222,7 @@ export default function Bonuses() {
               row={row}
               periodMonth={periodMonth}
               periodYear={periodYear}
-              txns={txns}
+              grouped={grouped}
               onEditModel={() => navigate(`/team?edit=${row.profile.id}`)}
             />
           ))}
@@ -255,7 +250,7 @@ function EmployeeCard({
   row,
   periodMonth,
   periodYear,
-  txns,
+  grouped,
   onEditModel,
 }: {
   row: {
@@ -267,7 +262,7 @@ function EmployeeCard({
   }
   periodMonth: number
   periodYear: number
-  txns: Transaction[]
+  grouped: Map<string, Map<string, number>>
   onEditModel: () => void
 }) {
   const initial = (row.profile.full_name || '?').charAt(0)
@@ -313,29 +308,19 @@ function EmployeeCard({
   // YTD: sum of monthly bonuses for completed months in this calendar year.
   const ytdBonus = (() => {
     let total = 0
-    const empTxns = filterByEmployee(txns, row.profile.full_name ?? '')
     for (let m = 1; m <= periodMonth; m++) {
-      const monthTxns = empTxns.filter((t) => {
-        const tm = transactionMonth(t)
-        return tm && tm.year === periodYear && tm.month === m
-      })
-      const rev = monthTxns.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
+      const rev = getBillingRevenue(grouped, row.profile.full_name ?? '', m, periodYear)
       total += calculateBonus(rev, tiers)
     }
     return total
   })()
 
   const trendData = (() => {
-    const empTxns = filterByEmployee(txns, row.profile.full_name ?? '')
     const arr: { month: string; bonus: number; future: boolean }[] = []
     const todayM = new Date().getMonth() + 1
     const todayY = new Date().getFullYear()
     for (let m = 1; m <= 12; m++) {
-      const monthTxns = empTxns.filter((t) => {
-        const tm = transactionMonth(t)
-        return tm && tm.year === periodYear && tm.month === m
-      })
-      const rev = monthTxns.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
+      const rev = getBillingRevenue(grouped, row.profile.full_name ?? '', m, periodYear)
       const future = periodYear > todayY || (periodYear === todayY && m > todayM)
       arr.push({ month: HEBREW_MONTHS[m - 1].slice(0, 3), bonus: calculateBonus(rev, tiers), future })
     }

@@ -1,8 +1,9 @@
 import { useMemo, useState, useEffect } from 'react'
 import { DateInput } from '@/components/ui/date-input'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Search, X } from 'lucide-react'
+import { FileText, FileDown, Search, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { generatePerformaPDF } from '@/lib/pdf'
 import type {
   BillingEvent,
   BillingEventStatus,
@@ -11,6 +12,7 @@ import type {
 import type { ServiceType } from '@/lib/serviceTypes'
 import ClientPicker from '@/components/ClientPicker'
 import { DateCell } from '@/components/ui/date-cell'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
@@ -64,6 +66,7 @@ export default function BillingReports() {
   const [serviceTypeFilter, setServiceTypeFilter] = useState<string>('all')
   const [searchInput, setSearchInput] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
@@ -119,6 +122,48 @@ export default function BillingReports() {
   const today = new Date().toISOString().slice(0, 10)
   const isOverdue = (e: EventWithTxn) =>
     e.billing_date != null && e.billing_date < today && e.status !== 'billed' && e.status !== 'cancelled'
+
+  const selectedEvents = useMemo(
+    () => filteredEvents.filter((e) => selectedIds.has(e.id)),
+    [filteredEvents, selectedIds],
+  )
+  const uniqueClients = useMemo(
+    () => new Set(selectedEvents.map((e) => e.transactions.client_name ?? '')).size,
+    [selectedEvents],
+  )
+
+  const allVisibleSelected =
+    filteredEvents.length > 0 && filteredEvents.every((e) => selectedIds.has(e.id))
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filteredEvents.map((e) => e.id)))
+    }
+  }
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleExportPerforma = () => {
+    if (selectedEvents.length === 0 || uniqueClients !== 1) return
+    const clientName = selectedEvents[0]?.transactions.client_name ?? 'לקוח'
+    generatePerformaPDF(
+      selectedEvents.map((ev) => ({
+        description: ev.description,
+        billing_date: ev.billing_date,
+        amount: Number(ev.amount) || 0,
+      })),
+      clientName,
+    )
+  }
 
   // Totals
   const totals = useMemo(() => {
@@ -207,6 +252,30 @@ export default function BillingReports() {
         </div>
       </Card>
 
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+          <span className="text-sm text-purple-800 font-medium">
+            {selectedIds.size} פריטים נבחרו
+          </span>
+          <Button
+            size="sm"
+            disabled={uniqueClients > 1 || uniqueClients === 0}
+            onClick={handleExportPerforma}
+            className="bg-purple-600 hover:bg-purple-700 text-white"
+            title={uniqueClients > 1 ? 'ניתן לייצא ללקוח אחד בלבד' : ''}
+          >
+            <FileDown className="w-4 h-4 ml-1" />
+            הפק חשבון עסקה
+          </Button>
+          {uniqueClients > 1 && (
+            <span className="text-xs text-amber-700">ניתן לייצא ללקוח אחד בלבד</span>
+          )}
+          <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+            נקה בחירה
+          </Button>
+        </div>
+      )}
+
       <Card>
         {filteredEvents.length === 0 ? (
           <div className="p-8 text-center text-muted-foreground">אין חיובים להצגה</div>
@@ -215,6 +284,14 @@ export default function BillingReports() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-purple-50">
+                  <TableHead className="w-10 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="בחר הכל"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                    />
+                  </TableHead>
                   <TableHead className="text-right text-purple-800">לקוח</TableHead>
                   <TableHead className="text-right text-purple-800">שירות</TableHead>
                   <TableHead className="text-right text-purple-800">תיאור</TableHead>
@@ -228,7 +305,14 @@ export default function BillingReports() {
               </TableHeader>
               <TableBody>
                 {filteredEvents.map((e) => (
-                  <BillingEventDashRow key={e.id} event={e} overdue={isOverdue(e)} onChanged={() => refetch()} />
+                  <BillingEventDashRow
+                    key={e.id}
+                    event={e}
+                    overdue={isOverdue(e)}
+                    onChanged={() => refetch()}
+                    selected={selectedIds.has(e.id)}
+                    onToggleSelect={() => toggleSelect(e.id)}
+                  />
                 ))}
               </TableBody>
             </Table>
@@ -260,10 +344,14 @@ function BillingEventDashRow({
   event,
   overdue,
   onChanged,
+  selected,
+  onToggleSelect,
 }: {
   event: EventWithTxn
   overdue: boolean
   onChanged: () => void
+  selected: boolean
+  onToggleSelect: () => void
 }) {
   const [invoice, setInvoice] = useState(event.invoice_number ?? '')
   const [paymentDate, setPaymentDate] = useState(event.payment_date ?? '')
@@ -295,7 +383,15 @@ function BillingEventDashRow({
   }
 
   return (
-    <TableRow className="hover:bg-purple-50/30">
+    <TableRow className={`hover:bg-purple-50/30 ${selected ? 'bg-purple-50/40' : ''}`}>
+      <TableCell className="text-center">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          aria-label="בחר חיוב"
+        />
+      </TableCell>
       <TableCell className="font-medium">{event.transactions.client_name}</TableCell>
       <TableCell>{event.transactions.service_type ?? '—'}</TableCell>
       <TableCell className="text-xs">{event.description ?? '—'}</TableCell>

@@ -137,3 +137,98 @@ export function computeMonthlyBonusRows(
   }
   return out.sort((a, b) => b.breakdown.bonus - a.breakdown.bonus)
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3: billing_events-based revenue calculation
+// ---------------------------------------------------------------------------
+
+export type BillingEventRevenueRow = {
+  billing_date: string
+  amount: number
+  supplier_amount: number
+  service_lead: string | null
+}
+
+type BillingEventTxn = {
+  service_lead: string | null
+  needs_approval: boolean
+  approved_at: string | null
+}
+
+type BillingEventRowRaw = {
+  billing_date: string | null
+  amount: number | string | null
+  supplier_amount: number | string | null
+  transactions: BillingEventTxn | BillingEventTxn[] | null
+}
+
+/**
+ * Fetches all non-cancelled billing events for approved transactions joined
+ * to their transaction's service_lead. Replaces the legacy
+ * transactions.net_invoice_amount + billing_month/year approach.
+ */
+export async function fetchApprovedBillingEventRows(
+  supabaseClient: import('@supabase/supabase-js').SupabaseClient,
+): Promise<BillingEventRevenueRow[]> {
+  const { data, error } = await supabaseClient
+    .from('billing_events')
+    .select(`
+      billing_date,
+      amount,
+      supplier_amount,
+      transactions!inner (
+        service_lead,
+        needs_approval,
+        approved_at
+      )
+    `)
+    .neq('status', 'cancelled')
+
+  if (error) throw error
+
+  const rows = (data ?? []) as unknown as BillingEventRowRaw[]
+  return rows
+    .map((row) => {
+      const t = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
+      if (!t) return null
+      if (t.needs_approval && t.approved_at == null) return null
+      if (!row.billing_date) return null
+      return {
+        billing_date: row.billing_date,
+        amount: Number(row.amount) || 0,
+        supplier_amount: Number(row.supplier_amount) || 0,
+        service_lead: t.service_lead ?? null,
+      }
+    })
+    .filter((r): r is BillingEventRevenueRow => r != null)
+}
+
+/** Groups rows by service_lead → "YYYY-MM" → net revenue. */
+export function groupBillingRevenueByEmployeeMonth(
+  rows: BillingEventRevenueRow[],
+): Map<string, Map<string, number>> {
+  const result = new Map<string, Map<string, number>>()
+  for (const row of rows) {
+    const lead = (row.service_lead ?? '').trim().toLowerCase()
+    if (!lead) continue
+    const date = new Date(row.billing_date)
+    if (isNaN(date.getTime())) continue
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+    if (!result.has(lead)) result.set(lead, new Map())
+    const inner = result.get(lead)!
+    inner.set(monthKey, (inner.get(monthKey) ?? 0) + (row.amount - row.supplier_amount))
+  }
+  return result
+}
+
+/** Returns net revenue for a given employee in a given month. */
+export function getBillingRevenue(
+  grouped: Map<string, Map<string, number>>,
+  fullName: string,
+  month: number,
+  year: number,
+): number {
+  const lead = (fullName ?? '').trim().toLowerCase()
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`
+  return grouped.get(lead)?.get(monthKey) ?? 0
+}

@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
-import type { Transaction, Client } from '@/lib/types'
 import { DateCell } from '@/components/ui/date-cell'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -26,7 +25,7 @@ import {
 } from 'recharts'
 import { AlertTriangle, CheckCircle2, FileText, Wallet } from 'lucide-react'
 
-const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' })
+const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 const NUM = new Intl.NumberFormat('he-IL')
 const HE_MONTHS = [
   'ינו', 'פבר', 'מרץ', 'אפר', 'מאי', 'יוני',
@@ -34,111 +33,131 @@ const HE_MONTHS = [
 ]
 const AGING_COLORS = ['#10b981', '#f59e0b', '#ef4444', '#7f1d1d']
 
-// Parse payment terms like "שוטף+30", "שוטף +30", "שוטף", "שוטף+45", etc.
-export function parsePaymentTerms(terms: string | null | undefined): number | null {
-  if (!terms) return null
-  const s = String(terms).replace(/\s+/g, '')
-  if (!s.includes('שוטף')) return null
-  if (s === 'שוטף') return 0
-  const m = s.match(/שוטף\+(\d+)/)
-  if (m) return Number(m[1])
-  return null
+type EventRow = {
+  id: string
+  amount: number
+  supplier_amount: number
+  billing_date: string | null
+  payment_date: string | null
+  status: string
+  invoice_number: string | null
+  description: string | null
+  client_name: string | null
+  service_lead: string | null
+  approved: boolean
 }
 
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
-function txnDueDate(t: Transaction, clientPaymentTerms: string | null): Date | null {
-  if (!t.close_date) return null
-  const parsed = parsePaymentTerms(clientPaymentTerms)
-  const days = parsed ?? 30
-  const base = new Date(t.close_date)
-  if (isNaN(base.getTime())) return null
-  return addDays(base, days)
-}
-
-function monthDate(t: Transaction): { year: number; month: number } | null {
-  if (t.closing_year && t.closing_month) return { year: t.closing_year, month: t.closing_month }
-  if (t.billing_year && t.billing_month) return { year: t.billing_year, month: t.billing_month }
-  return null
+type RawEventRow = {
+  id: string
+  amount: number | string | null
+  supplier_amount: number | string | null
+  billing_date: string | null
+  payment_date: string | null
+  status: string
+  invoice_number: string | null
+  description: string | null
+  transactions: { client_name: string | null; service_lead: string | null; needs_approval: boolean; approved_at: string | null } | null
 }
 
 export default function AdministrationDashboard() {
-  const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
-    queryKey: ['transactions'],
+  const { data: billingEvents = [], isLoading } = useQuery<EventRow[]>({
+    queryKey: ['admin-dashboard-billing-events'],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .order('created_at', { ascending: false })
+        .from('billing_events')
+        .select(`
+          id, amount, supplier_amount, billing_date, payment_date, status, invoice_number, description,
+          transactions!inner ( client_name, service_lead, needs_approval, approved_at )
+        `)
+        .neq('status', 'cancelled')
       if (error) throw error
-      return data as Transaction[]
+      const rows = (data ?? []) as unknown as RawEventRow[]
+      return rows.map((row) => ({
+        id: row.id,
+        amount: Number(row.amount) || 0,
+        supplier_amount: Number(row.supplier_amount) || 0,
+        billing_date: row.billing_date,
+        payment_date: row.payment_date,
+        status: row.status,
+        invoice_number: row.invoice_number,
+        description: row.description,
+        client_name: row.transactions?.client_name ?? null,
+        service_lead: row.transactions?.service_lead ?? null,
+        approved: !row.transactions?.needs_approval || row.transactions?.approved_at != null,
+      }))
     },
   })
-
-  const { data: clients = [] } = useQuery<Client[]>({
-    queryKey: ['clients'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('clients').select('*')
-      if (error) throw error
-      return data as Client[]
-    },
-  })
-
-  const now = new Date()
-  const curYear = now.getFullYear()
-  const curMonth = now.getMonth() + 1
-
-  const clientTermsByName = useMemo(() => {
-    const map = new Map<string, string | null>()
-    for (const c of clients) map.set(c.name, c.payment_terms ?? null)
-    return map
-  }, [clients])
 
   const stats = useMemo(() => {
+    const now = new Date()
+    const curYear = now.getFullYear()
+    const curMonth = now.getMonth() + 1
+
     let billedThisMonth = 0
     let collectedThisMonth = 0
     let openAmount = 0
-    let overdueAmount = 0
     let awaitingInvoice = 0
+    let overdueAmount = 0
     const buckets = { b0_30: 0, b31_60: 0, b61_90: 0, b90plus: 0 }
-    const topOverdue: { t: Transaction; dueDate: Date; daysOverdue: number }[] = []
+    const topOverdue: { id: string; clientName: string; description: string; amount: number; billingDate: Date; daysOverdue: number }[] = []
 
-    for (const t of transactions) {
-      const amt = t.net_invoice_amount ?? 0
-      const m = monthDate(t)
+    for (const ev of billingEvents) {
+      const billingDate = ev.billing_date ? new Date(ev.billing_date) : null
+      const paymentDate = ev.payment_date ? new Date(ev.payment_date) : null
 
-      if (m && m.year === curYear && m.month === curMonth) {
-        billedThisMonth += amt
+      if (ev.status === 'to_bill') awaitingInvoice += 1
+
+      if (billingDate && !isNaN(billingDate.getTime())) {
+        if (billingDate.getFullYear() === curYear && billingDate.getMonth() + 1 === curMonth) {
+          billedThisMonth += ev.amount
+        }
       }
-      if (t.payment_date) {
-        const pd = new Date(t.payment_date)
-        if (!isNaN(pd.getTime()) && pd.getFullYear() === curYear && pd.getMonth() + 1 === curMonth) {
-          collectedThisMonth += amt
+
+      if (paymentDate && !isNaN(paymentDate.getTime())) {
+        if (paymentDate.getFullYear() === curYear && paymentDate.getMonth() + 1 === curMonth) {
+          collectedThisMonth += ev.amount
         }
-      } else {
-        openAmount += amt
-        if (t.is_billable && !t.invoice_number) {
-          awaitingInvoice += 1
+      } else if (ev.status === 'billed') {
+        openAmount += ev.amount
+        if (billingDate && billingDate < now) {
+          const daysOverdue = Math.floor((now.getTime() - billingDate.getTime()) / 86400000)
+          overdueAmount += ev.amount
+          topOverdue.push({
+            id: ev.id,
+            clientName: ev.client_name ?? '—',
+            description: ev.description ?? '—',
+            amount: ev.amount,
+            billingDate,
+            daysOverdue,
+          })
+          if (daysOverdue <= 30) buckets.b0_30 += ev.amount
+          else if (daysOverdue <= 60) buckets.b31_60 += ev.amount
+          else if (daysOverdue <= 90) buckets.b61_90 += ev.amount
+          else buckets.b90plus += ev.amount
         }
-        const due = txnDueDate(t, clientTermsByName.get(t.client_name) ?? null)
-        if (due && due < now) {
-          const daysOverdue = Math.floor((now.getTime() - due.getTime()) / (1000 * 60 * 60 * 24))
-          overdueAmount += amt
-          topOverdue.push({ t, dueDate: due, daysOverdue })
-          if (daysOverdue <= 30) buckets.b0_30 += amt
-          else if (daysOverdue <= 60) buckets.b31_60 += amt
-          else if (daysOverdue <= 90) buckets.b61_90 += amt
-          else buckets.b90plus += amt
+      } else if (ev.status === 'to_bill' || ev.status === 'pending') {
+        // not billed yet — counts toward open if billed, else just future receivables
+        // (also treat to_bill with past billing_date as open + overdue display)
+        if (ev.status === 'to_bill' && billingDate && billingDate < now) {
+          const daysOverdue = Math.floor((now.getTime() - billingDate.getTime()) / 86400000)
+          overdueAmount += ev.amount
+          topOverdue.push({
+            id: ev.id,
+            clientName: ev.client_name ?? '—',
+            description: ev.description ?? '—',
+            amount: ev.amount,
+            billingDate,
+            daysOverdue,
+          })
+          if (daysOverdue <= 30) buckets.b0_30 += ev.amount
+          else if (daysOverdue <= 60) buckets.b31_60 += ev.amount
+          else if (daysOverdue <= 90) buckets.b61_90 += ev.amount
+          else buckets.b90plus += ev.amount
         }
       }
     }
 
-    topOverdue.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
-
+    topOverdue.sort((a, b) => b.daysOverdue - a.daysOverdue)
     return {
       billedThisMonth,
       collectedThisMonth,
@@ -148,7 +167,7 @@ export default function AdministrationDashboard() {
       buckets,
       topOverdue: topOverdue.slice(0, 10),
     }
-  }, [transactions, curYear, curMonth, now, clientTermsByName])
+  }, [billingEvents])
 
   const collectionPct = stats.billedThisMonth > 0
     ? Math.min(100, Math.round((stats.collectedThisMonth / stats.billedThisMonth) * 100))
@@ -163,23 +182,24 @@ export default function AdministrationDashboard() {
 
   // 6-month collections
   const monthlyCollections = useMemo(() => {
+    const now = new Date()
     const out: { label: string; value: number }[] = []
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
       const year = d.getFullYear()
       const month = d.getMonth() + 1
       const label = `${HE_MONTHS[d.getMonth()]} ${String(year).slice(2)}`
-      const total = transactions
-        .filter((t) => {
-          if (!t.payment_date) return false
-          const pd = new Date(t.payment_date)
+      const total = billingEvents
+        .filter((ev) => {
+          if (!ev.payment_date) return false
+          const pd = new Date(ev.payment_date)
           return !isNaN(pd.getTime()) && pd.getFullYear() === year && pd.getMonth() + 1 === month
         })
-        .reduce((s, t) => s + (t.net_invoice_amount ?? 0), 0)
+        .reduce((s, ev) => s + ev.amount, 0)
       out.push({ label, value: total })
     }
     return out
-  }, [transactions, now])
+  }, [billingEvents])
 
   if (isLoading) {
     return (
@@ -195,7 +215,6 @@ export default function AdministrationDashboard() {
     <div className="p-6 space-y-6" dir="rtl">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">דשבורד גבייה</h1>
 
-      {/* Hero collections card */}
       <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
         <CardContent className="p-6 space-y-4">
           <div className="flex items-end justify-between">
@@ -208,25 +227,17 @@ export default function AdministrationDashboard() {
             </p>
           </div>
           <div className="h-3 w-full rounded-full bg-purple-200 overflow-hidden">
-            <div
-              className="h-full bg-purple-600 transition-all"
-              style={{ width: `${collectionPct}%` }}
-            />
+            <div className="h-full bg-purple-600 transition-all" style={{ width: `${collectionPct}%` }} />
           </div>
-          <p className="text-sm text-purple-900">
-            עוד {ILS.format(remaining)} לגבייה
-          </p>
+          <p className="text-sm text-purple-900">עוד {ILS.format(remaining)} לגבייה</p>
         </CardContent>
       </Card>
 
-      {/* KPI cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                סכום לגבייה כעת
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">סכום לגבייה כעת</CardTitle>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50">
                 <Wallet size={18} className="text-purple-600" />
               </span>
@@ -239,18 +250,14 @@ export default function AdministrationDashboard() {
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                שחרגו מתאריך פירעון
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">חורג מתאריך חיוב</CardTitle>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50">
                 <AlertTriangle size={18} className="text-red-600" />
               </span>
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-red-700 leading-none">
-              {ILS.format(stats.overdueAmount)}
-            </p>
+            <p className="text-2xl font-bold text-red-700 leading-none">{ILS.format(stats.overdueAmount)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -263,17 +270,13 @@ export default function AdministrationDashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-green-700 leading-none">
-              {ILS.format(stats.collectedThisMonth)}
-            </p>
+            <p className="text-2xl font-bold text-green-700 leading-none">{ILS.format(stats.collectedThisMonth)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                ממתינים לחשבונית
-              </CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">ממתינים לחשבונית</CardTitle>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50">
                 <FileText size={18} className="text-amber-600" />
               </span>
@@ -285,7 +288,6 @@ export default function AdministrationDashboard() {
         </Card>
       </div>
 
-      {/* Aging + Monthly collections */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card>
           <CardHeader>
@@ -332,9 +334,7 @@ export default function AdministrationDashboard() {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base font-semibold">
-              גבייה ב-6 חודשים אחרונים
-            </CardTitle>
+            <CardTitle className="text-base font-semibold">גבייה ב-6 חודשים אחרונים</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={240}>
@@ -348,10 +348,7 @@ export default function AdministrationDashboard() {
                   axisLine={false}
                   width={48}
                 />
-                <Tooltip
-                  formatter={(v: unknown) => ILS.format(Number(v ?? 0))}
-                  cursor={{ fill: 'rgba(124,58,237,0.08)' }}
-                />
+                <Tooltip formatter={(v: unknown) => ILS.format(Number(v ?? 0))} cursor={{ fill: 'rgba(124,58,237,0.08)' }} />
                 <Bar dataKey="value" fill="#7c3aed" radius={[4, 4, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
@@ -359,45 +356,38 @@ export default function AdministrationDashboard() {
         </Card>
       </div>
 
-      {/* Top-10 overdue */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">
-            10 חובות חורגים בעדיפות גבוהה
-          </CardTitle>
+          <CardTitle className="text-base font-semibold">10 חיובים חורגים בעדיפות גבוהה</CardTitle>
         </CardHeader>
         <CardContent className="px-0">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className="text-right px-4">לקוח</TableHead>
-                <TableHead className="text-right px-4">מועמד</TableHead>
                 <TableHead className="text-right px-4">סכום</TableHead>
-                <TableHead className="text-right px-4">תאריך פירעון</TableHead>
+                <TableHead className="text-right px-4">תאריך חיוב</TableHead>
                 <TableHead className="text-right px-4">ימי איחור</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {stats.topOverdue.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                    אין חובות חורגים
+                  <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                    אין חיובים חורגים
                   </TableCell>
                 </TableRow>
               ) : (
-                stats.topOverdue.map(({ t, dueDate, daysOverdue }) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="px-4 font-medium">{t.client_name}</TableCell>
-                    <TableCell className="px-4 text-muted-foreground">{t.candidate_name}</TableCell>
-                    <TableCell className="px-4 font-medium">
-                      {ILS.format(t.net_invoice_amount ?? 0)}
-                    </TableCell>
+                stats.topOverdue.map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="px-4 font-medium">{row.clientName}</TableCell>
+                    <TableCell className="px-4 font-medium">{ILS.format(row.amount)}</TableCell>
                     <TableCell className="px-4 text-muted-foreground" dir="ltr">
-                      <DateCell value={dueDate} />
+                      <DateCell value={row.billingDate} />
                     </TableCell>
                     <TableCell className="px-4">
                       <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-100 text-red-700">
-                        {daysOverdue} ימים
+                        {row.daysOverdue} ימים
                       </span>
                     </TableCell>
                   </TableRow>

@@ -7,7 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import { Share2 } from 'lucide-react'
+import { Share2, CheckCircle2 } from 'lucide-react'
 
 // Batch 4 Phase D4: iOS Safari doesn't fire beforeinstallprompt. Nudge the
 // user through the Share → Add to Home Screen flow when we detect iOS + we
@@ -35,6 +35,9 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [mode, setMode] = useState<'login' | 'forgot' | 'forgot-sent'>('login')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
 
   const { user, profile } = useAuth()
 
@@ -69,6 +72,32 @@ export default function Login() {
     }
   }
 
+  async function handleForgotPassword() {
+    if (!email.trim()) {
+      setResetError('הזן כתובת מייל קודם')
+      return
+    }
+    setResetLoading(true)
+    setResetError(null)
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'https://app.banani-hr.com'
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${origin}/set-password`,
+      })
+      if (error) {
+        console.error('reset error:', error)
+        setResetError('שגיאה בשליחת המייל. ודא שהכתובת רשומה במערכת.')
+      } else {
+        setMode('forgot-sent')
+      }
+    } catch (err) {
+      console.error('reset exception:', err)
+      setResetError('שגיאה בשליחת המייל. נסה שוב מאוחר יותר.')
+    } finally {
+      setResetLoading(false)
+    }
+  }
+
   return (
     <div
       dir="rtl"
@@ -83,55 +112,116 @@ export default function Login() {
         </CardHeader>
 
         <CardContent>
-          <form onSubmit={handleLogin} className="flex flex-col gap-4" method="post" action="#">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="email">אימייל</Label>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                // Batch 4 Phase D4: 'username' is what iOS Safari expects on the
-                // email/login field for credential save + Face-ID autofill.
-                autoComplete="username"
-                inputMode="email"
-                spellCheck={false}
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+          {mode === 'login' && (
+            <form onSubmit={handleLogin} className="flex flex-col gap-4" method="post" action="#">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="email">אימייל</Label>
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  inputMode="email"
+                  spellCheck={false}
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  disabled={loading}
+                  dir="ltr"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="password">סיסמה</Label>
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={loading}
+                  dir="ltr"
+                />
+                <button
+                  type="button"
+                  className="text-xs text-purple-600 hover:underline mt-1 text-right w-full"
+                  onClick={() => { setMode('forgot'); setResetError(null) }}
+                >
+                  שכחתי סיסמה?
+                </button>
+              </div>
+
+              {error && (
+                <p className="text-sm text-destructive text-center">{error}</p>
+              )}
+
+              <Button
+                type="submit"
                 disabled={loading}
-                dir="ltr"
-              />
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white border-transparent focus-visible:ring-purple-500/50"
+              >
+                {loading ? 'מתחבר...' : 'התחבר'}
+              </Button>
+            </form>
+          )}
+
+          {mode === 'forgot' && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                הזן את כתובת המייל שלך ונשלח לך קישור לאיפוס סיסמה.
+              </p>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="email-reset">אימייל</Label>
+                <Input
+                  id="email-reset"
+                  type="email"
+                  inputMode="email"
+                  spellCheck={false}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  disabled={resetLoading}
+                  dir="ltr"
+                />
+              </div>
+              {resetError && <p className="text-sm text-destructive">{resetError}</p>}
+              <Button
+                onClick={handleForgotPassword}
+                disabled={resetLoading}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                {resetLoading ? 'שולח...' : 'שלח קישור לאיפוס'}
+              </Button>
+              <button
+                type="button"
+                className="text-sm text-purple-600 hover:underline w-full text-center"
+                onClick={() => { setMode('login'); setResetError(null) }}
+              >
+                חזור להתחברות
+              </button>
             </div>
+          )}
 
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="password">סיסמה</Label>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                disabled={loading}
-                dir="ltr"
-              />
+          {mode === 'forgot-sent' && (
+            <div className="text-center space-y-3 py-4">
+              <CheckCircle2 className="mx-auto w-10 h-10 text-green-500" />
+              <p className="text-sm font-medium">נשלח מייל לאיפוס סיסמה</p>
+              <p className="text-xs text-muted-foreground">
+                בדוק את תיבת הדואר שלך ולחץ על הקישור במייל.
+              </p>
+              <button
+                type="button"
+                className="text-sm text-purple-600 hover:underline"
+                onClick={() => setMode('login')}
+              >
+                חזור להתחברות
+              </button>
             </div>
-
-            {error && (
-              <p className="text-sm text-destructive text-center">{error}</p>
-            )}
-
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-purple-600 hover:bg-purple-700 text-white border-transparent focus-visible:ring-purple-500/50"
-            >
-              {loading ? 'מתחבר...' : 'התחבר'}
-            </Button>
-          </form>
+          )}
           <IosInstallHint />
         </CardContent>
       </Card>
