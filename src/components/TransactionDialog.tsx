@@ -61,8 +61,10 @@ const MIRRORED_KEYS = new Set([
 ])
 
 // Fields managed by Section 2 ("תאריכים") — skip in renderField to avoid duplicates.
+// sign_date is a legacy custom field on placement service types that mapped to close_date.
 const SECTION2_MANAGED_KEYS = new Set([
   'close_date',
+  'sign_date',
   'work_start_date',
   'work_end_date',
   'warranty_end_date',
@@ -258,6 +260,9 @@ export default function TransactionDialog({
         const col = (editing as unknown as Record<string, unknown>)[k]
         if (col != null && custom[k] == null) custom[k] = col
       }
+      const legacySignDate =
+        editing.close_date ??
+        (typeof custom.sign_date === 'string' ? (custom.sign_date as string) : null)
       setState({
         kind: editing.kind ?? 'service',
         service_type_id: editing.service_type_id,
@@ -266,7 +271,7 @@ export default function TransactionDialog({
         client_name: editing.client_name ?? '',
         service_lead: editing.service_lead ?? profile?.full_name ?? '',
         entry_date: editing.entry_date ?? today(),
-        close_date: editing.close_date,
+        close_date: legacySignDate,
         notes: editing.notes,
         custom,
         work_start_date: editing.work_start_date,
@@ -383,6 +388,8 @@ export default function TransactionDialog({
       for (const k of MIRRORED_KEYS) {
         if (state.custom[k] !== undefined) mirrored[k] = state.custom[k]
       }
+      // Keep legacy custom.sign_date in sync with close_date column.
+      const customWithDates = { ...state.custom, sign_date: state.close_date }
 
       const isRecruiter = profile?.role === 'recruiter'
       const nowIso = new Date().toISOString()
@@ -414,7 +421,7 @@ export default function TransactionDialog({
         work_end_date: state.work_end_date,
         warranty_end_date: state.warranty_end_date,
         notes: state.notes,
-        custom_fields: state.custom,
+        custom_fields: customWithDates,
         supplier_id: state.supplier_id,
         supplier_percent: state.supplier_percent,
         ...mirrored,
