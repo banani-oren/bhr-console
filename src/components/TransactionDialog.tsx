@@ -246,6 +246,16 @@ export default function TransactionDialog({
     [serviceTypes, state.service_type_id],
   )
 
+  // Auto-compute invoice amount: salary × commission% × billing%
+  const autoInvoiceAmount = useMemo(() => {
+    if (state.kind !== 'service') return null
+    const salary = Number(state.custom.salary) || null
+    const commPct = Number(state.custom.commission_percent) || null
+    const billPct = state.billing_percent
+    if (salary == null || commPct == null || billPct == null) return null
+    return Math.round(salary * (commPct / 100) * (billPct / 100))
+  }, [state.kind, state.custom.salary, state.custom.commission_percent, state.billing_percent])
+
   // Initialize when dialog opens.
   useEffect(() => {
     if (!open) return
@@ -360,6 +370,22 @@ export default function TransactionDialog({
     state.work_start_date,
     selectedClient?.warranty_days,
   ])
+
+  // Sync net_invoice_amount + commission_amount into custom when autoInvoiceAmount changes.
+  useEffect(() => {
+    if (autoInvoiceAmount == null) return
+    setState((s) => {
+      if (
+        s.custom.net_invoice_amount === autoInvoiceAmount &&
+        s.custom.commission_amount === autoInvoiceAmount
+      ) return s
+      return {
+        ...s,
+        custom: { ...s.custom, net_invoice_amount: autoInvoiceAmount, commission_amount: autoInvoiceAmount },
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoInvoiceAmount])
 
   // Payment-due derived from invoice_sent_date + client.payment_terms.
   useEffect(() => {
@@ -731,18 +757,6 @@ export default function TransactionDialog({
                   onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
                 />
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">סטטוס תשלום</Label>
-                <Select value={state.payment_status} onValueChange={(v) => setState((s) => ({ ...s, payment_status: v ?? 'ממתין' }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="ממתין">ממתין</SelectItem>
-                    <SelectItem value="שולם">שולם</SelectItem>
-                    <SelectItem value="פיגור">פיגור</SelectItem>
-                    <SelectItem value="ללא חיוב">ללא חיוב</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               <div className="space-y-1 flex flex-col justify-center">
                 <LabeledToggle
                   label="חיוב"
@@ -812,7 +826,7 @@ export default function TransactionDialog({
             <h3 className="text-sm font-semibold text-purple-700 mb-2">חשבונית ותשלום</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">אחוז גבייה (%)</Label>
+                <Label className="text-xs">אחוז גבייה לחשבונית (%)</Label>
                 <Input
                   type="number"
                   dir="ltr"
@@ -825,6 +839,27 @@ export default function TransactionDialog({
                     }))
                   }
                 />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">סכום לתשלום לחשבונית</Label>
+                <div
+                  dir="ltr"
+                  className="flex items-center h-10 px-3 rounded-md border border-input bg-muted text-sm font-medium text-muted-foreground"
+                >
+                  {autoInvoiceAmount != null ? fmt(autoInvoiceAmount) : '—'}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">סטטוס תשלום</Label>
+                <Select value={state.payment_status} onValueChange={(v) => setState((s) => ({ ...s, payment_status: v ?? 'ממתין' }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ממתין">ממתין</SelectItem>
+                    <SelectItem value="שולם">שולם</SelectItem>
+                    <SelectItem value="פיגור">פיגור</SelectItem>
+                    <SelectItem value="ללא חיוב">ללא חיוב</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1" />
               <div className="space-y-1">
@@ -1076,38 +1111,4 @@ function TimePeriodForm({
                 <TableRow>
                   <TableHead className="w-8"></TableHead>
                   <TableHead className="text-right text-xs">תאריך</TableHead>
-                  <TableHead className="text-right text-xs">משעה</TableHead>
-                  <TableHead className="text-right text-xs">עד</TableHead>
-                  <TableHead className="text-right text-xs">שעות</TableHead>
-                  <TableHead className="text-right text-xs">עובד/ת</TableHead>
-                  <TableHead className="text-right text-xs">תיאור</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {unbilledHours.map((h) => (
-                  <TableRow key={h.id}>
-                    <TableCell className="w-8">
-                      <input
-                        type="checkbox"
-                        checked={state.selectedHoursIds.has(h.id)}
-                        onChange={() => toggleHourRow(h.id)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-xs"><DateCell value={h.visit_date} /></TableCell>
-                    <TableCell className="text-xs" dir="ltr">{h.start_time ?? '—'}</TableCell>
-                    <TableCell className="text-xs" dir="ltr">{h.end_time ?? '—'}</TableCell>
-                    <TableCell className="text-xs">{h.hours}</TableCell>
-                    <TableCell className="text-xs">
-                      {h.profile_id ? profileNameById.get(h.profile_id) ?? '—' : '—'}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{h.description ?? '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+                  <TableHead className="text-right text-xs">משעה</TableHea
