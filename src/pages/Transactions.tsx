@@ -49,6 +49,7 @@ const STATUS_COLOR: Record<BillingEventStatus, string> = {
   pending:   'bg-amber-400',
   to_bill:   'bg-blue-500',
   billed:    'bg-green-500',
+  paid:      'bg-emerald-600',
   cancelled: 'bg-red-400',
 }
 

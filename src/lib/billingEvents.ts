@@ -1,11 +1,18 @@
 import { supabase } from '@/lib/supabase'
 import type { BillingEvent, PaymentSplit } from '@/lib/types'
 
+/**
+ * Parses "שוטף+30", "שוטף +30", "שוטף+0", "30", etc. into just the number of days.
+ * "שוטף" alone = 0 additional days.
+ * Returns 30 as a safe default if nothing can be parsed.
+ */
 export function parsePaymentTermDays(terms: string | null | undefined): number {
   if (!terms) return 30
-  const m = /(\d+)/.exec(terms)
+  const s = String(terms).replace(/\s+/g, '')
+  if (/^\d+$/.test(s)) return Number(s)
+  if (s === 'שוטף') return 0
+  const m = s.match(/שוטף\+(\d+)/)
   if (m) return Number(m[1])
-  if (terms.includes('שוטף')) return 0
   return 30
 }
 
@@ -15,11 +22,29 @@ export function addDays(iso: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+/**
+ * Calculates the expected חשבונית מס קבלה date using Israeli "שוטף+X" logic:
+ * - Advance to the last day of the invoice month ("שוטף")
+ * - Then add the specified number of additional days
+ *
+ * Example: invoice 11 May 2026, days=30 → end of May (31 May) + 30 days = 30 June 2026
+ */
+export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number): string {
+  const d = new Date(invoiceDate)
+  if (isNaN(d.getTime())) return invoiceDate
+  const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+  endOfMonth.setDate(endOfMonth.getDate() + paymentTermsDays)
+  return endOfMonth.toISOString().slice(0, 10)
+}
+
 export function computeEventStatus(
-  event: Pick<BillingEvent, 'status' | 'billing_date' | 'invoice_number'>,
+  event: Pick<BillingEvent, 'status' | 'billing_date' | 'invoice_number' | 'receipt_number'>,
   transactionApproved: boolean,
 ): BillingEvent['status'] {
   if (event.status === 'cancelled') return 'cancelled'
+  // receipt_number = חשבונית מס קבלה number → payment confirmed
+  if (event.receipt_number) return 'paid'
+  // invoice_number = חשבון עסקה number → proforma sent
   if (event.status === 'billed' || event.invoice_number) return 'billed'
   if (!transactionApproved) return 'pending'
   const today = new Date().toISOString().slice(0, 10)
@@ -87,11 +112,12 @@ export function generateTimePeriodBillingEvent(params: {
   paymentTerms: string | null
 }): BillingEventDraft {
   const { transactionId, hoursTotal, hourlyRate, clientName,
-          periodStart, periodEnd, paymentTerms } = params
+          periodStart, periodEnd } = params
+  void params.paymentTerms
   const amount = Math.round(hoursTotal * hourlyRate * 100) / 100
-  const termDays = parsePaymentTermDays(paymentTerms)
-  const today = new Date().toISOString().slice(0, 10)
-  const billingDate = addDays(today, termDays)
+  // billing_date = the proforma issue date = today when billing is generated.
+  // Tax-invoice date is calculated on-the-fly in the UI from billing_date + שוטף+X.
+  const billingDate = new Date().toISOString().slice(0, 10)
 
   return {
     transaction_id: transactionId,

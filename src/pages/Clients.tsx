@@ -906,11 +906,34 @@ export default function Clients() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>תנאי תשלום</Label>
-                  <Input
-                    value={form.payment_terms}
-                    onChange={(e) => setField('payment_terms', e.target.value)}
-                    placeholder="שוטף + 30"
-                  />
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm font-medium text-gray-700 bg-gray-100 border border-r-0 border-input rounded-r-md px-3 py-2 whitespace-nowrap select-none">
+                      שוטף +
+                    </span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={365}
+                      dir="ltr"
+                      className="rounded-r-none w-24 text-center"
+                      value={(() => {
+                        const s = (form.payment_terms ?? '').replace(/\s+/g, '')
+                        if (!s || s === 'שוטף') return '0'
+                        const m = s.match(/שוטף\+(\d+)/)
+                        if (m) return m[1]
+                        if (/^\d+$/.test(s)) return s
+                        return '0'
+                      })()}
+                      onChange={(e) => {
+                        const days = e.target.value === '' ? '0' : e.target.value
+                        setField('payment_terms', `שוטף+${days}`)
+                      }}
+                    />
+                    <span className="text-xs text-muted-foreground mr-1">ימים</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    שוטף = עד סוף חודש החשבון + הימים שהזנת
+                  </p>
                 </div>
 
                 <div className="space-y-1.5 md:col-span-3">

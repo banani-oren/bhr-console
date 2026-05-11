@@ -19,14 +19,15 @@ import {
 } from '@/lib/serviceTypes'
 import {
   addDays,
+  calculateTaxInvoiceDate,
   cancelFutureBillingEvents,
   generateServiceBillingEvents,
+  parsePaymentTermDays,
   resolveAdvanceAmount,
   upsertBillingEvents,
 } from '@/lib/billingEvents'
 import ClientPicker from '@/components/ClientPicker'
 import AdvanceEditor, { type AdvanceType } from '@/components/AdvanceEditor'
-import { DateCell } from '@/components/ui/date-cell'
 import {
   Dialog,
   DialogContent,
@@ -877,6 +878,8 @@ function BillingEventsPanel({
   transaction: Transaction
   selectedClient: Client | null
 }) {
+  const paymentTermsDays = parsePaymentTermDays(selectedClient?.payment_terms)
+
   return (
     <div>
       <h3 className="text-sm font-semibold text-purple-700 mb-3">
@@ -894,8 +897,15 @@ function BillingEventsPanel({
           )}
         </div>
       ) : (
-        <div className="space-y-2">
-          {events.map((e) => <BillingEventRow key={e.id} event={e} onSaved={onChange} />)}
+        <div className="space-y-3">
+          {events.map((e) => (
+            <BillingEventRow
+              key={e.id}
+              event={e}
+              paymentTermsDays={paymentTermsDays}
+              onSaved={onChange}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -978,30 +988,46 @@ function GenerateBillingEventsButton({
 }
 
 const STATUS_COLOR: Record<BillingEvent['status'], string> = {
-  pending: 'bg-amber-400',
-  to_bill: 'bg-blue-500',
-  billed: 'bg-green-500',
+  pending:   'bg-amber-400',
+  to_bill:   'bg-blue-500',
+  billed:    'bg-green-500',
+  paid:      'bg-emerald-600',
   cancelled: 'bg-red-400',
 }
 
 const STATUS_LABEL: Record<BillingEvent['status'], string> = {
-  pending: 'ממתין',
-  to_bill: 'לחיוב',
-  billed: 'חויב',
+  pending:   'ממתין',
+  to_bill:   'לחיוב',
+  billed:    'חויב',
+  paid:      'שולם',
   cancelled: 'מבוטל',
 }
 
-function BillingEventRow({ event, onSaved }: { event: BillingEvent; onSaved: () => void }) {
-  const [invoice, setInvoice] = useState(event.invoice_number ?? '')
-  const [paymentDate, setPaymentDate] = useState(event.payment_date ?? '')
-  const [receipt, setReceipt] = useState(event.receipt_number ?? '')
+function BillingEventRow({
+  event,
+  paymentTermsDays,
+  onSaved,
+}: {
+  event: BillingEvent
+  paymentTermsDays: number
+  onSaved: () => void
+}) {
+  const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
+  const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
+  const [taxInvoiceDateOverride, setTaxInvoiceDateOverride] = useState(event.payment_date ?? '')
   const [savingField, setSavingField] = useState<string | null>(null)
 
   useEffect(() => {
-    setInvoice(event.invoice_number ?? '')
-    setPaymentDate(event.payment_date ?? '')
-    setReceipt(event.receipt_number ?? '')
-  }, [event.id, event.invoice_number, event.payment_date, event.receipt_number])
+    setInvoiceNumber(event.invoice_number ?? '')
+    setReceiptNumber(event.receipt_number ?? '')
+    setTaxInvoiceDateOverride(event.payment_date ?? '')
+  }, [event.id, event.invoice_number, event.receipt_number, event.payment_date])
+
+  const calculatedTaxDate = event.billing_date
+    ? calculateTaxInvoiceDate(event.billing_date, paymentTermsDays)
+    : null
+
+  const taxDateDisplay = taxInvoiceDateOverride || calculatedTaxDate || ''
 
   const saveField = async (
     field: 'invoice_number' | 'payment_date' | 'receipt_number',
@@ -1009,58 +1035,147 @@ function BillingEventRow({ event, onSaved }: { event: BillingEvent; onSaved: () 
   ) => {
     setSavingField(field)
     const patch: Record<string, unknown> = { [field]: value || null }
-    if (field === 'invoice_number' && value && event.status !== 'billed') {
-      patch.status = 'billed'
+
+    if (field === 'invoice_number') {
+      if (value && event.status !== 'billed' && event.status !== 'paid') {
+        patch.status = 'billed'
+      } else if (!value && event.status === 'billed') {
+        patch.status = 'to_bill'
+      }
     }
+    if (field === 'receipt_number') {
+      if (value) {
+        patch.status = 'paid'
+        if (!event.payment_date && calculatedTaxDate) {
+          patch.payment_date = calculatedTaxDate
+        }
+      } else if (event.status === 'paid') {
+        patch.status = event.invoice_number ? 'billed' : 'to_bill'
+      }
+    }
+
     const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id)
     setSavingField(null)
     if (error) {
-      console.error(error)
+      console.error('BillingEventRow save error:', error)
       return
     }
     onSaved()
   }
 
+  const ILS = new Intl.NumberFormat('he-IL', {
+    style: 'currency',
+    currency: 'ILS',
+    maximumFractionDigits: 0,
+  })
+
   return (
-    <Card className="p-3">
-      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+    <Card className="p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className={`inline-block w-2.5 h-2.5 rounded-full ${STATUS_COLOR[event.status]}`} />
+          <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${STATUS_COLOR[event.status]}`} />
           <span className="text-sm font-medium">{event.description ?? '—'}</span>
           <Badge variant="outline" className="text-xs">{STATUS_LABEL[event.status]}</Badge>
         </div>
-        <div className="text-sm flex items-center gap-3">
-          <span className="text-muted-foreground"><DateCell value={event.billing_date} /></span>
-          <span className="font-semibold">
-            {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(event.amount)}
-          </span>
-        </div>
+        <span className="text-base font-bold text-purple-900">{ILS.format(event.amount)}</span>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <div className="space-y-1">
-          <Label className="text-xs">חשבון עסקה</Label>
-          <Input
-            value={invoice}
-            onChange={(e) => setInvoice(e.target.value)}
-            onBlur={() => invoice !== (event.invoice_number ?? '') && saveField('invoice_number', invoice)}
-            placeholder={savingField === 'invoice_number' ? 'שומר...' : ''}
-          />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-2 border border-blue-100 rounded-lg p-3 bg-blue-50/30">
+          <h4 className="text-xs font-semibold text-blue-800 flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-blue-400" />
+            חשבון עסקה
+          </h4>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">תאריך חשבון</Label>
+              <p className="text-sm font-medium">
+                {event.billing_date
+                  ? new Intl.DateTimeFormat('he-IL', {
+                      day: '2-digit', month: '2-digit', year: 'numeric',
+                      timeZone: 'Asia/Jerusalem',
+                    }).format(new Date(event.billing_date))
+                  : '—'}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">מספר חשבון עסקה</Label>
+              <Input
+                className="h-7 text-sm"
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+                onBlur={() => {
+                  if (invoiceNumber !== (event.invoice_number ?? '')) {
+                    void saveField('invoice_number', invoiceNumber)
+                  }
+                }}
+                placeholder={savingField === 'invoice_number' ? 'שומר...' : 'מספר חשבון'}
+              />
+            </div>
+          </div>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">תאריך תשלום</Label>
-          <DateInput
-            value={paymentDate}
-            onChange={(e) => setPaymentDate(e.target.value)}
-            onBlur={() => paymentDate !== (event.payment_date ?? '') && saveField('payment_date', paymentDate)}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">קבלה</Label>
-          <Input
-            value={receipt}
-            onChange={(e) => setReceipt(e.target.value)}
-            onBlur={() => receipt !== (event.receipt_number ?? '') && saveField('receipt_number', receipt)}
-          />
+
+        <div className="space-y-2 border border-green-100 rounded-lg p-3 bg-green-50/30">
+          <h4 className="text-xs font-semibold text-green-800 flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+            חשבונית מס קבלה
+          </h4>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                תאריך פירעון
+                {calculatedTaxDate && !taxInvoiceDateOverride && (
+                  <span className="text-purple-600 mr-1">(מחושב)</span>
+                )}
+                {taxInvoiceDateOverride && (
+                  <span className="text-amber-600 mr-1">(ידני)</span>
+                )}
+              </Label>
+              <div className="flex gap-1 items-center">
+                <Input
+                  type="date"
+                  className="h-7 text-sm"
+                  value={taxDateDisplay}
+                  onChange={(e) => setTaxInvoiceDateOverride(e.target.value)}
+                  onBlur={() => {
+                    const newVal = taxInvoiceDateOverride || calculatedTaxDate || ''
+                    if (newVal !== (event.payment_date ?? '')) {
+                      void saveField('payment_date', newVal)
+                    }
+                  }}
+                />
+                {taxInvoiceDateOverride && (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    title="אפס לתאריך מחושב"
+                    onClick={() => {
+                      setTaxInvoiceDateOverride('')
+                      if (calculatedTaxDate) {
+                        void saveField('payment_date', calculatedTaxDate)
+                      }
+                    }}
+                  >
+                    ↩
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">מספר חשבונית מס קבלה</Label>
+              <Input
+                className="h-7 text-sm"
+                value={receiptNumber}
+                onChange={(e) => setReceiptNumber(e.target.value)}
+                onBlur={() => {
+                  if (receiptNumber !== (event.receipt_number ?? '')) {
+                    void saveField('receipt_number', receiptNumber)
+                  }
+                }}
+                placeholder={savingField === 'receipt_number' ? 'שומר...' : 'מספר חשבונית'}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </Card>

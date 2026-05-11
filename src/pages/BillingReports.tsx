@@ -44,12 +44,14 @@ const STATUS_LABEL: Record<BillingEventStatus, string> = {
   pending: 'ממתין',
   to_bill: 'לחיוב',
   billed: 'חויב',
+  paid: 'שולם',
   cancelled: 'מבוטל',
 }
 const STATUS_BADGE: Record<BillingEventStatus, string> = {
   pending: 'bg-amber-50 text-amber-700 border-amber-200',
   to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
   billed: 'bg-green-50 text-green-700 border-green-200',
+  paid: 'bg-emerald-50 text-emerald-700 border-emerald-300',
   cancelled: 'bg-red-50 text-red-700 border-red-200',
 }
 
@@ -121,7 +123,11 @@ export default function BillingReports() {
 
   const today = new Date().toISOString().slice(0, 10)
   const isOverdue = (e: EventWithTxn) =>
-    e.billing_date != null && e.billing_date < today && e.status !== 'billed' && e.status !== 'cancelled'
+    e.billing_date != null
+    && e.billing_date < today
+    && e.status !== 'billed'
+    && e.status !== 'paid'
+    && e.status !== 'cancelled'
 
   const selectedEvents = useMemo(
     () => filteredEvents.filter((e) => selectedIds.has(e.id)),
@@ -226,6 +232,7 @@ export default function BillingReports() {
                 <SelectItem value="pending">ממתין</SelectItem>
                 <SelectItem value="to_bill">לחיוב</SelectItem>
                 <SelectItem value="billed">חויב</SelectItem>
+                <SelectItem value="paid">שולם</SelectItem>
                 <SelectItem value="cancelled">מבוטל</SelectItem>
               </SelectContent>
             </Select>

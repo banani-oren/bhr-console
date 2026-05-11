@@ -77,7 +77,7 @@ export type ClientWithAgreement = Client & {
 
 export type TransactionKind = 'service' | 'time_period'
 
-export type BillingEventStatus = 'pending' | 'to_bill' | 'billed' | 'cancelled'
+export type BillingEventStatus = 'pending' | 'to_bill' | 'billed' | 'paid' | 'cancelled'
 
 export type BillingEvent = {
   id: string
