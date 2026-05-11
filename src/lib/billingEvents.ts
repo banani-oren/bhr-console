@@ -28,13 +28,19 @@ export function addDays(iso: string, days: number): string {
  * - Then add the specified number of additional days
  *
  * Example: invoice 11 May 2026, days=30 → end of May (31 May) + 30 days = 30 June 2026
+ *
+ * Calendar arithmetic is done in UTC to avoid local-vs-UTC drift when the input
+ * "YYYY-MM-DD" is parsed as UTC midnight by the Date constructor.
  */
 export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number): string {
-  const d = new Date(invoiceDate)
-  if (isNaN(d.getTime())) return invoiceDate
-  const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0)
-  endOfMonth.setDate(endOfMonth.getDate() + paymentTermsDays)
-  return endOfMonth.toISOString().slice(0, 10)
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(invoiceDate)
+  if (!m) return invoiceDate
+  const year = Number(m[1])
+  const month = Number(m[2]) // 1-12
+  // Last day of the invoice month, plus the additional days, all in UTC.
+  const eom = new Date(Date.UTC(year, month, 0)) // month is 1-based here so day 0 of next month = last of this
+  eom.setUTCDate(eom.getUTCDate() + paymentTermsDays)
+  return eom.toISOString().slice(0, 10)
 }
 
 export function computeEventStatus(
