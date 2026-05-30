@@ -14,9 +14,11 @@ import Services from '@/pages/Services'
 import Suppliers from '@/pages/Suppliers'
 import BillingReports from '@/pages/BillingReports'
 import Bonuses from '@/pages/Bonuses'
+import Attendance from '@/pages/Attendance'
 import Profile from '@/pages/Profile'
 import MobileShell from '@/pages/mobile/MobileShell'
 import MobileHours from '@/pages/mobile/MobileHours'
+import MobileAttendance from '@/pages/mobile/MobileAttendance'
 import MobileProfile from '@/pages/mobile/MobileProfile'
 import MobileAutoRoute from '@/components/MobileAutoRoute'
 
@@ -123,6 +125,14 @@ export default function App() {
               }
             />
             <Route
+              path="/attendance"
+              element={
+                <RequireRole allow={['admin', 'administration', 'recruiter']}>
+                  <Attendance />
+                </RequireRole>
+              }
+            />
+            <Route
               path="/profile"
               element={
                 <RequireRole allow={['admin', 'administration', 'recruiter']}>
@@ -144,6 +154,7 @@ export default function App() {
             >
               <Route index element={<Navigate to="/m/hours" replace />} />
               <Route path="hours" element={<MobileHours />} />
+              <Route path="attendance" element={<MobileAttendance />} />
               <Route path="profile" element={<MobileProfile />} />
               {/* Legacy mobile transactions route → redirect to hours. */}
               <Route path="transactions" element={<Navigate to="/m/hours" replace />} />

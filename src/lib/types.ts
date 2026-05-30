@@ -144,6 +144,16 @@ export type Transaction = {
   created_at: string
 }
 
+export type AttendanceLog = {
+  id: string
+  profile_id: string
+  action: 'check_in' | 'check_out'
+  logged_at: string        // ISO timestamptz
+  work_date: string        // YYYY-MM-DD (Israel timezone)
+  notes: string | null
+  created_at: string
+}
+
 export type HoursLog = {
   id: string
   team_member_id: string | null

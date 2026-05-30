@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Clock, UserCircle, Monitor } from 'lucide-react'
+import { Clock, CalendarCheck, UserCircle, Monitor } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
@@ -52,8 +52,9 @@ export default function MobileShell() {
         <Outlet />
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 h-16 bg-card border-t grid grid-cols-2 text-sm">
+      <nav className="fixed bottom-0 inset-x-0 h-16 bg-card border-t grid grid-cols-3 text-sm">
         <BottomTab to="/m/hours" icon={<Clock className="h-6 w-6" />} label="שעות" />
+        <BottomTab to="/m/attendance" icon={<CalendarCheck className="h-6 w-6" />} label="נוכחות" />
         <BottomTab to="/m/profile" icon={<UserCircle className="h-6 w-6" />} label="פרופיל" />
       </nav>
     </div>
