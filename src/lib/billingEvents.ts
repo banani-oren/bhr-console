@@ -144,6 +144,7 @@ export async function upsertBillingEvents(
   transactionId: string,
   events: BillingEventDraft[],
 ): Promise<void> {
+  // Delete only events that haven't progressed — billed/paid/cancelled stay untouched.
   await supabase
     .from('billing_events')
     .delete()
@@ -152,7 +153,19 @@ export async function upsertBillingEvents(
 
   if (events.length === 0) return
 
-  const { error } = await supabase.from('billing_events').insert(events)
+  // After the delete, some event_index values may still exist (billed/paid/cancelled).
+  // Inserting a duplicate index causes a phantom row — skip those indices.
+  const { data: surviving } = await supabase
+    .from('billing_events')
+    .select('event_index')
+    .eq('transaction_id', transactionId)
+
+  const occupiedIndices = new Set((surviving ?? []).map((r: { event_index: number }) => r.event_index))
+  const toInsert = events.filter((e) => !occupiedIndices.has(e.event_index))
+
+  if (toInsert.length === 0) return
+
+  const { error } = await supabase.from('billing_events').insert(toInsert)
   if (error) throw error
 }
 

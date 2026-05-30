@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type {
@@ -787,7 +787,16 @@ export default function TransactionDialog({
                     setState((s) => ({ ...s, supplier_id: v === '__none__' ? null : v }))
                   }
                 >
-                  <SelectTrigger><SelectValue placeholder="ללא ספק" /></SelectTrigger>
+                  <SelectTrigger>
+                    <span className="truncate text-sm">
+                      {state.supplier_id == null
+                        ? 'ללא ספק'
+                        : (() => {
+                            const sp = suppliers.find((s) => s.id === state.supplier_id)
+                            return sp ? `${sp.last_name} ${sp.first_name}` : '—'
+                          })()}
+                    </span>
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">ללא ספק</SelectItem>
                     {suppliers.map((sp) => (
@@ -799,7 +808,7 @@ export default function TransactionDialog({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>% עמלת קפס</Label>
+                <Label>עמלת קפס %</Label>
                 <Input
                   type="number"
                   dir="ltr"
@@ -904,6 +913,7 @@ function BillingEventsPanel({
               event={e}
               paymentTermsDays={paymentTermsDays}
               onSaved={onChange}
+              onDeleted={onChange}
             />
           ))}
         </div>
@@ -1007,15 +1017,27 @@ function BillingEventRow({
   event,
   paymentTermsDays,
   onSaved,
+  onDeleted,
 }: {
   event: BillingEvent
   paymentTermsDays: number
   onSaved: () => void
+  onDeleted: () => void
 }) {
   const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
   const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
   const [taxInvoiceDateOverride, setTaxInvoiceDateOverride] = useState(event.payment_date ?? '')
   const [savingField, setSavingField] = useState<string | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDelete = async () => {
+    setDeleting(true)
+    const { error } = await supabase.from('billing_events').delete().eq('id', event.id)
+    setDeleting(false)
+    if (error) { console.error('BillingEventRow delete error:', error); return }
+    onDeleted()
+  }
 
   useEffect(() => {
     setInvoiceNumber(event.invoice_number ?? '')
@@ -1077,7 +1099,38 @@ function BillingEventRow({
           <span className="text-sm font-medium">{event.description ?? '—'}</span>
           <Badge variant="outline" className="text-xs">{STATUS_LABEL[event.status]}</Badge>
         </div>
-        <span className="text-base font-bold text-purple-900">{ILS.format(event.amount)}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-base font-bold text-purple-900">{ILS.format(event.amount)}</span>
+          {!deleteConfirm ? (
+            <button
+              type="button"
+              onClick={() => setDeleteConfirm(true)}
+              className="text-muted-foreground hover:text-red-500 transition-colors"
+              title="מחק שורת חיוב"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-red-600">מחק?</span>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="text-red-600 hover:text-red-800 font-medium"
+              >
+                {deleting ? '...' : 'כן'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                ביטול
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
