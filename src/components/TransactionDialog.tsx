@@ -384,6 +384,12 @@ export default function TransactionDialog({
   const handleSave = async () => {
     setSaveStatus('saving')
     setSaveError(null)
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => {
+      controller.abort(new DOMException('timeout', 'AbortError'))
+    }, 20000)
+
     try {
       const mirrored: Record<string, unknown> = {}
       for (const k of MIRRORED_KEYS) {
@@ -448,10 +454,10 @@ export default function TransactionDialog({
 
       let txnId: string | null = editing?.id ?? null
       if (editing) {
-        const { error } = await supabase.from('transactions').update(payload).eq('id', editing.id)
+        const { error } = await supabase.from('transactions').update(payload).eq('id', editing.id).abortSignal(controller.signal)
         if (error) throw error
       } else {
-        const { data, error } = await supabase.from('transactions').insert(payload).select('id').single()
+        const { data, error } = await supabase.from('transactions').insert(payload).select('id').abortSignal(controller.signal).single()
         if (error) throw error
         txnId = (data as { id: string } | null)?.id ?? null
       }
@@ -477,7 +483,7 @@ export default function TransactionDialog({
           candidateName: String(state.custom.candidate_name ?? ''),
           serviceType: state.service_type_name,
         })
-        await upsertBillingEvents(txnId, events)
+        await upsertBillingEvents(txnId, events, controller.signal)
 
         // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
         const txnApproved = approvalFields.approved_at != null || (editing && editing.approved_at)
@@ -489,12 +495,13 @@ export default function TransactionDialog({
             .eq('transaction_id', txnId)
             .eq('status', 'pending')
             .lte('billing_date', todayIso)
+            .abortSignal(controller.signal)
         }
       }
 
       // Cancel future billing events when work_end_date is set.
       if (state.work_end_date && txnId) {
-        await cancelFutureBillingEvents(txnId, state.work_end_date)
+        await cancelFutureBillingEvents(txnId, state.work_end_date, controller.signal)
       }
 
       // Email approval recipients if a recruiter created a new transaction.
@@ -524,8 +531,16 @@ export default function TransactionDialog({
       }, 1000)
     } catch (err) {
       console.error('TransactionDialog save error:', err)
-      setSaveError(err instanceof Error ? err.message : 'שגיאה')
+      const isAbort = err instanceof DOMException && err.name === 'AbortError'
+      const isTimeout = isAbort && err.message === 'timeout'
+      setSaveError(
+        isTimeout
+          ? 'השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.'
+          : err instanceof Error ? err.message : 'שגיאה',
+      )
       setSaveStatus('error')
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 

@@ -143,6 +143,7 @@ export function generateTimePeriodBillingEvent(params: {
 export async function upsertBillingEvents(
   transactionId: string,
   events: BillingEventDraft[],
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   // Delete only events that haven't progressed — billed/paid/cancelled stay untouched.
   await supabase
@@ -150,6 +151,7 @@ export async function upsertBillingEvents(
     .delete()
     .eq('transaction_id', transactionId)
     .in('status', ['pending', 'to_bill'])
+    .abortSignal(signal)
 
   if (events.length === 0) return
 
@@ -159,19 +161,21 @@ export async function upsertBillingEvents(
     .from('billing_events')
     .select('event_index')
     .eq('transaction_id', transactionId)
+    .abortSignal(signal)
 
   const occupiedIndices = new Set((surviving ?? []).map((r: { event_index: number }) => r.event_index))
   const toInsert = events.filter((e) => !occupiedIndices.has(e.event_index))
 
   if (toInsert.length === 0) return
 
-  const { error } = await supabase.from('billing_events').insert(toInsert)
+  const { error } = await supabase.from('billing_events').insert(toInsert).abortSignal(signal)
   if (error) throw error
 }
 
 export async function cancelFutureBillingEvents(
   transactionId: string,
   workEndDate: string,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   const { error } = await supabase
     .from('billing_events')
@@ -179,6 +183,7 @@ export async function cancelFutureBillingEvents(
     .eq('transaction_id', transactionId)
     .in('status', ['pending', 'to_bill'])
     .gt('billing_date', workEndDate)
+    .abortSignal(signal)
   if (error) throw error
 }
 
