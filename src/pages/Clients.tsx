@@ -37,6 +37,12 @@ import { Plus, Upload, Search, Pencil, Trash2, X } from 'lucide-react'
 import AgreementUploader from '@/components/AgreementUploader'
 import AdvanceEditor from '@/components/AdvanceEditor'
 import { useSafeMutation } from '@/hooks/useSafeMutation'
+import {
+  SortableHead,
+  toggleSortKey,
+  compareBySort,
+  type SortState,
+} from '@/components/SortableHead'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -262,6 +268,8 @@ export default function Clients() {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterGroup, setFilterGroup] = useState('all')
+  const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' })
+  const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
   const { data: clients = [], isLoading } = useQuery<Client[]>({
     queryKey: ['clients'],
@@ -299,6 +307,12 @@ export default function Clients() {
       return true
     })
   }, [clients, search, filterStatus, filterGroup])
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    arr.sort((a, b) => compareBySort(a, b, sort, (c, key) => (c as Record<string, unknown>)[key]))
+    return arr
+  }, [filtered, sort])
 
   const groups = useMemo(
     () => [...new Set(clients.map((c) => c.group_name).filter(Boolean))].sort() as string[],
@@ -765,24 +779,24 @@ export default function Clients() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="text-right">שם לקוח</TableHead>
-                <TableHead className="text-right">איש קשר</TableHead>
-                <TableHead className="text-right">נייד</TableHead>
-                <TableHead className="text-right">עמלה %</TableHead>
-                <TableHead className="text-right">תעריף/שעה</TableHead>
-                <TableHead className="text-right">סטטוס</TableHead>
+                <SortableHead col="name" label="שם לקוח" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="contact_name" label="איש קשר" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="phone" label="נייד" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="commission_percent" label="עמלה %" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="hourly_rate" label="תעריף/שעה" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="status" label="סטטוס" sort={sort} onToggle={toggleSort} />
                 <TableHead className="text-right">פעולות</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.length === 0 ? (
+              {sorted.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                     לא נמצאו לקוחות
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((client) => (
+                sorted.map((client) => (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-purple-50/50" onClick={() => openEdit(client)}>
                     <TableCell className="font-medium">{client.name}</TableCell>
                     <TableCell>{client.contact_name ?? '—'}</TableCell>

@@ -32,6 +32,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  SortableHead,
+  toggleSortKey,
+  compareBySort,
+  type SortState,
+} from '@/components/SortableHead'
 
 type EventWithTxn = BillingEvent & {
   transactions: Pick<
@@ -69,6 +75,8 @@ export default function BillingReports() {
   const [searchInput, setSearchInput] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [sort, setSort] = useState<SortState>({ key: 'billing_date', dir: 'desc' })
+  const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
@@ -120,6 +128,20 @@ export default function BillingReports() {
       return haystack.some((s) => s.includes(searchDebounced))
     })
   }, [rawEvents, searchDebounced])
+
+  const getEventSortValue = (e: EventWithTxn, key: string): unknown => {
+    switch (key) {
+      case 'client_name': return e.transactions.client_name
+      case 'amount': return Number(e.amount)
+      default: return (e as Record<string, unknown>)[key] // description, billing_date, payment_date, status
+    }
+  }
+
+  const sortedEvents = useMemo(() => {
+    const arr = [...filteredEvents]
+    arr.sort((a, b) => compareBySort(a, b, sort, getEventSortValue))
+    return arr
+  }, [filteredEvents, sort])
 
   const today = new Date().toISOString().slice(0, 10)
   const isOverdue = (e: EventWithTxn) =>
@@ -299,19 +321,19 @@ export default function BillingReports() {
                       onChange={toggleSelectAll}
                     />
                   </TableHead>
-                  <TableHead className="text-right text-purple-800">לקוח</TableHead>
+                  <SortableHead col="client_name" label="לקוח" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">שירות</TableHead>
-                  <TableHead className="text-right text-purple-800">תיאור</TableHead>
-                  <TableHead className="text-right text-purple-800">תאריך חיוב</TableHead>
-                  <TableHead className="text-right text-purple-800">סכום</TableHead>
-                  <TableHead className="text-right text-purple-800">סטטוס</TableHead>
+                  <SortableHead col="description" label="תיאור" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="billing_date" label="תאריך חיוב" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="amount" label="סכום" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="status" label="סטטוס" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">חשבון עסקה</TableHead>
-                  <TableHead className="text-right text-purple-800">תאריך תשלום</TableHead>
+                  <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">קבלה</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredEvents.map((e) => (
+                {sortedEvents.map((e) => (
                   <BillingEventDashRow
                     key={e.id}
                     event={e}

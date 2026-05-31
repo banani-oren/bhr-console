@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Search, X, ChevronDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, X } from 'lucide-react'
 import { DateCell } from '@/components/ui/date-cell'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTable, useDelete } from '@/hooks/useSupabaseQuery'
@@ -13,10 +13,8 @@ import type {
 } from '@/lib/types'
 import type { ServiceType } from '@/lib/serviceTypes'
 import TransactionDialog from '@/components/TransactionDialog'
-import ClientPicker from '@/components/ClientPicker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import {
@@ -28,17 +26,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-
-const HEBREW_MONTHS = [
-  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
-  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
-]
+  SortableHead,
+  toggleSortKey,
+  compareBySort,
+  type SortState,
+} from '@/components/SortableHead'
 
 const formatCurrency = (n: number | null | undefined) => {
   if (n == null) return '—'
@@ -135,14 +127,11 @@ export default function Transactions() {
     },
   })
 
-  // Filters
-  const [filterClientId, setFilterClientId] = useState<string | null>(null)
-  const [filterServiceType, setFilterServiceType] = useState<string>('all')
-  const [filterMonth, setFilterMonth] = useState<string>('all')
-  const [filterApproval, setFilterApproval] = useState<string>('all')
+  // Search + sort
   const [searchInput, setSearchInput] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
-  const [filtersOpen, setFiltersOpen] = useState(true)
+  const [sort, setSort] = useState<SortState>({ key: 'close_date', dir: 'desc' })
+  const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
@@ -179,17 +168,19 @@ export default function Transactions() {
   }
 
   const filtered = useMemo(() => {
-    return transactions.filter((t) => {
-      if (!searchMatches(t, searchDebounced)) return false
-      if (filterClientId && t.client_id !== filterClientId) return false
-      if (filterServiceType !== 'all' && resolveServiceName(t) !== filterServiceType) return false
-      if (filterMonth !== 'all' && t.billing_month !== Number(filterMonth)) return false
-      if (filterApproval === 'pending' && (!t.needs_approval || t.approved_at)) return false
-      if (filterApproval === 'approved' && !t.approved_at) return false
-      return true
-    })
+    return transactions.filter((t) => searchMatches(t, searchDebounced))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, searchDebounced, filterClientId, filterServiceType, filterMonth, filterApproval, serviceNameById])
+  }, [transactions, searchDebounced, serviceNameById])
+
+  const getSortValue = (t: Transaction, key: string): unknown =>
+    key === 'service_type' ? resolveServiceName(t) : (t as Record<string, unknown>)[key]
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered]
+    arr.sort((a, b) => compareBySort(a, b, sort, getSortValue))
+    return arr
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, sort, serviceNameById])
 
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
@@ -216,112 +207,53 @@ export default function Transactions() {
         </Button>
       </div>
 
-      <Card className="p-4 space-y-3">
-        <button
-          type="button"
-          onClick={() => setFiltersOpen((o) => !o)}
-          className="flex items-center gap-2 text-sm font-medium text-purple-700"
-        >
-          <ChevronDown className={`w-4 h-4 transition-transform ${filtersOpen ? '' : '-rotate-90'}`} />
-          פילטרים
-        </button>
-        {filtersOpen && (
-          <>
-            <div className="space-y-1">
-              <Label className="text-xs text-purple-700">חיפוש חופשי</Label>
-              <div className="relative">
-                <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-                <Input
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
-                  className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
-                  dir="rtl"
-                />
-                {searchInput && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchInput('')}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
-                    aria-label="נקה"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs text-purple-700">לקוח</Label>
-                <ClientPicker
-                  value={filterClientId}
-                  onChange={(id) => setFilterClientId(id)}
-                  allSentinelLabel="כל הלקוחות"
-                  placeholder="כל הלקוחות"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-purple-700">סוג שירות</Label>
-                <Select value={filterServiceType} onValueChange={(v) => setFilterServiceType(v ?? 'all')}>
-                  <SelectTrigger className="border-purple-200 focus:ring-purple-400 text-sm"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">הכל</SelectItem>
-                    {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-purple-700">חודש כניסה</Label>
-                <Select value={filterMonth} onValueChange={(v) => setFilterMonth(v ?? 'all')}>
-                  <SelectTrigger className="border-purple-200 focus:ring-purple-400 text-sm"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">הכל</SelectItem>
-                    {HEBREW_MONTHS.map((name, i) => (<SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-purple-700">סטטוס אישור</Label>
-                <Select value={filterApproval} onValueChange={(v) => setFilterApproval(v ?? 'all')}>
-                  <SelectTrigger className="border-purple-200 focus:ring-purple-400 text-sm"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">הכל</SelectItem>
-                    <SelectItem value="pending">ממתין לאישור</SelectItem>
-                    <SelectItem value="approved">מאושר</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </>
+      <div className="relative">
+        <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
+          className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
+          dir="rtl"
+        />
+        {searchInput && (
+          <button
+            type="button"
+            onClick={() => setSearchInput('')}
+            className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
+            aria-label="נקה"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
-      </Card>
+      </div>
 
       <Card>
         {isLoading ? (
           <div className="p-8 text-center text-purple-400">טוען...</div>
-        ) : filtered.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <div className="p-8 text-center text-gray-400">לא נמצאו עסקאות</div>
         ) : (
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow className="bg-purple-50">
-                  <TableHead className="text-right text-purple-800 font-semibold">לקוח</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">שירות</TableHead>
+                  <SortableHead col="client_name" label="לקוח" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="service_type" label="שירות" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800 font-semibold">משרה / מועמד</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">שכר</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">% עמלה</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">מוביל</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">תאריך סגירה</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">תחילת עבודה</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">סכום נטו</TableHead>
+                  <SortableHead col="salary" label="שכר" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="commission_percent" label="% עמלה" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="service_lead" label="מוביל" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="close_date" label="תאריך סגירה" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="work_start_date" label="תחילת עבודה" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="net_invoice_amount" label="סכום נטו" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800 font-semibold">חיובים</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">אישור</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">פעולות</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((t) => {
+                {sorted.map((t) => {
                   const events = eventsByTxn.get(t.id) ?? []
                   const isUnapproved = t.needs_approval && !t.approved_at
                   const positionCandidate = [t.position_name, t.candidate_name].filter(Boolean).join(' · ')

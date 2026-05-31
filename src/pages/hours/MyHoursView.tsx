@@ -21,6 +21,12 @@ import {
 } from '@/components/ui/dialog'
 import ClientPicker from '@/components/ClientPicker'
 import { DateCell } from '@/components/ui/date-cell'
+import {
+  SortableHead,
+  toggleSortKey,
+  compareBySort,
+  type SortState,
+} from '@/components/SortableHead'
 import HoursEntryDialog from './HoursEntryDialog'
 import HoursReportDialog from './HoursReportDialog'
 import {
@@ -48,6 +54,8 @@ export default function MyHoursView() {
   const [deleteTarget, setDeleteTarget] = useState<HoursLog | null>(null)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  const [sort, setSort] = useState<SortState>({ key: 'visit_date', dir: 'desc' })
+  const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
   // Permitted clients for this user.
   // canSeeAll: every time_log_enabled client.
@@ -131,6 +139,17 @@ export default function MyHoursView() {
     () => hoursData.reduce((s, h) => s + (Number(h.hours) || 0), 0),
     [hoursData],
   )
+
+  // Rows enriched with the employee display name so the עובד/ת column can sort
+  // by name (not raw profile_id), then sorted by the active column.
+  const sortedRows = useMemo(() => {
+    const withNames = hoursData.map((h) => ({
+      ...h,
+      _employeeName: profileNameById.get(h.profile_id ?? '') ?? '',
+    }))
+    withNames.sort((a, b) => compareBySort(a, b, sort, (row, key) => (row as Record<string, unknown>)[key]))
+    return withNames
+  }, [hoursData, profileNameById, sort])
   const totalUnbilledHours = useMemo(
     () => unbilledHours.reduce((s, h) => s + (Number(h.hours) || 0), 0),
     [unbilledHours],
@@ -332,18 +351,18 @@ export default function MyHoursView() {
           <Table>
             <TableHeader>
               <TableRow className="bg-purple-50">
-                <TableHead className="text-right text-purple-800">תאריך</TableHead>
-                <TableHead className="text-right text-purple-800">לקוח</TableHead>
-                {canSeeAll && <TableHead className="text-right text-purple-800">עובד/ת</TableHead>}
+                <SortableHead col="visit_date" label="תאריך" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="client_name" label="לקוח" sort={sort} onToggle={toggleSort} />
+                {canSeeAll && <SortableHead col="_employeeName" label="עובד/ת" sort={sort} onToggle={toggleSort} />}
                 <TableHead className="text-right text-purple-800">משעה</TableHead>
                 <TableHead className="text-right text-purple-800">עד שעה</TableHead>
-                <TableHead className="text-right text-purple-800">שעות</TableHead>
+                <SortableHead col="hours" label="שעות" sort={sort} onToggle={toggleSort} />
                 <TableHead className="text-right text-purple-800">תיאור</TableHead>
                 <TableHead className="text-right text-purple-800">פעולות</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {hoursData.map((entry) => {
+              {sortedRows.map((entry) => {
                 const billed = !!entry.billed_transaction_id
                 return (
                   <TableRow key={entry.id} className={billed ? 'bg-green-50/30' : 'hover:bg-purple-50/40'}>
