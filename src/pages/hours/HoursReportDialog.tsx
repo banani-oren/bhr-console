@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import { Download, Plus } from 'lucide-react'
+import { Printer, Plus } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Client, HoursLog, Profile } from '@/lib/types'
 import {
@@ -26,7 +24,8 @@ export type HoursReportDialogProps = {
 }
 
 const ILS = (n: number) => new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS' }).format(n)
-const labelHe = (s: string) => s.split('').reverse().join('')
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 export default function HoursReportDialog({ open, onOpenChange, presetClientId }: HoursReportDialogProps) {
   const today = todayIso()
@@ -127,48 +126,71 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
     })
   }
 
-  const generatePdf = (): jsPDF => {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
-    doc.setFontSize(18)
-    doc.text('BHR Console', 40, 50)
-    doc.setFontSize(12)
-    doc.text(labelHe('דוח שעות'), 555, 50, { align: 'right' })
-    doc.setFontSize(10)
-    doc.text(`${labelHe('לקוח')}: ${selectedClient?.name ?? ''}`, 555, 72, { align: 'right' })
-    doc.text(`${labelHe('תקופה')}: ${formatDate(periodStart)} — ${formatDate(periodEnd)}`, 555, 88, { align: 'right' })
-    doc.text(`${labelHe('תאריך הפקה')}: ${formatDate(today)}`, 555, 104, { align: 'right' })
+  // Browser-native print: open a styled RTL HTML document and auto-trigger the
+  // print dialog. Renders Hebrew correctly with zero PDF dependencies.
+  const handlePrint = () => {
+    if (!selectedClient || entries.length === 0) return
 
-    autoTable(doc, {
-      startY: 130,
-      head: [[
-        labelHe('תאריך'), labelHe('משעה'), labelHe('עד שעה'),
-        labelHe('שעות'), labelHe('תיאור'), labelHe('עובד/ת'),
-      ]],
-      body: entries.map((e) => [
-        formatDate(e.visit_date),
-        e.start_time ?? '—',
-        e.end_time ?? '—',
-        String(e.hours ?? 0),
-        e.description ?? '—',
-        e.profile_id ? profileNameById.get(e.profile_id) ?? '—' : '—',
-      ]),
-      styles: { font: 'helvetica', fontSize: 9, halign: 'right' },
-      headStyles: { fillColor: [147, 51, 234], textColor: 255 },
-    })
+    const rows = entries.map((e) => {
+      const name = e.profile_id ? (profileNameById.get(e.profile_id) ?? '—') : '—'
+      return `
+        <tr>
+          <td>${escapeHtml(formatDate(e.visit_date))}</td>
+          <td dir="ltr">${escapeHtml(e.start_time ?? '—')}</td>
+          <td dir="ltr">${escapeHtml(e.end_time ?? '—')}</td>
+          <td>${e.hours ?? 0}</td>
+          <td>${escapeHtml(e.description ?? '—')}</td>
+          <td>${escapeHtml(name)}</td>
+        </tr>`
+    }).join('')
 
-    const ph = doc.internal.pageSize.getHeight()
-    doc.setFontSize(11)
-    doc.text(`${labelHe('סה"כ שעות')}: ${totalHours.toFixed(2)}`, 555, ph - 80, { align: 'right' })
-    doc.text(`${labelHe('תעריף שעה')}: ${ILS(hourlyRate)}`, 555, ph - 64, { align: 'right' })
-    doc.setFontSize(13)
-    doc.text(`${labelHe('סך לתשלום')}: ${ILS(totalAmount)}`, 555, ph - 44, { align: 'right' })
-    return doc
-  }
+    const html = `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>דוח שעות – ${escapeHtml(selectedClient.name)}</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; direction: rtl; margin: 32px; color: #111; }
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .meta { font-size: 13px; color: #555; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { background: #7c3aed; color: #fff; padding: 8px 10px; text-align: right; }
+    td { border-bottom: 1px solid #e5e7eb; padding: 7px 10px; text-align: right; }
+    tr:nth-child(even) td { background: #f9f7ff; }
+    .totals { margin-top: 24px; font-size: 14px; text-align: left; }
+    .totals strong { font-size: 16px; }
+    @media print { body { margin: 16px; } }
+  </style>
+</head>
+<body>
+  <h1>דוח שעות</h1>
+  <div class="meta">
+    <span>לקוח: <strong>${escapeHtml(selectedClient.name)}</strong></span>&nbsp;&nbsp;
+    <span>תקופה: ${escapeHtml(formatDate(periodStart))} – ${escapeHtml(formatDate(periodEnd))}</span>&nbsp;&nbsp;
+    <span>תאריך הפקה: ${escapeHtml(formatDate(today))}</span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>תאריך</th><th>משעה</th><th>עד שעה</th>
+        <th>שעות</th><th>תיאור</th><th>עובד/ת</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="totals">
+    <div>סה"כ שעות: <strong>${totalHours.toFixed(2)}</strong></div>
+    <div>תעריף שעה: <strong>${escapeHtml(ILS(hourlyRate))}</strong></div>
+    <div>סך לתשלום: <strong>${escapeHtml(ILS(totalAmount))}</strong></div>
+  </div>
+  <script>window.onload = function() { window.print(); }<\/script>
+</body>
+</html>`
 
-  const handleDownload = () => {
-    if (!selectedClient) return
-    const doc = generatePdf()
-    doc.save(`hours-report-${selectedClient.name}-${periodStart}-${periodEnd}.pdf`)
+    const win = window.open('', '_blank')
+    if (!win) return // popup blocked
+    win.document.write(html)
+    win.document.close()
   }
 
   const handleCreateTransaction = () => {
@@ -245,12 +267,12 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
         </div>
         <DialogFooter className="flex gap-2 flex-row-reverse">
           <Button
-            onClick={handleDownload}
+            onClick={handlePrint}
             disabled={!selectedClient || entries.length === 0}
             className="bg-purple-600 hover:bg-purple-700 text-white"
           >
-            <Download className="w-4 h-4 ml-1" />
-            הפק דוח
+            <Printer className="w-4 h-4 ml-1" />
+            הדפסה / PDF
           </Button>
           <Button
             variant="outline"

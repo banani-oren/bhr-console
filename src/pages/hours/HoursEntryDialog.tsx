@@ -22,8 +22,10 @@ export type HoursEntryDialogProps = {
   onOpenChange: (open: boolean) => void
   /** Predicate constraining which clients can be picked. */
   clientFilter: (c: Client) => boolean
-  /** Optional pre-selected client (used by manage view's quick-add). */
+  /** Optional pre-selected client (used when a client is chosen in the filter). */
   presetClientId?: string | null
+  /** Display name for the preset client — shown as read-only locked text. */
+  presetClientName?: string | null
   /** When editing, the row to load. Pass null to clear into create mode. */
   editing?: HoursLog | null
   /** Override the profile_id the row is written for. Defaults to auth.uid(). */
@@ -37,6 +39,7 @@ export default function HoursEntryDialog({
   onOpenChange,
   clientFilter,
   presetClientId,
+  presetClientName,
   editing,
   profileIdOverride,
   invalidate = [['hours_log']],
@@ -45,12 +48,15 @@ export default function HoursEntryDialog({
   const queryClient = useQueryClient()
   const isEdit = !!editing
   const mode: Mode = isEdit ? 'edit' : 'create'
+  // Lock the client when it was preset from the filter (create mode only).
+  const clientLocked = !isEdit && !!presetClientId
 
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string>('')
   const [visitDate, setVisitDate] = useState(todayIso())
   const [startTime, setStartTime] = useState('09:00')
   const [endTime, setEndTime] = useState('')
+  const [hours, setHours] = useState<string>('')
   const [description, setDescription] = useState('')
 
   // Reset form when the dialog opens.
@@ -62,16 +68,28 @@ export default function HoursEntryDialog({
       setVisitDate(editing.visit_date)
       setStartTime(editing.start_time ?? '09:00')
       setEndTime(editing.end_time ?? '')
+      setHours(editing.hours != null ? String(editing.hours) : '')
       setDescription(editing.description ?? '')
     } else {
       setClientId(presetClientId ?? null)
-      setClientName('')
+      setClientName(presetClientName ?? '')
       setVisitDate(todayIso())
       setStartTime('09:00')
       setEndTime('')
+      setHours('')
       setDescription('')
     }
-  }, [open, editing, presetClientId])
+  }, [open, editing, presetClientId, presetClientName])
+
+  // Auto-calculate hours from the time range. The user can still override the
+  // value afterwards by editing the hours field directly.
+  useEffect(() => {
+    if (!open) return
+    if (startTime && endTime) {
+      const computed = computeHours(startTime, endTime)
+      if (computed > 0) setHours(String(computed))
+    }
+  }, [open, startTime, endTime])
 
   const mut = useSafeMutation<void, void>({
     mutationFn: async () => {
@@ -79,6 +97,10 @@ export default function HoursEntryDialog({
       const visit = new Date(visitDate)
       const ownerId = profileIdOverride ?? profile?.id
       if (!ownerId) throw new Error('משתמש לא מזוהה')
+      const hoursValue = hours !== '' ? Number(hours) : computeHours(startTime, endTime)
+      if (!hoursValue || Number.isNaN(hoursValue) || hoursValue <= 0) {
+        throw new Error('יש להזין מספר שעות תקין')
+      }
       const payload: Record<string, unknown> = {
         profile_id: ownerId,
         client_id: clientId,
@@ -86,7 +108,7 @@ export default function HoursEntryDialog({
         visit_date: visitDate,
         start_time: startTime || null,
         end_time: endTime || null,
-        hours: computeHours(startTime, endTime),
+        hours: hoursValue,
         description: description || null,
         month: visit.getMonth() + 1,
         year: visit.getFullYear(),
@@ -112,25 +134,29 @@ export default function HoursEntryDialog({
     },
   })
 
-  const computed = computeHours(startTime, endTime)
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent dir="rtl" className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{mode === 'edit' ? 'עריכת דיווח שעות' : 'דיווח שעות חדש'}</DialogTitle>
+          <DialogTitle>{mode === 'edit' ? 'עריכת דיווח' : 'דיווח שעות'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">לקוח</Label>
-            <ClientPicker
-              value={clientId}
-              onChange={(id, c) => { setClientId(id); setClientName(c?.name ?? '') }}
-              filter={clientFilter}
-              placeholder="חפש לקוח..."
-            />
+            {clientLocked ? (
+              <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-sm font-medium">
+                {clientName || '—'}
+              </div>
+            ) : (
+              <ClientPicker
+                value={clientId}
+                onChange={(id, c) => { setClientId(id); setClientName(c?.name ?? '') }}
+                filter={clientFilter}
+                placeholder="חפש לקוח..."
+              />
+            )}
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">תאריך</Label>
               <DateInput value={visitDate} onChange={(e) => setVisitDate(e.target.value)} />
@@ -140,7 +166,7 @@ export default function HoursEntryDialog({
               <Input
                 type="time"
                 dir="ltr"
-                className="w-full min-w-[100px]"
+                className="w-full min-w-[90px]"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
               />
@@ -150,14 +176,27 @@ export default function HoursEntryDialog({
               <Input
                 type="time"
                 dir="ltr"
-                className="w-full min-w-[100px]"
+                className="w-full min-w-[90px]"
                 value={endTime}
                 onChange={(e) => setEndTime(e.target.value)}
               />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs">שעות</Label>
+              <Input
+                type="number"
+                step="0.25"
+                min="0"
+                dir="ltr"
+                className="w-full"
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+                placeholder="0"
+              />
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            {computed > 0 ? `משך: ${computed} שעות` : 'בחר משעה ועד שעה כדי לחשב משך'}
+            מתחשב אוטומטית מטווח השעות — ניתן לעדכן ידנית
           </p>
           <div className="space-y-1">
             <Label className="text-xs">תיאור</Label>
