@@ -248,7 +248,13 @@ export default function MyHoursView() {
             <div className="space-y-1">
               <Label className="text-xs text-purple-700">עובד/ת</Label>
               <Select value={employeeId} onValueChange={(v) => setEmployeeId(v ?? ALL_EMPLOYEES)}>
-                <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-44">
+                  <span className="line-clamp-1">
+                    {employeeId === ALL_EMPLOYEES
+                      ? 'כל העובדים'
+                      : profileNameById.get(employeeId) ?? 'כל העובדים'}
+                  </span>
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL_EMPLOYEES}>כל העובדים</SelectItem>
                   {employees.map((e) => (
