@@ -1,73 +1,91 @@
-# React + TypeScript + Vite
+# BHR Console
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Internal financial and operational management system for **Banani HR** — an HR boutique firm offering recruitment outsourcing, LinkedIn workshops, employer branding, and AI training.
 
-Currently, two official plugins are available:
+Built for Oren (CEO) to get real-time visibility into placements, hourly billing, team bonuses, and client agreements — all in one place.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **React 19** + **Vite 8** + **TypeScript 6**
+- **TailwindCSS v4** + **shadcn/ui**
+- **Supabase** — auth, Postgres, RLS, Storage, Edge Functions
+- **@tanstack/react-query** — server state
+- **react-router-dom v6** — routing
+- **vite-plugin-pwa** — installable PWA with offline support
+- **Vercel** — CI/CD and hosting
 
-## Expanding the ESLint configuration
+Interface language: **Hebrew (RTL)**
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Getting Started
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+```bash
+# Install dependencies
+npm install
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Copy env template and fill in values
+cp .env.example .env.local
+
+# Start dev server
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open `http://localhost:5173`
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+---
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Environment Variables
+
+Create `.env.local`:
+
 ```
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+Both values are in the Supabase project dashboard under **Settings → API**.
+
+---
+
+## Commands
+
+```bash
+npm run dev        # dev server with HMR
+npm run build      # production build (tsc + vite)
+npm run lint       # ESLint
+npm run preview    # preview production build locally
+npx tsc --noEmit   # type-check only
+```
+
+---
+
+## Database
+
+Schema and RLS policies: `supabase-schema.sql`
+
+Run it in the **Supabase SQL Editor** to bootstrap a fresh project.
+
+Edge functions: `supabase/functions/`
+- `delete-user` — deletes an auth user (admin only)
+- `extract-agreement` — extracts structured data from a PDF agreement
+
+---
+
+## Deployment
+
+Vercel auto-deploys on push to `main`. Config: `vercel.json` (SPA rewrite rules).
+
+Environment variables must be set in the **Vercel project settings** as well.
+
+---
+
+## Architecture Notes
+
+- See `CLAUDE.md` for the full codebase map, patterns, and architectural decisions.
+- `agreements` has a **1:1 relationship** with `clients` — upserted on `client_id` conflict.
+- **Mobile** (`/m/*`) is scoped to hours entry only — no admin surfaces.
+- Transaction form fields are **fully dynamic**, driven by `service_types.fields` from the database.
+- Money is stored as Postgres `numeric` — no floating-point arithmetic anywhere.
