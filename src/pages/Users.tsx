@@ -83,9 +83,30 @@ function useUpdateRole() {
 
 export default function Users() {
   const queryClient = useQueryClient()
-  const { user: authUser } = useAuth()
+  const { user: authUser, profile } = useAuth()
   const { data: profiles = [], isLoading } = useProfiles()
   const updateRole = useUpdateRole()
+
+  // Impersonation ("התחבר בתור")
+  const [impersonatingId, setImpersonatingId] = useState<string | null>(null)
+
+  const handleImpersonate = async (targetUser: UserProfile) => {
+    setImpersonatingId(targetUser.id)
+    try {
+      const { data, error } = await supabase.functions.invoke('impersonate-user', {
+        body: { target_user_id: targetUser.id },
+      })
+      if (error) throw error
+      if (data?.error) throw new Error(data.error)
+      if (!data?.url) throw new Error('לא התקבל קישור')
+      window.open(data.url, '_blank', 'noopener')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'שגיאה'
+      alert(`שגיאה בהתחברות בתור ${targetUser.full_name}: ${msg}`)
+    } finally {
+      setImpersonatingId(null)
+    }
+  }
 
   // Invite dialog
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -278,6 +299,21 @@ export default function Users() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
+                          {profile?.role === 'admin' && !isSelf && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-purple-700 border-purple-300 hover:bg-purple-50 text-xs h-7 px-2"
+                              disabled={impersonatingId === row.id}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handleImpersonate(row)
+                              }}
+                              title={`התחבר בתור ${row.full_name}`}
+                            >
+                              {impersonatingId === row.id ? '...' : 'התחבר בתור'}
+                            </Button>
+                          )}
                           <Button
                             size="icon"
                             variant="ghost"
