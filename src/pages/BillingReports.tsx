@@ -14,7 +14,6 @@ import ClientPicker from '@/components/ClientPicker'
 import { DateCell } from '@/components/ui/date-cell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -210,10 +209,10 @@ export default function BillingReports() {
         <h1 className="text-2xl font-bold text-purple-900">דוחות חיוב</h1>
       </div>
 
-      <Card className="p-4 space-y-3">
-        <div className="space-y-1">
-          <Label className="text-xs text-purple-700">חיפוש חופשי</Label>
-          <div className="relative">
+      <Card className="p-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Search — takes all remaining space */}
+          <div className="relative flex-1 min-w-52">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             <Input
               value={searchInput}
@@ -233,10 +232,9 @@ export default function BillingReports() {
               </button>
             )}
           </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
-          <div className="space-y-1 lg:col-span-2">
-            <Label className="text-xs text-purple-700">לקוח</Label>
+
+          {/* Client picker */}
+          <div className="w-44 shrink-0">
             <ClientPicker
               value={clientId}
               onChange={(id) => setClientId(id)}
@@ -244,45 +242,53 @@ export default function BillingReports() {
               placeholder="כל הלקוחות"
             />
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-purple-700">סטטוס</Label>
-            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
-              <SelectTrigger>
-                <span className="text-sm truncate">
-                  {statusFilter === 'all' ? 'הכל' : STATUS_LABEL[statusFilter as BillingEventStatus] ?? statusFilter}
-                </span>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">הכל</SelectItem>
-                <SelectItem value="pending">ממתין</SelectItem>
-                <SelectItem value="to_bill">לחיוב</SelectItem>
-                <SelectItem value="billed">חויב</SelectItem>
-                <SelectItem value="paid">שולם</SelectItem>
-                <SelectItem value="cancelled">מבוטל</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-purple-700">מתאריך</Label>
-            <DateInput value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-purple-700">עד תאריך</Label>
-            <DateInput value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-          </div>
-          <div className="space-y-1 lg:col-span-2">
-            <Label className="text-xs text-purple-700">סוג שירות</Label>
-            <Select value={serviceTypeFilter} onValueChange={(v) => setServiceTypeFilter(v ?? 'all')}>
-              <SelectTrigger>
-                <span className="text-sm truncate">{serviceTypeFilter === 'all' ? 'הכל' : serviceTypeFilter}</span>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">הכל</SelectItem>
-                {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}
-                <SelectItem value="שעות עבודה">שעות עבודה</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+
+          {/* Status */}
+          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
+            <SelectTrigger className="w-28 shrink-0">
+              <span className="text-sm truncate">
+                {statusFilter === 'all' ? 'סטטוס' : STATUS_LABEL[statusFilter as BillingEventStatus] ?? statusFilter}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">הכל</SelectItem>
+              <SelectItem value="pending">ממתין</SelectItem>
+              <SelectItem value="to_bill">לחיוב</SelectItem>
+              <SelectItem value="billed">חויב</SelectItem>
+              <SelectItem value="paid">שולם</SelectItem>
+              <SelectItem value="cancelled">מבוטל</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* From date */}
+          <DateInput
+            className="w-36 shrink-0"
+            value={dateFrom}
+            onChange={(e) => setDateFrom(e.target.value)}
+            placeholder="מתאריך"
+          />
+
+          {/* To date */}
+          <DateInput
+            className="w-36 shrink-0"
+            value={dateTo}
+            onChange={(e) => setDateTo(e.target.value)}
+            placeholder="עד תאריך"
+          />
+
+          {/* Service type */}
+          <Select value={serviceTypeFilter} onValueChange={(v) => setServiceTypeFilter(v ?? 'all')}>
+            <SelectTrigger className="w-32 shrink-0">
+              <span className="text-sm truncate">
+                {serviceTypeFilter === 'all' ? 'סוג שירות' : serviceTypeFilter}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">הכל</SelectItem>
+              {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}
+              <SelectItem value="שעות עבודה">שעות עבודה</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </Card>
 

@@ -26,11 +26,22 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from '@/components/ui/select'
+import {
   SortableHead,
   toggleSortKey,
   compareBySort,
   type SortState,
 } from '@/components/SortableHead'
+
+const HEBREW_MONTHS = [
+  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
+]
 
 const formatCurrency = (n: number | null | undefined) => {
   if (n == null) return '—'
@@ -130,6 +141,7 @@ export default function Transactions() {
   // Search + sort
   const [searchInput, setSearchInput] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
+  const [filterClosingMonth, setFilterClosingMonth] = useState<string>('all')
   const [sort, setSort] = useState<SortState>({ key: 'close_date', dir: 'desc' })
   const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
@@ -168,9 +180,13 @@ export default function Transactions() {
   }
 
   const filtered = useMemo(() => {
-    return transactions.filter((t) => searchMatches(t, searchDebounced))
+    return transactions.filter((t) => {
+      if (!searchMatches(t, searchDebounced)) return false
+      if (filterClosingMonth !== 'all' && t.closing_month !== Number(filterClosingMonth)) return false
+      return true
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, searchDebounced, serviceNameById])
+  }, [transactions, searchDebounced, filterClosingMonth, serviceNameById])
 
   const getSortValue = (t: Transaction, key: string): unknown =>
     key === 'service_type' ? resolveServiceName(t) : (t as Record<string, unknown>)[key]
@@ -207,26 +223,48 @@ export default function Transactions() {
         </Button>
       </div>
 
-      <div className="relative">
-        <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-        <Input
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
-          className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
-          dir="rtl"
-        />
-        {searchInput && (
-          <button
-            type="button"
-            onClick={() => setSearchInput('')}
-            className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
-            aria-label="נקה"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        )}
-      </div>
+      <Card className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          {/* Search — takes all remaining space */}
+          <div className="relative flex-1">
+            <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
+              className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
+              dir="rtl"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
+                aria-label="נקה"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Closing month — to the left of the search bar */}
+          <Select value={filterClosingMonth} onValueChange={(v) => setFilterClosingMonth(v ?? 'all')}>
+            <SelectTrigger className="w-36 shrink-0 border-purple-200 focus:ring-purple-400">
+              <span className="text-sm truncate">
+                {filterClosingMonth === 'all'
+                  ? 'חודש סגירה'
+                  : HEBREW_MONTHS[Number(filterClosingMonth) - 1]}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">כל החודשים</SelectItem>
+              {HEBREW_MONTHS.map((name, i) => (
+                <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
 
       <Card>
         {isLoading ? (
