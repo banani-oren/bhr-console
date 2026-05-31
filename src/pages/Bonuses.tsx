@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger,
 } from '@/components/ui/select'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -39,6 +39,12 @@ const ROLE_LABELS_HE: Record<string, string> = {
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 
 type SortKey = 'name' | 'revenue' | 'bonus'
+
+const SORT_LABELS: Record<SortKey, string> = {
+  bonus: 'בונוס (יורד)',
+  revenue: 'הכנסה (יורד)',
+  name: 'שם (א-ת)',
+}
 
 const TODAY = new Date()
 
@@ -187,7 +193,12 @@ export default function Bonuses() {
                 if (y && m) { setPeriodYear(y); setPeriodMonth(m) }
               }}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <span className="text-sm truncate">
+                  {monthOptions.find((o) => o.y === periodYear && o.m === periodMonth)?.label
+                    ?? `${HEBREW_MONTHS[periodMonth - 1]} ${periodYear}`}
+                </span>
+              </SelectTrigger>
               <SelectContent>
                 {monthOptions.map((o) => (
                   <SelectItem key={`${o.y}-${o.m}`} value={`${o.y}-${o.m}`}>{o.label}</SelectItem>
@@ -198,7 +209,9 @@ export default function Bonuses() {
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">מיון</Label>
             <Select value={sortBy} onValueChange={(v) => setSortBy((v as SortKey) ?? 'bonus')}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <span className="text-sm truncate">{SORT_LABELS[sortBy]}</span>
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="bonus">בונוס (יורד)</SelectItem>
                 <SelectItem value="revenue">הכנסה (יורד)</SelectItem>

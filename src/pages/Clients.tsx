@@ -23,7 +23,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -753,7 +752,9 @@ export default function Clients() {
           <Input placeholder="חיפוש לפי שם..." value={search} onChange={(e) => setSearch(e.target.value)} className="pr-9" />
         </div>
         <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v ?? 'all')}>
-          <SelectTrigger className="w-32"><SelectValue placeholder="סטטוס" /></SelectTrigger>
+          <SelectTrigger className="w-32">
+            <span className="text-sm truncate">{filterStatus === 'all' ? 'הכל' : filterStatus}</span>
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">הכל</SelectItem>
             <SelectItem value="פעיל">פעיל</SelectItem>
@@ -762,7 +763,9 @@ export default function Clients() {
         </Select>
         {groups.length > 0 && (
           <Select value={filterGroup} onValueChange={(v) => setFilterGroup(v ?? 'all')}>
-            <SelectTrigger className="w-36"><SelectValue placeholder="קבוצה" /></SelectTrigger>
+            <SelectTrigger className="w-36">
+              <span className="text-sm truncate">{filterGroup === 'all' ? 'כל הקבוצות' : filterGroup}</span>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">כל הקבוצות</SelectItem>
               {groups.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
@@ -856,7 +859,9 @@ export default function Clients() {
                 <div className="space-y-1.5">
                   <Label>סטטוס</Label>
                   <Select value={form.status} onValueChange={(v) => setField('status', v ?? 'פעיל')}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger>
+                      <span className="text-sm truncate">{form.status || 'בחר סטטוס'}</span>
+                    </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="פעיל">פעיל</SelectItem>
                       <SelectItem value="לא פעיל">לא פעיל</SelectItem>

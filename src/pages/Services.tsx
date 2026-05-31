@@ -29,7 +29,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 
 type EditState = {
@@ -352,7 +351,9 @@ export default function Services() {
                                 updateField(idx, { type: v as ServiceFieldType })
                               }
                             >
-                              <SelectTrigger><SelectValue /></SelectTrigger>
+                              <SelectTrigger>
+                                <span className="text-sm truncate">{FIELD_TYPE_LABELS[f.type] ?? f.type}</span>
+                              </SelectTrigger>
                               <SelectContent>
                                 {Object.entries(FIELD_TYPE_LABELS).map(([k, lbl]) => (
                                   <SelectItem key={k} value={k}>{lbl}</SelectItem>
@@ -368,7 +369,9 @@ export default function Services() {
                                 updateField(idx, { width: v as ServiceFieldWidth })
                               }
                             >
-                              <SelectTrigger><SelectValue /></SelectTrigger>
+                              <SelectTrigger>
+                                <span className="text-sm truncate">{WIDTH_LABELS[f.width ?? 'half'] ?? (f.width ?? 'half')}</span>
+                              </SelectTrigger>
                               <SelectContent>
                                 {Object.entries(WIDTH_LABELS).map(([k, lbl]) => (
                                   <SelectItem key={k} value={k}>{lbl}</SelectItem>

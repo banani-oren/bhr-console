@@ -22,7 +22,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import {
   Table,
@@ -248,7 +247,11 @@ export default function BillingReports() {
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">סטטוס</Label>
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? 'all')}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <span className="text-sm truncate">
+                  {statusFilter === 'all' ? 'הכל' : STATUS_LABEL[statusFilter as BillingEventStatus] ?? statusFilter}
+                </span>
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">הכל</SelectItem>
                 <SelectItem value="pending">ממתין</SelectItem>
@@ -270,7 +273,9 @@ export default function BillingReports() {
           <div className="space-y-1 lg:col-span-2">
             <Label className="text-xs text-purple-700">סוג שירות</Label>
             <Select value={serviceTypeFilter} onValueChange={(v) => setServiceTypeFilter(v ?? 'all')}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <span className="text-sm truncate">{serviceTypeFilter === 'all' ? 'הכל' : serviceTypeFilter}</span>
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">הכל</SelectItem>
                 {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}

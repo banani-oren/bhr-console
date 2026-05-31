@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger,
 } from '@/components/ui/select'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -286,7 +286,9 @@ export default function MyHoursView() {
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">חודש</Label>
             <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
-              <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-32">
+                <span className="text-sm truncate">{HEBREW_MONTHS[month - 1]}</span>
+              </SelectTrigger>
               <SelectContent>
                 {HEBREW_MONTHS.map((n, i) => (
                   <SelectItem key={i + 1} value={String(i + 1)}>{n}</SelectItem>
@@ -297,7 +299,9 @@ export default function MyHoursView() {
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">שנה</Label>
             <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
-              <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-24">
+                <span className="text-sm truncate">{year}</span>
+              </SelectTrigger>
               <SelectContent>
                 {YEAR_OPTIONS.map((y) => (
                   <SelectItem key={y} value={String(y)}>{y}</SelectItem>
