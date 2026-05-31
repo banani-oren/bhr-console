@@ -139,11 +139,10 @@ App Dev/
 │   │   │   └── RecruiterDashboard.tsx
 │   │   │
 │   │   ├── hours/
-│   │   │   ├── HoursPage.tsx           # Tab container: MyHoursView vs ManageHoursView
-│   │   │   ├── MyHoursView.tsx         # Employee self-entry + view
-│   │   │   ├── ManageHoursView.tsx     # Admin view of all hours
-│   │   │   ├── HoursEntryDialog.tsx    # Add/edit single hours entry
-│   │   │   ├── HoursReportDialog.tsx   # Generate PDF/Excel hours report
+│   │   │   ├── HoursPage.tsx           # Thin header + renders unified MyHoursView (no tabs — Repair 7)
+│   │   │   ├── MyHoursView.tsx         # Unified hours view. Role-aware: admin+administration see ALL employees' hours (עובד/ת filter via list_profiles_for_attendance RPC); recruiters see only their own. Admin-only הפק חיוב שעות billing + billed-row locking. (Repair 7)
+│   │   │   ├── HoursEntryDialog.tsx    # Add/edit single hours entry — editable auto-calc hours field; client locked to read-only when preset from filter
+│   │   │   ├── HoursReportDialog.tsx   # Hours report — browser-native print to styled RTL HTML (no jsPDF); + צור עסקה מהדוח
 │   │   │   └── common.ts              # Shared types + utilities for hours module
 │   │   │
 │   │   └── mobile/
@@ -171,7 +170,8 @@ App Dev/
 │       ├── 20260509_phase1_clients.sql            # Phase 1: client financial fields (payment_split_json, advance_*, payment_terms, etc.)
 │       ├── 20260509_phase2_transactions.sql       # Phase 2: billing_events table, transaction approval fields
 │       ├── 20260512_billing_events_paid_status.sql  # Repair 2: 'paid' status added to billing_events CHECK constraint
-│       └── 20260530_attendance_log.sql              # Feature: attendance_log table, work_date trigger, RLS, list_profiles_for_attendance()
+│       ├── 20260530_attendance_log.sql              # Feature: attendance_log table, work_date trigger, RLS, list_profiles_for_attendance()
+│       └── 20260531_hours_administration_read.sql   # Repair 7: additive SELECT RLS so administration reads all hours_log rows
 │
 ├── scripts/
 │   ├── import-agreements.mjs           # One-off: import agreement terms from Excel into clients
@@ -607,4 +607,5 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 | billing_percent | ALTER TABLE (applied via Management API 2026-05-30) | ✅ Live | billing_percent numeric column on transactions; TransactionDialog reorganized (auto-calc, payment status moved to חשבונית ותשלום) |
 | Repair 3 | (no migration) | ✅ Live | 4 TransactionDialog/billingEvents fixes: supplier select shows "ללא ספק"/supplier name instead of raw `__none__` (span reads label from state), RTL `עמלת קפס %` label, delete button on billing event rows (two-step inline confirm), `upsertBillingEvents` skips already-occupied event_index to stop phantom duplicate rows. Commit f6ff0ee, deployed 2026-05-30. |
 | Repair 4 | (no migration) | ✅ Live | Bonus engine (`src/lib/bonus.ts`) now accrues revenue **only on `paid` billing events** (was all non-cancelled), attributed to **`payment_date`** month (falls back to `billing_date` when null). `fetchApprovedBillingEventRows` filters `.eq('status','paid')` + selects `payment_date`; `groupBillingRevenueByEmployeeMonth` keys by payment month. Commit f88a0e3, deployed 2026-05-30. |
+| Repair 7 | 20260531_hours_administration_read.sql | ✅ Live | Hours UX redesign. Merged השעות שלי + ניהול שעות into ONE unified MyHoursView (no tabs). Role-aware: admin+administration see all employees' hours with עובד/ת filter (names via list_profiles_for_attendance RPC); recruiters see own only. ClientPicker overflow fixed (Card overflow-visible + relative z-50). HoursEntryDialog: editable auto-calc hours, client locked when preset from filter. HoursReportDialog: jsPDF replaced with browser-native print to styled RTL HTML (correct Hebrew, zero deps). Deleted ManageHoursView.tsx. Admin-only הפק חיוב שעות billing + billed-row locking preserved. RLS: additive SELECT-only `hours_administration_select` policy on hours_log. Commit c2a60d8, deployed 2026-05-31. |
 | Feature: Attendance | 20260530_attendance_log.sql | ✅ Live | Employee check-in/out tracking. `attendance_log` table (work_date set by Israel-tz trigger), multiple in/out pairs per day. `/attendance` desktop (status + check button + today's log + admin/administration report with pair-matched hours and ⚠ פתוח for open pairs) and `/m/attendance` mobile. Sidebar item (recruiter+administration, NOT admin), mobile bottom tab. Report names via SECURITY DEFINER `list_profiles_for_attendance()` (administration can't read profiles directly). Sidebar icon: `CalendarCheck` (distinct from Clock/hours). Commit bb808d8, deployed 2026-05-31. |
