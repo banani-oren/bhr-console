@@ -157,7 +157,7 @@ App Dev/
 │
 ├── supabase/
 │   ├── functions/
-│   │   ├── impersonate-user/index.ts   # Edge function: admin generates one-time magiclink to log in AS a target user ("התחבר בתור"). ⚠ committed but NOT yet deployed (access token expired) — needs manual deploy.
+│   │   ├── impersonate-user/index.ts   # Edge function: admin generates one-time magiclink to log in AS a target user ("התחבר בתור"). ✅ DEPLOYED 2026-06-01 via the Supabase dashboard in-browser editor (the sbp_ SUPABASE_ACCESS_TOKEN in .env.local is expired, so CLI/Management-API deploy fails — refresh it before the next functions deploy). verify_jwt=true.
 │   │   ├── delete-user/index.ts        # Edge function: delete auth user (admin only)
 │   │   └── extract-agreement/          # Edge function: extract agreement fields from PDF via Claude
 │   │       ├── index.ts
@@ -176,23 +176,22 @@ App Dev/
 │       └── 20260531_hours_administration_read.sql   # Repair 7: additive SELECT RLS so administration reads all hours_log rows
 │
 ├── scripts/
-│   ├── import-agreements.mjs           # One-off: import agreement terms from Excel into clients
-│   ├── repair-billing-events.mjs       # One-off: generate billing events for pre-Phase-2 transactions
 │   └── generate-icons.mjs              # PWA icon generation
 │
 ├── public/                             # Static assets + PWA icons
 ├── EMPLOYEE_MOBILE_INSTALL_GUIDE.md    # iPhone PWA install guide for team (Hebrew)
 ├── supabase-schema.sql                 # Bootstrap schema only — migrations are the live state
-├── PHASE3_SUMMARY.md                   # Phase 3 design spec: bonus engine, dashboards, auth, PDF
-├── PHASE3_PROMPT.md                    # Phase 3 Claude Code execution prompt
-├── REPAIR_PROMPT.md                    # Repair 1: 5-bug fix (dates, UUID, billing events, hours, close_date)
-├── REPAIR2_PROMPT.md                   # Repair 2: שוטף+X payment terms + two-document billing events
 ├── vite.config.ts
 ├── components.json                     # shadcn/ui config
 ├── vercel.json                         # SPA rewrite rules
 ├── package.json
 └── .env.local                          # VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY (never commit)
 ```
+
+**Prompts directory** (sibling of App Dev, at `C:\Users\Oren\BHR Console\prompts\`):
+- Active Claude Code prompts follow the pattern `repair{N}-*.md` or `feature-*.md`
+- Completed prompts are deleted after the task is live (history lives in git + phase table above)
+- Current pending prompts: `repair5-password-reset.md`, `repair6-save-hang.md` (`repair8`, `repair9`, `repair10`, `feature-impersonate-user`, `fix-impersonate-deploy` are all done & live — see Phase History)
 
 ---
 
@@ -609,9 +608,11 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 | billing_percent | ALTER TABLE (applied via Management API 2026-05-30) | ✅ Live | billing_percent numeric column on transactions; TransactionDialog reorganized (auto-calc, payment status moved to חשבונית ותשלום) |
 | Repair 3 | (no migration) | ✅ Live | 4 TransactionDialog/billingEvents fixes: supplier select shows "ללא ספק"/supplier name instead of raw `__none__` (span reads label from state), RTL `עמלת קפס %` label, delete button on billing event rows (two-step inline confirm), `upsertBillingEvents` skips already-occupied event_index to stop phantom duplicate rows. Commit f6ff0ee, deployed 2026-05-30. |
 | Repair 4 | (no migration) | ✅ Live | Bonus engine (`src/lib/bonus.ts`) now accrues revenue **only on `paid` billing events** (was all non-cancelled), attributed to **`payment_date`** month (falls back to `billing_date` when null). `fetchApprovedBillingEventRows` filters `.eq('status','paid')` + selects `payment_date`; `groupBillingRevenueByEmployeeMonth` keys by payment month. Commit f88a0e3, deployed 2026-05-30. |
-| Feature: Impersonation | (no migration) | ⚠ Code live, edge fn deploy pending | Admin "התחבר בתור" button on /users (admin-only, hidden on own row, before edit/delete). New edge function `impersonate-user` verifies caller JWT + admin role (service role), refuses self, generates a one-time magiclink for the target's email and returns its action_link; Users.tsx opens it in a new tab (noopener). ⚠ Edge function committed but NOT deployed — SUPABASE_ACCESS_TOKEN in .env.local is expired and CLI has no login, so auto-deploy failed; needs manual deploy + token refresh. ⚠ Known design caveat: magiclink opens on the same origin → shared localStorage means the admin's own tab also switches to the impersonated user (Supabase session is per-origin). Commit e666255. |
+| Feature: Impersonation | (no migration) | ✅ Live (deployed 2026-06-01) | Admin "התחבר בתור" button on /users (admin-only, hidden on own row, before edit/delete). New edge function `impersonate-user` verifies caller JWT + admin role (service role), refuses self, generates a one-time magiclink for the target's email and returns its action_link; Users.tsx opens it in a new tab (noopener). Edge function DEPLOYED 2026-06-01 via the Supabase dashboard in-browser editor (verify_jwt=true); deployed source confirmed byte-identical to repo and live status verified (404→401). ⚠ The sbp_ SUPABASE_ACCESS_TOKEN in .env.local is still EXPIRED — CLI/Management-API function deploys will fail until it is refreshed. ⚠ Known design caveat: magiclink opens on the same origin → shared localStorage means the admin's own tab also switches to the impersonated user (Supabase session is per-origin). Commit e666255. |
 | Repair 10 | (no migration) | ✅ Live | Filter layout. BillingReports: collapsed the search-row + 5-col dropdown grid into one flex row (flex-wrap) inside the Card, removed per-field `<Label>`s (triggers act as placeholders — סטטוס/סוג שירות/כל הלקוחות shown when 'all'); no query/search/totals logic changed. Transactions: re-added a single "חודש סגירה" dropdown beside the search bar (in a Card row), filtering by `closing_month` 1–12 (distinct from the billing_month dropdown removed in Repair 8; 'all'→כל החודשים shows everything). Re-added HEBREW_MONTHS + Select imports. Sort + search preserved. Commit dd87804, deployed 2026-05-31. |
 | Repair 9 | (no migration) | ✅ Live | Fixed base-ui `<SelectValue/>` showing the raw value (e.g. "all", "5", "2026-5") when the dropdown is closed — replaced with a `<span>` reading the label from state / existing label maps inside each `<SelectTrigger>`. Pages: Clients (status, group, dialog-status), BillingReports (status, service-type), Bonuses (period — keeps "(תחזית)" suffix; sort — new SORT_LABELS), MyHoursView (month/year), Services (field-type + width, reusing FIELD_TYPE_LABELS/WIDTH_LABELS). Removed unused SelectValue imports. ⚠ Known remaining: AgreementUploader's client-match select (picker-style, out of this task's scope). Commit 74e03c1, deployed 2026-05-31. |
 | Repair 8 | (no migration) | ✅ Live | Cleaner tables. Removed Transactions' four filter dropdowns (client/service/month/approval) + collapsible — kept free-text search only. Added sortable column headers (shared `src/components/SortableHead.tsx`: SortState, toggleSortKey, Hebrew/numeric-aware compareBySort with empties-last) to Transactions (default close_date desc), Clients (name asc), MyHoursView (visit_date desc; עובד/ת sorts by derived name), BillingReports (billing_date desc; nested transactions.client_name accessor). BillingReports filters/checkboxes/inline inputs and Transactions billing dots/approve/edit/delete preserved. Commit 1ae2573, deployed 2026-05-31. |
 | Repair 7 | 20260531_hours_administration_read.sql | ✅ Live | Hours UX redesign. Merged השעות שלי + ניהול שעות into ONE unified MyHoursView (no tabs). Role-aware: admin+administration see all employees' hours with עובד/ת filter (names via list_profiles_for_attendance RPC); recruiters see own only. ClientPicker overflow fixed (Card overflow-visible + relative z-50). HoursEntryDialog: editable auto-calc hours, client locked when preset from filter. HoursReportDialog: jsPDF replaced with browser-native print to styled RTL HTML (correct Hebrew, zero deps). Deleted ManageHoursView.tsx. Admin-only הפק חיוב שעות billing + billed-row locking preserved. RLS: additive SELECT-only `hours_administration_select` policy on hours_log. Commit c2a60d8, deployed 2026-05-31. |
 | Feature: Attendance | 20260530_attendance_log.sql | ✅ Live | Employee check-in/out tracking. `attendance_log` table (work_date set by Israel-tz trigger), multiple in/out pairs per day. `/attendance` desktop (status + check button + today's log + admin/administration report with pair-matched hours and ⚠ פתוח for open pairs) and `/m/attendance` mobile. Sidebar item (recruiter+administration, NOT admin), mobile bottom tab. Report names via SECURITY DEFINER `list_profiles_for_attendance()` (administration can't read profiles directly). Sidebar icon: `CalendarCheck` (distinct from Clock/hours). Commit bb808d8, deployed 2026-05-31. |
+| Repair 5 | (no migration) | 🚨 NOT DONE | Password reset flow for team members. Prompt: `C:\Users\Oren\BHR Console\prompts\repair5-password-reset.md`. Run this next — team members may be locked out. |
+| Repair 6 | (no migration) | ⚠ Partial | AbortController 20s timeout applied to TransactionDialog save + billingEvents helpers only (commit 9f19e3a). Clients dialog + HoursEntryDialog still hang on slow network. Prompt: `C:\Users\Oren\BHR Console\prompts\repair6-save-hang.md`. |

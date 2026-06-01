@@ -76,6 +76,18 @@ serve(async (req) => {
       )
     }
 
+    // Set password_set = true so the impersonation session bypasses
+    // /set-password. The admin wants to see the app, not the password setup
+    // form. A failed update is non-fatal — at worst the admin lands on
+    // /set-password, which is recoverable.
+    const { error: pwSetErr } = await admin
+      .from('profiles')
+      .update({ password_set: true })
+      .eq('id', target_user_id)
+    if (pwSetErr) {
+      console.warn('could not set password_set before impersonation', pwSetErr)
+    }
+
     // Generate a one-time magic link for the target user.
     const { data: linkData, error: linkErr } = await admin.auth.admin.generateLink({
       type: 'magiclink',

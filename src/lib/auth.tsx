@@ -137,6 +137,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             initialResolved = true
             setLoading(false)
           }
+          // Remove the code/type params so they don't re-trigger recovery
+          // detection on refresh.
+          try {
+            const clean = new URL(window.location.href)
+            clean.searchParams.delete('code')
+            clean.searchParams.delete('type')
+            window.history.replaceState({}, '', clean.toString())
+          } catch { /* ignore */ }
         }
         return
       }

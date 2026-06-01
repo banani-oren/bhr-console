@@ -7,6 +7,21 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 
+// Wraps a promise with a timeout. Rejects with a clear message if it takes
+// longer than `ms` milliseconds — prevents the "שומר..." hang when the
+// recovery session has expired or been consumed.
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error('הקריאה לשרת לא הגיבה בזמן. ייתכן שקישור האיפוס פג תוקף — בקש קישור חדש.')),
+        ms,
+      ),
+    ),
+  ])
+}
+
 export default function SetPassword() {
   const { user, profile, loading, recoveryMode } = useAuth()
   const navigate = useNavigate()
@@ -18,14 +33,19 @@ export default function SetPassword() {
 
   useEffect(() => {
     if (loading) return
+
     if (!user) {
+      const sp = new URLSearchParams(window.location.search)
+      const pendingExchange =
+        sp.has('code') ||
+        sp.get('type') === 'recovery' ||
+        window.location.hash.includes('type=recovery') ||
+        window.sessionStorage.getItem('bhr_recovery_mode') === '1'
+      if (pendingExchange) return // wait for PASSWORD_RECOVERY event
       navigate('/login', { replace: true })
       return
     }
-    // Only redirect away when the password is already set AND we are NOT in a
-    // password-reset (recovery) flow.  If recoveryMode is true the user
-    // arrived via a reset-password link and must go through the form even if
-    // password_set is already true.
+
     if (profile?.password_set && !recoveryMode) {
       navigate('/', { replace: true })
     }
@@ -46,8 +66,36 @@ export default function SetPassword() {
 
     setSubmitting(true)
     try {
-      const { error: pwErr } = await supabase.auth.updateUser({ password })
-      if (pwErr) throw pwErr
+      // 15-second timeout: if the recovery token has expired or been consumed
+      // the updateUser call can hang indefinitely.
+      // Retry once on auth-lock contention (Supabase client race condition):
+      // "Lock 'lock:sb-...-auth-token' was released because another request stole it".
+      let pwErr: Error | null = null
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const { error } = await withTimeout(
+          supabase.auth.updateUser({ password }),
+          15000,
+        )
+        if (!error) { pwErr = null; break }
+        const isLock = error.message?.toLowerCase().includes('lock')
+        if (isLock && attempt === 0) {
+          await new Promise((r) => setTimeout(r, 600))
+          continue // retry
+        }
+        pwErr = error
+        break
+      }
+
+      if (pwErr) {
+        if (
+          pwErr.message.toLowerCase().includes('session') ||
+          pwErr.message.toLowerCase().includes('expired') ||
+          pwErr.message.toLowerCase().includes('invalid')
+        ) {
+          throw new Error('קישור האיפוס פג תוקף או כבר נוצל. בקש קישור חדש מהמנהל.')
+        }
+        throw pwErr
+      }
 
       if (user) {
         const { error: profErr } = await supabase
@@ -66,13 +114,23 @@ export default function SetPassword() {
     }
   }
 
-  if (loading || !user) {
+  const sp = new URLSearchParams(window.location.search)
+  const pendingExchange =
+    !user && (
+      sp.has('code') ||
+      sp.get('type') === 'recovery' ||
+      window.location.hash.includes('type=recovery') ||
+      window.sessionStorage.getItem('bhr_recovery_mode') === '1'
+    )
+
+  if (loading || pendingExchange) {
     return (
       <div dir="rtl" className="min-h-screen flex items-center justify-center">
-        <p className="text-muted-foreground">טוען...</p>
+        <p className="text-muted-foreground">מאמת קישור...</p>
       </div>
     )
   }
+  if (!user) return null
 
   return (
     <div
@@ -91,8 +149,6 @@ export default function SetPassword() {
 
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4" method="post" action="#">
-            {/* Batch 4 Phase D4: hidden username so Safari can associate the
-                new password with the correct account in its Keychain. */}
             <input
               type="email"
               name="email"
