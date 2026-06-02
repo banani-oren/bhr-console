@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock, LogIn, LogOut, CalendarRange, Pencil } from 'lucide-react'
+import { Clock, LogIn, LogOut, CalendarRange, Pencil, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { AttendanceLog } from '@/lib/types'
@@ -440,6 +440,64 @@ function AdminEditButton({
   )
 }
 
+// ── Admin delete button (two-step inline confirm) ───────────────────────
+function AdminDeleteButton({
+  pair,
+  onDeleted,
+}: {
+  pair: AttendancePair
+  onDeleted: () => void
+}) {
+  const [confirm, setConfirm] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDelete = async () => {
+    setDeleting(true)
+    const ids = [pair.inEntry.id, pair.outEntry?.id].filter(Boolean) as string[]
+    const { error } = await supabase
+      .from('attendance_log')
+      .delete()
+      .in('id', ids)
+    setDeleting(false)
+    if (error) { console.error('attendance delete error:', error); return }
+    onDeleted()
+  }
+
+  if (!confirm) {
+    return (
+      <button
+        type="button"
+        className="text-muted-foreground hover:text-red-500 transition-colors"
+        onClick={() => setConfirm(true)}
+        title="מחק רשומה"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-1 text-xs">
+      <span className="text-red-600">מחק?</span>
+      <button
+        type="button"
+        disabled={deleting}
+        onClick={() => void handleDelete()}
+        className="text-red-600 hover:text-red-800 font-medium"
+      >
+        {deleting ? '...' : 'כן'}
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirm(false)}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        ביטול
+      </button>
+    </div>
+  )
+}
+
 function AttendanceReport({ today }: { today: string }) {
   const { profile } = useAuth()
   const queryClient = useQueryClient()
@@ -581,7 +639,7 @@ function AttendanceReport({ today }: { today: string }) {
                   <TableHead className="text-right text-purple-800">יציאה</TableHead>
                   <TableHead className="text-right text-purple-800">שעות</TableHead>
                   <TableHead className="text-right text-purple-800">תיאור</TableHead>
-                  {isAdmin && <TableHead className="text-right text-purple-800">עריכה</TableHead>}
+                  {isAdmin && <TableHead className="text-right text-purple-800">פעולות</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -608,10 +666,16 @@ function AttendanceReport({ today }: { today: string }) {
                       </TableCell>
                       {isAdmin && (
                         <TableCell>
-                          <AdminEditButton
-                            pair={pair}
-                            onSaved={() => queryClient.invalidateQueries({ queryKey: ['attendance_report'] })}
-                          />
+                          <div className="flex items-center gap-2">
+                            <AdminEditButton
+                              pair={pair}
+                              onSaved={() => queryClient.invalidateQueries({ queryKey: ['attendance_report'] })}
+                            />
+                            <AdminDeleteButton
+                              pair={pair}
+                              onDeleted={() => queryClient.invalidateQueries({ queryKey: ['attendance_report'] })}
+                            />
+                          </div>
                         </TableCell>
                       )}
                     </TableRow>
