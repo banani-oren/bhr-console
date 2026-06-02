@@ -51,10 +51,12 @@ const STATUS_LABEL: Record<BillingEventStatus, string> = {
   paid: 'שולם',
   cancelled: 'מבוטל',
 }
+// Green/emerald = paid (money received) only. billed = amber (awaiting
+// payment); pending = gray (not yet actionable).
 const STATUS_BADGE: Record<BillingEventStatus, string> = {
-  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  pending: 'bg-gray-50 text-gray-700 border-gray-200',
   to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
-  billed: 'bg-green-50 text-green-700 border-green-200',
+  billed: 'bg-amber-50 text-amber-700 border-amber-200',
   paid: 'bg-emerald-50 text-emerald-700 border-emerald-300',
   cancelled: 'bg-red-50 text-red-700 border-red-200',
 }
@@ -367,7 +369,7 @@ export default function BillingReports() {
             </div>
             <div className="flex items-center gap-4">
               <span className="text-muted-foreground">סה"כ חויב:</span>
-              <span className="font-semibold text-green-700">{formatCurrency(totals.billed)}</span>
+              <span className="font-semibold text-amber-700">{formatCurrency(totals.billed)}</span>
             </div>
             <div className="flex items-center gap-4">
               <span className="text-muted-foreground">יתרה לגבייה:</span>

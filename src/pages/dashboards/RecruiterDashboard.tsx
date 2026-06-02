@@ -36,12 +36,16 @@ const STATUS_LABEL: Record<string, string> = {
   pending: 'ממתין',
   to_bill: 'לחיוב',
   billed: 'חויב',
+  paid: 'שולם',
   cancelled: 'מבוטל',
 }
+// Green/emerald = paid (money received) only. billed = amber (awaiting
+// payment); pending = gray (not yet actionable).
 const STATUS_BADGE: Record<string, string> = {
-  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  pending: 'bg-gray-50 text-gray-700 border-gray-200',
   to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
-  billed: 'bg-green-50 text-green-700 border-green-200',
+  billed: 'bg-amber-50 text-amber-700 border-amber-200',
+  paid: 'bg-emerald-50 text-emerald-700 border-emerald-300',
   cancelled: 'bg-gray-50 text-gray-700 border-gray-200',
 }
 
@@ -89,8 +93,10 @@ function buildRecent6Months(events: EventRow[]) {
   }
   return months.map(({ label, year, month }) => {
     const revenue = events.reduce((sum, ev) => {
-      if (!ev.billing_date) return sum
-      const d = new Date(ev.billing_date)
+      // Income = money received = paid events, bucketed by payment_date —
+      // consistent with the bonus engine (src/lib/bonus.ts).
+      if (ev.status !== 'paid' || !ev.payment_date) return sum
+      const d = new Date(ev.payment_date)
       if (isNaN(d.getTime())) return sum
       if (d.getFullYear() === year && d.getMonth() + 1 === month) return sum + (ev.amount - ev.supplier_amount)
       return sum
@@ -138,8 +144,10 @@ export default function RecruiterDashboard() {
 
   const monthRevenue = useMemo(() => {
     return myEvents.reduce((sum, ev) => {
-      if (!ev.billing_date) return sum
-      const d = new Date(ev.billing_date)
+      // Income = money received = paid events, by payment_date — matches the
+      // bonus engine so the displayed bonus reflects what will actually be paid.
+      if (ev.status !== 'paid' || !ev.payment_date) return sum
+      const d = new Date(ev.payment_date)
       if (isNaN(d.getTime())) return sum
       if (d.getFullYear() === curYear && d.getMonth() + 1 === curMonth) {
         return sum + (ev.amount - ev.supplier_amount)

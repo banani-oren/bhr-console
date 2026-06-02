@@ -113,7 +113,10 @@ export default function AdministrationDashboard() {
         }
       }
 
-      if (paymentDate && !isNaN(paymentDate.getTime())) {
+      // Collected = money actually received = paid events only. A billed event
+      // has a calculated payment_date but is not yet collected, so it falls
+      // through to the open/overdue branches below.
+      if (ev.status === 'paid' && paymentDate && !isNaN(paymentDate.getTime())) {
         if (paymentDate.getFullYear() === curYear && paymentDate.getMonth() + 1 === curMonth) {
           collectedThisMonth += ev.amount
         }
@@ -191,7 +194,8 @@ export default function AdministrationDashboard() {
       const label = `${HE_MONTHS[d.getMonth()]} ${String(year).slice(2)}`
       const total = billingEvents
         .filter((ev) => {
-          if (!ev.payment_date) return false
+          // Collections = paid events only, bucketed by the month money arrived.
+          if (ev.status !== 'paid' || !ev.payment_date) return false
           const pd = new Date(ev.payment_date)
           return !isNaN(pd.getTime()) && pd.getFullYear() === year && pd.getMonth() + 1 === month
         })

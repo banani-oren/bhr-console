@@ -48,10 +48,12 @@ const formatCurrency = (n: number | null | undefined) => {
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n)
 }
 
+// Green ALWAYS means "paid" (money received). billed = amber (invoiced,
+// awaiting payment); pending = gray (not yet actionable).
 const STATUS_COLOR: Record<BillingEventStatus, string> = {
-  pending:   'bg-amber-400',
+  pending:   'bg-gray-400',
   to_bill:   'bg-blue-500',
-  billed:    'bg-green-500',
+  billed:    'bg-amber-400',
   paid:      'bg-emerald-600',
   cancelled: 'bg-red-400',
 }

@@ -73,12 +73,16 @@ const STATUS_LABEL: Record<string, string> = {
   pending: 'ממתין',
   to_bill: 'לחיוב',
   billed: 'חויב',
+  paid: 'שולם',
   cancelled: 'מבוטל',
 }
+// Green/emerald = paid (money received) only. billed = amber (awaiting
+// payment); pending = gray (not yet actionable).
 const STATUS_BADGE: Record<string, string> = {
-  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  pending: 'bg-gray-50 text-gray-700 border-gray-200',
   to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
-  billed: 'bg-green-50 text-green-700 border-green-200',
+  billed: 'bg-amber-50 text-amber-700 border-amber-200',
+  paid: 'bg-emerald-50 text-emerald-700 border-emerald-300',
   cancelled: 'bg-gray-50 text-gray-700 border-gray-200',
 }
 
@@ -95,8 +99,9 @@ function buildMonthlyRevenue(events: EventRow[]) {
   }
   return months.map(({ label, year, month }) => {
     const revenue = events.reduce((sum, ev) => {
-      if (!ev.billing_date) return sum
-      const d = new Date(ev.billing_date)
+      // Only paid events count as income; use payment_date as the receipt month.
+      if (ev.status !== 'paid' || !ev.payment_date) return sum
+      const d = new Date(ev.payment_date)
       if (isNaN(d.getTime())) return sum
       if (d.getFullYear() === year && d.getMonth() + 1 === month) return sum + ev.amount
       return sum
@@ -108,7 +113,8 @@ function buildMonthlyRevenue(events: EventRow[]) {
 function buildLeadRevenue(events: EventRow[]) {
   const totals: Record<string, number> = {}
   for (const ev of events) {
-    if (!ev.approved) continue
+    // Only paid events count toward a lead's realized revenue.
+    if (!ev.approved || ev.status !== 'paid') continue
     const lead = ev.service_lead ?? 'לא ידוע'
     totals[lead] = (totals[lead] ?? 0) + (ev.amount - ev.supplier_amount)
   }
@@ -177,11 +183,15 @@ export default function AdminDashboard() {
         toBillCount += 1
         toBillSum += ev.amount
       }
-      if (ev.status === 'billed' && !ev.payment_date) {
+      // Money invoiced or ready to invoice but not yet received (to-collect).
+      if (ev.status === 'billed' || ev.status === 'to_bill') {
         pendingPaymentSum += ev.amount
         pendingPaymentCount += 1
       }
-      if (ev.payment_date) {
+      // Income = money actually received = paid events only. A billed event
+      // gets a calculated payment_date but the client hasn't paid yet, so it
+      // must NOT count as a receipt.
+      if (ev.status === 'paid' && ev.payment_date) {
         const pd = new Date(ev.payment_date)
         if (!isNaN(pd.getTime())) {
           if (pd.getFullYear() === curYear) collectedYTD += ev.amount
@@ -218,7 +228,7 @@ export default function AdminDashboard() {
       sub: ILS.format(stats.toBillSum),
     },
     {
-      title: 'ממתין לתשלום',
+      title: 'לגבייה',
       value: ILS.format(stats.pendingPaymentSum),
       icon: <Clock size={20} className="text-purple-600" />,
       iconBg: 'bg-purple-50',

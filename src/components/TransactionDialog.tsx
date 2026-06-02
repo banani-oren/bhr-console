@@ -789,10 +789,10 @@ export default function TransactionDialog({
             </>
           )}
 
-          {/* Section 4 — קפס (supplier) */}
+          {/* Section 4 — ספק (supplier) */}
           <Separator />
           <div>
-            <h3 className="text-sm font-semibold text-purple-700 mb-3">קפס</h3>
+            <h3 className="text-sm font-semibold text-purple-700 mb-3">ספק</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label>ספק</Label>
@@ -823,7 +823,7 @@ export default function TransactionDialog({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>עמלת קפס %</Label>
+                <Label>עמלת ספק %</Label>
                 <Input
                   type="number"
                   dir="ltr"
@@ -1012,10 +1012,13 @@ function GenerateBillingEventsButton({
   )
 }
 
+// Color scheme: gray = not yet actionable, blue = ready to invoice,
+// amber = invoiced & awaiting payment, emerald/green = money received, red = cancelled.
+// Green ALWAYS means "paid" — billed must not be green.
 const STATUS_COLOR: Record<BillingEvent['status'], string> = {
-  pending:   'bg-amber-400',
+  pending:   'bg-gray-400',
   to_bill:   'bg-blue-500',
-  billed:    'bg-green-500',
+  billed:    'bg-amber-400',
   paid:      'bg-emerald-600',
   cancelled: 'bg-red-400',
 }
