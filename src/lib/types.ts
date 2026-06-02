@@ -154,6 +154,19 @@ export type AttendanceLog = {
   created_at: string
 }
 
+export type AttendanceEditRequest = {
+  id: string
+  attendance_log_id: string
+  profile_id: string
+  requested_at: string
+  proposed_logged_at: string
+  proposed_notes: string | null
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  reviewed_by: string | null
+  reviewed_at: string | null
+}
+
 export type HoursLog = {
   id: string
   team_member_id: string | null

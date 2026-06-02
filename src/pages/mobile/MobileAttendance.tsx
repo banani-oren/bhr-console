@@ -4,7 +4,14 @@ import { LogIn, LogOut } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { AttendanceLog } from '@/lib/types'
-import { todayIsrael, formatTime, computeStatus, nextAction } from '@/lib/attendance'
+import {
+  todayIsrael,
+  formatTime,
+  computeStatus,
+  nextAction,
+  dayPairs,
+  formatHours,
+} from '@/lib/attendance'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
@@ -15,6 +22,8 @@ export default function MobileAttendance() {
 
   const [saving, setSaving] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
+  const [checkoutNote, setCheckoutNote] = useState('')
+  const [showNoteInput, setShowNoteInput] = useState(false)
 
   const { data: todayEntries = [] } = useQuery<AttendanceLog[]>({
     queryKey: ['attendance_today', profile?.id, today],
@@ -34,14 +43,29 @@ export default function MobileAttendance() {
   const status = useMemo(() => computeStatus(todayEntries), [todayEntries])
   const action = nextAction(status)
 
-  const handleCheck = async () => {
+  // Phase 1: checking out shows the note input first; check-in saves immediately.
+  const handleCheckButtonClick = () => {
+    if (action === 'check_out') {
+      setShowNoteInput(true)
+    } else {
+      void handleCheck('')
+    }
+  }
+
+  // Phase 2: actually save.
+  const handleCheck = async (notes: string) => {
     if (!profile?.id || saving) return
     setSaving(true)
     setFlash(null)
-    const { error } = await supabase
-      .from('attendance_log')
-      .insert({ profile_id: profile.id, action })
+    const payload: Record<string, unknown> = {
+      profile_id: profile.id,
+      action,
+      ...(notes.trim() ? { notes: notes.trim().slice(0, 250) } : {}),
+    }
+    const { error } = await supabase.from('attendance_log').insert(payload)
     setSaving(false)
+    setShowNoteInput(false)
+    setCheckoutNote('')
     if (error) {
       console.error('attendance insert error:', error)
       setFlash('שגיאה ברישום — נסה שוב')
@@ -67,25 +91,48 @@ export default function MobileAttendance() {
           <p className="text-lg font-semibold text-purple-900">{statusText}</p>
         </div>
 
-        <Button
-          onClick={handleCheck}
-          disabled={saving}
-          className={
-            action === 'check_in'
-              ? 'w-full h-16 text-lg bg-green-600 hover:bg-green-700 text-white shadow-md'
-              : 'w-full h-16 text-lg bg-orange-600 hover:bg-orange-700 text-white shadow-md'
-          }
-        >
-          {action === 'check_in' ? (
-            <>
-              <LogIn className="h-6 w-6 ml-1" /> כניסה
-            </>
-          ) : (
-            <>
-              <LogOut className="h-6 w-6 ml-1" /> יציאה
-            </>
-          )}
-        </Button>
+        {showNoteInput ? (
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-center text-purple-800">מה עשית היום?</p>
+            <input
+              type="text"
+              className="w-full border rounded-md px-3 py-3 text-sm"
+              placeholder="תיאור קצר (אופציונלי, עד 250 תווים)"
+              maxLength={250}
+              value={checkoutNote}
+              onChange={(e) => setCheckoutNote(e.target.value)}
+              autoFocus
+              dir="rtl"
+            />
+            <Button onClick={() => void handleCheck(checkoutNote)} disabled={saving}
+              className="w-full h-14 bg-orange-600 hover:bg-orange-700 text-white text-base">
+              <LogOut className="h-5 w-5 ml-1" /> {saving ? 'שומר...' : 'שמור יציאה'}
+            </Button>
+            <Button variant="outline" className="w-full" onClick={() => { setShowNoteInput(false); setCheckoutNote('') }}>
+              ביטול
+            </Button>
+          </div>
+        ) : (
+          <Button
+            onClick={handleCheckButtonClick}
+            disabled={saving}
+            className={
+              action === 'check_in'
+                ? 'w-full h-16 text-lg bg-green-600 hover:bg-green-700 text-white shadow-md'
+                : 'w-full h-16 text-lg bg-orange-600 hover:bg-orange-700 text-white shadow-md'
+            }
+          >
+            {action === 'check_in' ? (
+              <>
+                <LogIn className="h-6 w-6 ml-1" /> כניסה
+              </>
+            ) : (
+              <>
+                <LogOut className="h-6 w-6 ml-1" /> יציאה
+              </>
+            )}
+          </Button>
+        )}
 
         {flash && (
           <p
@@ -102,30 +149,40 @@ export default function MobileAttendance() {
 
       <Card className="p-3 space-y-2">
         <p className="text-xs font-medium text-purple-700">הדיווחים שלי היום</p>
-        {todayEntries.length === 0 ? (
-          <p className="text-xs text-muted-foreground">אין דיווחים היום.</p>
-        ) : (
-          <ul className="space-y-1">
-            {todayEntries.map((e) => (
-              <li
-                key={e.id}
-                className="flex items-center justify-between text-sm border-b last:border-0 py-1.5"
-              >
-                <span className="flex items-center gap-1.5">
-                  {e.action === 'check_in' ? (
-                    <LogIn className="h-4 w-4 text-green-600" />
-                  ) : (
-                    <LogOut className="h-4 w-4 text-orange-600" />
+        {(() => {
+          const pairs = dayPairs(todayEntries)
+          if (pairs.length === 0)
+            return <p className="text-xs text-muted-foreground">אין דיווחים היום.</p>
+          return (
+            <ul className="space-y-2">
+              {pairs.map((pair) => (
+                <li key={pair.inEntry.id} className="border rounded-md p-2 space-y-1 bg-muted/20">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-1 text-green-700">
+                      <LogIn className="h-4 w-4" />
+                      <span dir="ltr">{formatTime(pair.inEntry.logged_at)}</span>
+                    </span>
+                    <span className="text-muted-foreground text-xs mx-1">→</span>
+                    {pair.outEntry ? (
+                      <span className="flex items-center gap-1 text-orange-700">
+                        <LogOut className="h-4 w-4" />
+                        <span dir="ltr">{formatTime(pair.outEntry.logged_at)}</span>
+                      </span>
+                    ) : (
+                      <span className="text-amber-600 text-xs">פתוח</span>
+                    )}
+                    <span className="text-purple-800 font-semibold text-xs mr-auto">
+                      {pair.open ? '' : formatHours(pair.hours) + 'ש\''}
+                    </span>
+                  </div>
+                  {pair.outEntry?.notes && (
+                    <p className="text-xs text-muted-foreground truncate">{pair.outEntry.notes}</p>
                   )}
-                  {e.action === 'check_in' ? 'כניסה' : 'יציאה'}
-                </span>
-                <span dir="ltr" className="font-medium text-purple-800">
-                  {formatTime(e.logged_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+                </li>
+              ))}
+            </ul>
+          )
+        })()}
       </Card>
     </div>
   )

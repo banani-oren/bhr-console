@@ -76,3 +76,54 @@ export function dayHours(entries: AttendanceLog[]): { hours: number; open: boole
 export function formatHours(h: number): string {
   return String(Math.round(h * 100) / 100)
 }
+
+export type AttendancePair = {
+  inEntry: AttendanceLog
+  outEntry: AttendanceLog | null
+  hours: number
+  open: boolean
+}
+
+/**
+ * Matches check_in / check_out entries into sequential pairs.
+ * Each check_in is matched with the next check_out in chronological order.
+ * Unmatched check_ins produce open pairs (outEntry = null) — e.g. multiple
+ * consecutive check-ins without check-outs each yield their own open pair.
+ */
+export function dayPairs(entries: AttendanceLog[]): AttendancePair[] {
+  const sorted = [...entries].sort((a, b) => a.logged_at.localeCompare(b.logged_at))
+  const pairs: AttendancePair[] = []
+  const pendingIns: AttendanceLog[] = []
+
+  for (const e of sorted) {
+    if (e.action === 'check_in') {
+      pendingIns.push(e)
+    } else if (e.action === 'check_out') {
+      const inEntry = pendingIns.shift()
+      if (inEntry) {
+        const ms = new Date(e.logged_at).getTime() - new Date(inEntry.logged_at).getTime()
+        pairs.push({ inEntry, outEntry: e, hours: ms / 3_600_000, open: false })
+      }
+    }
+  }
+
+  // Remaining unmatched check-ins → open pairs.
+  for (const inEntry of pendingIns) {
+    pairs.push({ inEntry, outEntry: null, hours: 0, open: true })
+  }
+
+  return pairs
+}
+
+/**
+ * Formats an ISO timestamp as a `YYYY-MM-DDTHH:mm` string for a
+ * <input type="datetime-local">, in the BROWSER's local timezone (which for
+ * the Israel-based team is Israel time). Using toISOString() here would show
+ * UTC and display times 2-3h off; the matching parse `new Date(value)` already
+ * interprets the local string back to the correct instant on submit.
+ */
+export function toLocalInputValue(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
