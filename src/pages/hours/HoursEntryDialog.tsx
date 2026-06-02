@@ -92,7 +92,8 @@ export default function HoursEntryDialog({
   }, [open, startTime, endTime])
 
   const mut = useSafeMutation<void, void>({
-    mutationFn: async () => {
+    timeoutMs: 20000,
+    mutationFn: async (_args, signal) => {
       if (!clientId || !clientName) throw new Error('יש לבחור לקוח')
       const visit = new Date(visitDate)
       const ownerId = profileIdOverride ?? profile?.id
@@ -118,9 +119,10 @@ export default function HoursEntryDialog({
           .from('hours_log')
           .update(payload)
           .eq('id', editing.id)
+          .abortSignal(signal)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('hours_log').insert(payload)
+        const { error } = await supabase.from('hours_log').insert(payload).abortSignal(signal)
         if (error) throw error
       }
     },

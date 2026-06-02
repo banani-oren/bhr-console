@@ -161,8 +161,8 @@ export default function MyHoursView() {
   const billingDate = addDays(new Date().toISOString().slice(0, 10), termDays)
 
   const deleteMut = useSafeMutation<{ id: string }, void>({
-    mutationFn: async ({ id }) => {
-      const { error } = await supabase.from('hours_log').delete().eq('id', id)
+    mutationFn: async ({ id }, signal) => {
+      const { error } = await supabase.from('hours_log').delete().eq('id', id).abortSignal(signal)
       if (error) throw error
     },
     invalidate: [['hours-log-view'], ['hours_log']],
@@ -177,7 +177,8 @@ export default function MyHoursView() {
   // unbilled hours of the selected client (admin only — preserved from the
   // old ניהול שעות tab).
   const hoursBillingMut = useSafeMutation<void, void>({
-    mutationFn: async () => {
+    timeoutMs: 20000,
+    mutationFn: async (_args, signal) => {
       if (!selectedClient || !clientId) throw new Error('לא נבחר לקוח')
       if (!selectedClient.hourly_rate) throw new Error('תעריף שעה לא הוגדר ללקוח')
       if (unbilledHours.length === 0) throw new Error('אין שעות לא מחויבות לתקופה זו')
@@ -214,6 +215,7 @@ export default function MyHoursView() {
           service_lead: profile?.full_name ?? '',
         })
         .select('id')
+        .abortSignal(signal)
         .single()
       if (txnErr || !txn) throw txnErr ?? new Error('שגיאה ביצירת עסקה')
 
@@ -225,6 +227,7 @@ export default function MyHoursView() {
           .from('hours_log')
           .update({ billed_transaction_id: txnId })
           .in('id', hourIds)
+          .abortSignal(signal)
         if (linkErr) throw linkErr
       }
 
@@ -237,7 +240,7 @@ export default function MyHoursView() {
         status: 'pending',
         advance_applied: 0,
         supplier_amount: 0,
-      })
+      }).abortSignal(signal)
       if (evtErr) throw evtErr
     },
     invalidate: [['transactions'], ['billing_events'], ['hours-log-view']],

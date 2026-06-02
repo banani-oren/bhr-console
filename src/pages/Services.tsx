@@ -87,7 +87,7 @@ export default function Services() {
   }
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (signal: AbortSignal) => {
       const payload = {
         name: edit.name.trim(),
         display_order: edit.display_order,
@@ -109,9 +109,10 @@ export default function Services() {
           .from('service_types')
           .update(payload)
           .eq('id', edit.id)
+          .abortSignal(signal)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('service_types').insert(payload)
+        const { error } = await supabase.from('service_types').insert(payload).abortSignal(signal)
         if (error) throw error
       }
     },
@@ -123,8 +124,11 @@ export default function Services() {
   const handleSave = async () => {
     if (!edit.name.trim()) return
     setSaveStatus('saving')
+    // 20s timeout so a hung request never leaves the dialog stuck on "שומר...".
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
     try {
-      await saveMutation.mutateAsync()
+      await saveMutation.mutateAsync(controller.signal)
       setSaveStatus('success')
       setTimeout(() => {
         setSaveStatus('idle')
@@ -133,6 +137,8 @@ export default function Services() {
     } catch (err) {
       console.error('Service type save error:', err)
       setSaveStatus('error')
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 

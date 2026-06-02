@@ -37,12 +37,14 @@ export default function ProfileEditor({ variant = 'desktop' }: { variant?: Varia
   }, [profile])
 
   const saveProfile = useSafeMutation<{ full_name: string; phone: string | null }, void>({
-    mutationFn: async (payload) => {
+    timeoutMs: 20000,
+    mutationFn: async (payload, signal) => {
       if (!profile) throw new Error('לא מחובר')
       const { error } = await supabase
         .from('profiles')
         .update(payload)
         .eq('id', profile.id)
+        .abortSignal(signal)
       if (error) throw error
     },
     invalidate: [['profile'], ['profiles'], ['team-employees']],

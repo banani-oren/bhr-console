@@ -364,21 +364,22 @@ export default function Clients() {
     { editing: Client | null; payload: ReturnType<typeof formToPayload>; permissionIds: string[]; timeLogEnabled: boolean },
     string
   >({
-    mutationFn: async ({ editing, payload, permissionIds, timeLogEnabled }) => {
+    timeoutMs: 20000,
+    mutationFn: async ({ editing, payload, permissionIds, timeLogEnabled }, signal) => {
       let clientId = editing?.id ?? null
       if (editing) {
-        const { error } = await supabase.from('clients').update(payload).eq('id', editing.id)
+        const { error } = await supabase.from('clients').update(payload).eq('id', editing.id).abortSignal(signal)
         if (error) throw error
       } else {
-        const { data, error } = await supabase.from('clients').insert(payload).select('id').single()
+        const { data, error } = await supabase.from('clients').insert(payload).select('id').abortSignal(signal).single()
         if (error) throw error
         clientId = (data as { id: string } | null)?.id ?? null
       }
       if (clientId) {
-        await supabase.from('client_time_log_permissions').delete().eq('client_id', clientId)
+        await supabase.from('client_time_log_permissions').delete().eq('client_id', clientId).abortSignal(signal)
         if (timeLogEnabled && permissionIds.length > 0) {
           const rows = permissionIds.map((profile_id) => ({ client_id: clientId, profile_id }))
-          const { error: pErr } = await supabase.from('client_time_log_permissions').insert(rows)
+          const { error: pErr } = await supabase.from('client_time_log_permissions').insert(rows).abortSignal(signal)
           if (pErr) throw pErr
         }
       }

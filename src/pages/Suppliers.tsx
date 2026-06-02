@@ -79,7 +79,7 @@ export default function Suppliers() {
   }
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (signal: AbortSignal) => {
       const payload = {
         first_name: edit.first_name.trim(),
         last_name: edit.last_name.trim(),
@@ -87,10 +87,10 @@ export default function Suppliers() {
         mobile: edit.mobile.trim() || null,
       }
       if (edit.id) {
-        const { error } = await supabase.from('suppliers').update(payload).eq('id', edit.id)
+        const { error } = await supabase.from('suppliers').update(payload).eq('id', edit.id).abortSignal(signal)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('suppliers').insert(payload)
+        const { error } = await supabase.from('suppliers').insert(payload).abortSignal(signal)
         if (error) throw error
       }
     },
@@ -102,8 +102,11 @@ export default function Suppliers() {
   const handleSave = async () => {
     if (!edit.first_name.trim() || !edit.last_name.trim()) return
     setSaveStatus('saving')
+    // 20s timeout so a hung request never leaves the dialog stuck on "שומר...".
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
     try {
-      await saveMutation.mutateAsync()
+      await saveMutation.mutateAsync(controller.signal)
       setSaveStatus('success')
       setTimeout(() => {
         setSaveStatus('idle')
@@ -112,6 +115,8 @@ export default function Suppliers() {
     } catch (err) {
       console.error('Supplier save error:', err)
       setSaveStatus('error')
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 
