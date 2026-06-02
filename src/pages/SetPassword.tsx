@@ -46,7 +46,11 @@ export default function SetPassword() {
       return
     }
 
-    if (profile?.password_set && !recoveryMode) {
+    // Only show the password form when the user explicitly arrived via a reset
+    // link (recoveryMode). Normal login sessions always go to the app,
+    // regardless of the profiles.password_set flag — that flag can get out of
+    // sync and must never trap a user who logged in normally.
+    if (!recoveryMode) {
       navigate('/', { replace: true })
     }
   }, [loading, user, profile, recoveryMode, navigate])
