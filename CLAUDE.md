@@ -96,7 +96,7 @@ App Dev/
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
 │   │   ├── bonus.ts                    # Bonus calculation logic
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
-│   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours
+│   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
 │   │   ├── dates.ts                    # Date/timezone utilities — Israeli locale helpers
 │   │   ├── pdf.ts                      # PDF export helpers (jsPDF)
 │   │   ├── serviceTypes.ts             # ServiceType/ServiceField types + evalDerived() formula evaluator
@@ -126,7 +126,7 @@ App Dev/
 │   │   ├── Dashboard.tsx               # Role-aware: loads correct dashboard per role
 │   │   ├── Clients.tsx                 # Client list + ClientDialog (create/edit)
 │   │   ├── Transactions.tsx            # Transaction table: filters, inline edit, export
-│   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration)
+│   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration). V2: two-phase check-out with optional note (≤250); today's-log + report show check_in→check_out pairs (report = one TableRow per pair, name/date only on first); employee 'תיקון' edit-request form (insert into attendance_edit_requests); admin pencil direct-edit + 'בקשות תיקון ממתינות' approve/reject panel. Edit forms use toLocalInputValue() so datetime-local shows Israel local time.
 │   │   ├── BillingReports.tsx          # Monthly billing summary reports
 │   │   ├── Bonuses.tsx                 # Bonus calculations per team member
 │   │   ├── Team.tsx                    # Team member management
@@ -150,7 +150,7 @@ App Dev/
 │   │   └── mobile/
 │   │       ├── MobileShell.tsx         # /m/* layout (no sidebar)
 │   │       ├── MobileHours.tsx         # Mobile hours entry
-│   │       ├── MobileAttendance.tsx    # Mobile check-in/out (no report)
+│   │       ├── MobileAttendance.tsx    # Mobile check-in/out (no report). V2: two-phase check-out note + pair display in today's log.
 │   │       └── MobileProfile.tsx       # Mobile profile view
 │   │
 │   └── assets/
@@ -174,7 +174,8 @@ App Dev/
 │       ├── 20260509_phase2_transactions.sql       # Phase 2: billing_events table, transaction approval fields
 │       ├── 20260512_billing_events_paid_status.sql  # Repair 2: 'paid' status added to billing_events CHECK constraint
 │       ├── 20260530_attendance_log.sql              # Feature: attendance_log table, work_date trigger, RLS, list_profiles_for_attendance()
-│       └── 20260531_hours_administration_read.sql   # Repair 7: additive SELECT RLS so administration reads all hours_log rows
+│       ├── 20260531_hours_administration_read.sql   # Repair 7: additive SELECT RLS so administration reads all hours_log rows
+│       └── 20260601_attendance_edit_requests.sql    # Feature: Attendance V2 — attendance_edit_requests table + RLS (insert/select own, admin update)
 │
 ├── scripts/
 │   └── generate-icons.mjs              # PWA icon generation
@@ -192,7 +193,7 @@ App Dev/
 **Prompts directory** (sibling of App Dev, at `C:\Users\Oren\BHR Console\prompts\`):
 - Active Claude Code prompts follow the pattern `repair{N}-*.md` or `feature-*.md`
 - Completed prompts are deleted after the task is live (history lives in git + phase table above)
-- Current pending prompts: `repair6-save-hang.md` (`repair5` (→`repair5-complete.md`), `repair5b-password-loop-systemic`, `repair8`, `repair9`, `repair10`, `repair11-transaction-dialog-and-dashboard`, `feature-impersonate-user`, `fix-impersonate-deploy` are all done & live — see Phase History)
+- Current pending prompts: `repair6-save-hang.md` (`repair5` (→`repair5-complete.md`), `repair5b-password-loop-systemic`, `repair8`, `repair9`, `repair10`, `repair11-transaction-dialog-and-dashboard`, `feature-impersonate-user`, `fix-impersonate-deploy`, `feature-attendance-v2` are all done & live — see Phase History)
 
 ---
 
@@ -335,6 +336,22 @@ attendance_log                     -- Employee check-in/out log (Feature: Attend
   created_at timestamptz
   -- RLS: insert own (profile_id = auth.uid()); select own OR admin/administration (current_user_role());
   --      update/delete admin only. Report names come from SECURITY DEFINER public.list_profiles_for_attendance().
+
+attendance_edit_requests           -- Employee-submitted correction requests (Feature: Attendance V2)
+  id uuid PK
+  attendance_log_id uuid → attendance_log NOT NULL (ON DELETE CASCADE)
+  profile_id uuid → profiles NOT NULL (ON DELETE CASCADE)
+  requested_at timestamptz DEFAULT now()
+  proposed_logged_at timestamptz NOT NULL
+  proposed_notes text
+  reason text NOT NULL
+  status text DEFAULT 'pending' CHECK IN ('pending','approved','rejected')
+  reviewed_by uuid → profiles
+  reviewed_at timestamptz
+  -- RLS: insert own (profile_id = auth.uid()); select own OR admin/administration;
+  --      UPDATE admin only (approve/reject). Approve copies proposed_logged_at/proposed_notes onto the attendance_log row.
+  -- NOTE: two FKs to profiles (profile_id, reviewed_by) → embeds must disambiguate:
+  --       profiles!attendance_edit_requests_profile_id_fkey(full_name)
 
 team_members
   id uuid PK
@@ -618,4 +635,5 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 | Repair 5 (Complete) | (no migration) | ✅ Live (2026-06-01) | Password-reset loop fixed (3 issues). (1) PKCE detection: `supabase.ts` + `SetPassword.tsx` now treat `?code=`/`?type=recovery` query params as recovery, not just the legacy `#type=recovery` hash, so reset links no longer bounce to `/login` before the code exchange resolves; SetPassword shows "מאמת קישור..." while the exchange is pending. (2) Lock retry: `updateUser({password})` retries once after 600ms on "Lock ... was released because another request stole it". (3) `auth.tsx` strips code/type params after PASSWORD_RECOVERY so refresh doesn't re-trigger. Also: `impersonate-user` edge fn now sets `password_set=true` before generateLink so impersonation lands in-app, not `/set-password` (non-fatal on error). Nadia unblocked directly (`profiles.password_set=true` via pooler). Commit 91feabe, frontend deployed to app.banani-hr.com (verified: live bundle contains the new `מאמת קישור`/`bhr_recovery_mode` code). Edge fn `impersonate-user` REDEPLOYED 2026-06-01 with the password_set change via the Supabase dashboard in-browser editor (deployed source verified to contain `password_set: true`; curl 401 = alive); CLI/Management-API token still expired. Supersedes original `repair5-password-reset.md`. |
 | Repair 5b | (no migration) | ✅ Live (2026-06-02) | Closed the `password_set` trap systemically. `SetPassword.tsx` routing now gates on `recoveryMode` ONLY: a normal login session always navigates to `/` regardless of `profiles.password_set`, so a stale `password_set=false` can never block a user who logged in normally (the recurring Nadia/Noa lockout). Reset-link (recoveryMode) sessions still see the password form; password_set is still written true on a successful set (just not a routing gate). All stuck users unblocked directly (`noa`, `michal.sample`, `r@fixme.co.il` → password_set=true via pooler; all 5 profiles now true). Step 3 (admin reset button) was already implemented in `Users.tsx` (KeyRound icon → `resetPasswordForEmail` with the correct dynamic `${window.location.origin}/set-password` redirect + inline status) — confirmed with Oren to keep it and NOT add the prompt's duplicate LinkIcon button (which also hardcoded the SSO-protected `*.vercel.app` URL). Only `SetPassword.tsx` changed. Commit 390b479, deployed to app.banani-hr.com (live bundle index-ZbYR5_17.js). |
 | Repair 11 | (no migration) | ✅ Live (2026-06-02) | Four UI/accuracy fixes. (1) `ClientPicker` no longer opens its dropdown on focus (removed `onFocus`) — it was auto-opening when TransactionDialog auto-focuses the first field; click + typing still open it (verified live). (2) Renamed visible Hebrew קפס→ספק in TransactionDialog Section 4 (header + 'עמלת ספק %'); no var/state/DB renames. (3) **Billing status colors** unified across ALL dot/badge maps (TransactionDialog, Transactions, BillingReports, Admin/Recruiter dashboards): pending=gray, to_bill=blue, billed=**amber** (invoiced, awaiting payment), paid=emerald/green (money in). Green now ALWAYS = paid. Added missing `paid` label('שולם')/badge to AdminDashboard + RecruiterDashboard maps; recolored BillingReports 'סה"כ חויב' total green→amber. (4) **Income = paid only**: AdminDashboard תקבולים החודש/YTD count `status='paid'` by `payment_date` (a billed event has a calculated payment_date but isn't received); KPI 'ממתין לתשלום'→'לגבייה' now sums billed+to_bill; monthly-revenue + lead-revenue charts count only paid. 4e applied: AdministrationDashboard 'נגבה החודש' + 6-month collections paid-only; RecruiterDashboard month income + 6-month chart paid-only by payment_date — now consistent with the live bonus engine (Repair 4), so a recruiter's displayed bonus reflects actually-paid revenue (⚠ this lowers displayed recruiter income vs the old billing-based number — intended). 'לחיוב' KPI unchanged. Commit 9eabd1f, live (bundle index-BSF4LPXV.js); verified on app.banani-hr.com (לגבייה=₪55,980/5, billed badge=amber, ClientPicker no auto-open). |
+| Feature: Attendance V2 | 20260601_attendance_edit_requests.sql | ✅ Live (2026-06-02) | Three attendance improvements. (1) **Pair display**: today's-log + report show check_in→check_out pairs (`dayPairs()` in attendance.ts — sequential pairing, unmatched check-ins → open pairs); report renders one `TableRow` per pair (name/date only on first), with כניסה/יציאה/שעות/**תיאור**/**עריכה** columns. (2) **Check-out notes**: two-phase check-out — clicking יציאה shows an optional ≤250-char note input before saving (check-in still one click); notes shown in pairs + report. Desktop + mobile. (3) **Edit requests**: employees can't directly edit; they submit a 'תיקון' request (`attendance_edit_requests`, insert-own RLS). Admin sees a 'בקשות תיקון ממתינות' panel (approve copies proposed time+notes to the log; reject just marks status) and can also directly edit any row via the pencil (AdminEditButton → updates attendance_log). datetime-local inputs use `toLocalInputValue()` to show Israel local time (fixed a UTC off-by-2-3h bug in the original prompt code). The pending-panel embed disambiguates the two profiles FKs via `profiles!attendance_edit_requests_profile_id_fkey`. QA: migration/RLS verified via pg; report pairs, admin edit form (correct local times), and pending panel (FK embed → name resolved) all verified live on app.banani-hr.com. Commit 5f4dcc1, bundle index-b3z0Kj3h.js. ⚠ Note for the prompt's literal code: the `AttendanceEditRequest` import it specified for Attendance.tsx is unused (omitted to satisfy noUnusedLocals); `Array<Promise>` → `Array<PromiseLike>` (PostgREST builders are thenables). |
 | Repair 6 | (no migration) | ⚠ Partial | AbortController 20s timeout applied to TransactionDialog save + billingEvents helpers only (commit 9f19e3a). Clients dialog + HoursEntryDialog still hang on slow network. Prompt: `C:\Users\Oren\BHR Console\prompts\repair6-save-hang.md`. |
