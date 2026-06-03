@@ -62,18 +62,23 @@ export default function MobileAttendance() {
       action,
       ...(notes.trim() ? { notes: notes.trim().slice(0, 250) } : {}),
     }
-    const { error } = await supabase.from('attendance_log').insert(payload)
-    setSaving(false)
-    setShowNoteInput(false)
-    setCheckoutNote('')
-    if (error) {
-      console.error('attendance insert error:', error)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('attendance_log').insert(payload).abortSignal(controller.signal)
+      if (error) throw error
+      setFlash(action === 'check_in' ? '✓ נרשמה כניסה' : '✓ נרשמה יציאה')
+      queryClient.invalidateQueries({ queryKey: ['attendance_today', profile.id, today] })
+      setTimeout(() => setFlash(null), 2500)
+    } catch (err) {
+      console.error('attendance insert error:', err)
       setFlash('שגיאה ברישום — נסה שוב')
-      return
+    } finally {
+      clearTimeout(timer)
+      setSaving(false)
+      setShowNoteInput(false)
+      setCheckoutNote('')
     }
-    setFlash(action === 'check_in' ? '✓ נרשמה כניסה' : '✓ נרשמה יציאה')
-    queryClient.invalidateQueries({ queryKey: ['attendance_today', profile.id, today] })
-    setTimeout(() => setFlash(null), 2500)
   }
 
   const statusText =

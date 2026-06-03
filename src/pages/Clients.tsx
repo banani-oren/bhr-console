@@ -687,9 +687,15 @@ export default function Clients() {
           hourly_rate: row.hourly_rate,
           status: 'פעיל',
         }
-        const { error } = await supabase.from('clients').insert(payload)
-        if (error) {
-          console.error('Import insert error:', error, payload)
+        const ac = new AbortController()
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        let insErr: unknown = null
+        try {
+          const res = await supabase.from('clients').insert(payload).abortSignal(ac.signal)
+          insErr = res.error
+        } catch (e) { insErr = e } finally { clearTimeout(t) }
+        if (insErr) {
+          console.error('Import insert error:', insErr, payload)
           failed += 1
         } else {
           inserted += 1
@@ -699,12 +705,15 @@ export default function Clients() {
       // Apply updates — only fields in `updates`; never touches agreement fields.
       for (const u of importAnalysis.updateRows) {
         if (Object.keys(u.updates).length === 0) continue
-        const { error } = await supabase
-          .from('clients')
-          .update(u.updates)
-          .eq('id', u.existing.id)
-        if (error) {
-          console.error('Import update error:', error, u)
+        const ac = new AbortController()
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        let updErr: unknown = null
+        try {
+          const res = await supabase.from('clients').update(u.updates).eq('id', u.existing.id).abortSignal(ac.signal)
+          updErr = res.error
+        } catch (e) { updErr = e } finally { clearTimeout(t) }
+        if (updErr) {
+          console.error('Import update error:', updErr, u)
           failed += 1
         } else {
           updated += 1

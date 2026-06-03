@@ -415,13 +415,18 @@ function BillingEventDashRow({
     if (field === 'invoice_number' && value && event.status !== 'billed') {
       patch.status = 'billed'
     }
-    const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id)
-    setBusy(null)
-    if (error) {
-      console.error(error)
-      return
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id).abortSignal(controller.signal)
+      if (error) throw error
+      onChanged()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      clearTimeout(timer)
+      setBusy(null)
     }
-    onChanged()
   }
 
   return (

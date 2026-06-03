@@ -102,11 +102,18 @@ export default function SetPassword() {
       }
 
       if (user) {
-        const { error: profErr } = await supabase
-          .from('profiles')
-          .update({ password_set: true })
-          .eq('id', user.id)
-        if (profErr) throw profErr
+        const ac = new AbortController()
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        try {
+          const { error: profErr } = await supabase
+            .from('profiles')
+            .update({ password_set: true })
+            .eq('id', user.id)
+            .abortSignal(ac.signal)
+          if (profErr) throw profErr
+        } finally {
+          clearTimeout(t)
+        }
       }
 
       await supabase.auth.signOut()

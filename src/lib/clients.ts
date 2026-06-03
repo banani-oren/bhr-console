@@ -85,27 +85,41 @@ export async function upsertClient(
 
   let clientId: string
 
-  if (existingClientId) {
-    const { error } = await supabase
-      .from('clients')
-      .update(clientPayload)
-      .eq('id', existingClientId)
-    if (error) throw error
-    clientId = existingClientId
-  } else {
-    const { data, error } = await supabase
-      .from('clients')
-      .insert(clientPayload)
-      .select('id')
-      .single()
-    if (error) throw error
-    clientId = data.id
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+  try {
+    if (existingClientId) {
+      const { error } = await supabase
+        .from('clients')
+        .update(clientPayload)
+        .eq('id', existingClientId)
+        .abortSignal(controller.signal)
+      if (error) throw error
+      clientId = existingClientId
+    } else {
+      const { data, error } = await supabase
+        .from('clients')
+        .insert(clientPayload)
+        .select('id')
+        .abortSignal(controller.signal)
+        .single()
+      if (error) throw error
+      clientId = data.id
+    }
+  } finally {
+    clearTimeout(timer)
   }
 
   return { clientId }
 }
 
 export async function deleteClient(id: string): Promise<void> {
-  const { error } = await supabase.from('clients').delete().eq('id', id)
-  if (error) throw error
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+  try {
+    const { error } = await supabase.from('clients').delete().eq('id', id).abortSignal(controller.signal)
+    if (error) throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }

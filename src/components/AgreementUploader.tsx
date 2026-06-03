@@ -177,41 +177,49 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
   const confirmItem = async (item: PendingItem) => {
     if (!item.extracted || !item.chosenClientId) return
     const clientId = item.chosenClientId
-    if (clientId === 'new') {
-      // Create a new client stub from extracted fields.
-      const name = item.extracted.matched_client_name?.trim()
-      if (!name) return
-      const adv = parseAdvance(item.extracted.advance)
-      const { data: created, error: cErr } = await supabase
-        .from('clients')
-        .insert({
-          name,
-          company_id: item.extracted.company_id ?? null,
-          address: item.extracted.client_address ?? null,
-          commission_percent: item.extracted.commission_percent ?? null,
-          warranty_days: item.extracted.warranty_days ?? null,
-          payment_terms: item.extracted.payment_terms ?? null,
-          advance_type: adv.advance_type,
-          advance_amount: adv.advance_amount,
-          hourly_rate: item.extracted.hourly_rate ?? null,
-          status: 'פעיל',
-        })
-        .select('id')
-        .single()
-      if (cErr || !created) {
-        updateItem(item.id, { status: 'error', error: cErr?.message ?? 'insert failed' })
+    // 20s abort so a hung client insert/update can't stall the confirm flow.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      if (clientId === 'new') {
+        // Create a new client stub from extracted fields.
+        const name = item.extracted.matched_client_name?.trim()
+        if (!name) return
+        const adv = parseAdvance(item.extracted.advance)
+        const { data: created, error: cErr } = await supabase
+          .from('clients')
+          .insert({
+            name,
+            company_id: item.extracted.company_id ?? null,
+            address: item.extracted.client_address ?? null,
+            commission_percent: item.extracted.commission_percent ?? null,
+            warranty_days: item.extracted.warranty_days ?? null,
+            payment_terms: item.extracted.payment_terms ?? null,
+            advance_type: adv.advance_type,
+            advance_amount: adv.advance_amount,
+            hourly_rate: item.extracted.hourly_rate ?? null,
+            status: 'פעיל',
+          })
+          .select('id')
+          .abortSignal(controller.signal)
+          .single()
+        if (cErr || !created) {
+          updateItem(item.id, { status: 'error', error: cErr?.message ?? 'insert failed' })
+          return
+        }
+        await moveAndAttach(created.id as string, item)
         return
       }
-      await moveAndAttach(created.id as string, item)
-      return
+      const existing = clients.find((c) => c.id === clientId)
+      if (!existing) return
+      const patch = mergeAgreementFields(existing, item.extracted)
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('clients').update(patch).eq('id', clientId).abortSignal(controller.signal)
+      }
+      await moveAndAttach(clientId, item)
+    } finally {
+      clearTimeout(timer)
     }
-    const existing = clients.find((c) => c.id === clientId)
-    if (!existing) return
-    const patch = mergeAgreementFields(existing, item.extracted)
-    if (Object.keys(patch).length > 0) {
-      await supabase.from('clients').update(patch).eq('id', clientId)
-    }
-    await moveAndAttach(clientId, item)
   }
 
   const moveAndAttach = async (clientId: string, item: PendingItem) => {

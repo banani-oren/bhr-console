@@ -96,18 +96,23 @@ export default function Attendance() {
       action,
       ...(notes.trim() ? { notes: notes.trim().slice(0, 250) } : {}),
     }
-    const { error } = await supabase.from('attendance_log').insert(payload)
-    setSaving(false)
-    setShowNoteInput(false)
-    setCheckoutNote('')
-    if (error) {
-      console.error('attendance insert error:', error)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('attendance_log').insert(payload).abortSignal(controller.signal)
+      if (error) throw error
+      setFlash(action === 'check_in' ? '✓ נרשמה כניסה' : '✓ נרשמה יציאה')
+      queryClient.invalidateQueries({ queryKey: ['attendance_today', profile.id, today] })
+      setTimeout(() => setFlash(null), 2500)
+    } catch (err) {
+      console.error('attendance insert error:', err)
       setFlash('שגיאה ברישום — נסה שוב')
-      return
+    } finally {
+      clearTimeout(timer)
+      setSaving(false)
+      setShowNoteInput(false)
+      setCheckoutNote('')
     }
-    setFlash(action === 'check_in' ? '✓ נרשמה כניסה' : '✓ נרשמה יציאה')
-    queryClient.invalidateQueries({ queryKey: ['attendance_today', profile.id, today] })
-    setTimeout(() => setFlash(null), 2500)
   }
 
   const statusText =
@@ -283,17 +288,25 @@ function RequestEditButton({
   const handleSubmit = async () => {
     if (!reason.trim()) return
     setSaving(true)
-    const { error } = await supabase.from('attendance_edit_requests').insert({
-      attendance_log_id: entry.id,
-      profile_id: profileId,
-      proposed_logged_at: new Date(proposedTime).toISOString(),
-      proposed_notes: proposedNotes.trim() || null,
-      reason: reason.trim(),
-    })
-    setSaving(false)
-    if (error) { alert('שגיאה בשליחת הבקשה'); return }
-    setOpen(false)
-    onSubmitted()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('attendance_edit_requests').insert({
+        attendance_log_id: entry.id,
+        profile_id: profileId,
+        proposed_logged_at: new Date(proposedTime).toISOString(),
+        proposed_notes: proposedNotes.trim() || null,
+        reason: reason.trim(),
+      }).abortSignal(controller.signal)
+      if (error) throw error
+      setOpen(false)
+      onSubmitted()
+    } catch {
+      alert('שגיאה בשליחת הבקשה')
+    } finally {
+      clearTimeout(timer)
+      setSaving(false)
+    }
   }
 
   return (
@@ -386,10 +399,13 @@ function AdminEditButton({
 
   const handleSave = async () => {
     setSaving(true)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
     const updates: Array<PromiseLike<unknown>> = [
       supabase.from('attendance_log')
         .update({ logged_at: new Date(inTime).toISOString() })
         .eq('id', pair.inEntry.id)
+        .abortSignal(controller.signal)
         .then(({ error }) => { if (error) throw error }),
     ]
     if (pair.outEntry && outTime) {
@@ -397,6 +413,7 @@ function AdminEditButton({
         supabase.from('attendance_log')
           .update({ logged_at: new Date(outTime).toISOString(), notes: notes.trim() || null })
           .eq('id', pair.outEntry.id)
+          .abortSignal(controller.signal)
           .then(({ error }) => { if (error) throw error }),
       )
     }
@@ -407,6 +424,7 @@ function AdminEditButton({
     } catch {
       alert('שגיאה בשמירה')
     } finally {
+      clearTimeout(timer)
       setSaving(false)
     }
   }
@@ -454,13 +472,22 @@ function AdminDeleteButton({
   const handleDelete = async () => {
     setDeleting(true)
     const ids = [pair.inEntry.id, pair.outEntry?.id].filter(Boolean) as string[]
-    const { error } = await supabase
-      .from('attendance_log')
-      .delete()
-      .in('id', ids)
-    setDeleting(false)
-    if (error) { console.error('attendance delete error:', error); return }
-    onDeleted()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase
+        .from('attendance_log')
+        .delete()
+        .in('id', ids)
+        .abortSignal(controller.signal)
+      if (error) throw error
+      onDeleted()
+    } catch (err) {
+      console.error('attendance delete error:', err)
+    } finally {
+      clearTimeout(timer)
+      setDeleting(false)
+    }
   }
 
   if (!confirm) {
@@ -714,21 +741,33 @@ function PendingEditRequests() {
     logEntry: AttendanceLog,
     req: { proposed_logged_at: string; proposed_notes: string | null },
   ) => {
-    if (approve) {
-      await supabase.from('attendance_log')
-        .update({ logged_at: req.proposed_logged_at, notes: req.proposed_notes })
-        .eq('id', logEntry.id)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      if (approve) {
+        const { error: logErr } = await supabase.from('attendance_log')
+          .update({ logged_at: req.proposed_logged_at, notes: req.proposed_notes })
+          .eq('id', logEntry.id)
+          .abortSignal(controller.signal)
+        if (logErr) throw logErr
+      }
+      const { error: reqErr } = await supabase.from('attendance_edit_requests')
+        .update({
+          status: approve ? 'approved' : 'rejected',
+          reviewed_by: profile?.id,
+          reviewed_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .abortSignal(controller.signal)
+      if (reqErr) throw reqErr
+      queryClient.invalidateQueries({ queryKey: ['attendance_edit_requests_pending'] })
+      queryClient.invalidateQueries({ queryKey: ['attendance_today'] })
+      queryClient.invalidateQueries({ queryKey: ['attendance_report'] })
+    } catch (err) {
+      console.error('attendance decision error:', err)
+    } finally {
+      clearTimeout(timer)
     }
-    await supabase.from('attendance_edit_requests')
-      .update({
-        status: approve ? 'approved' : 'rejected',
-        reviewed_by: profile?.id,
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-    queryClient.invalidateQueries({ queryKey: ['attendance_edit_requests_pending'] })
-    queryClient.invalidateQueries({ queryKey: ['attendance_today'] })
-    queryClient.invalidateQueries({ queryKey: ['attendance_report'] })
   }
 
   if (isFetching) return null

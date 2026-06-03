@@ -952,6 +952,8 @@ function GenerateBillingEventsButton({
   const handleGenerate = async () => {
     setLoading(true)
     setError(null)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
     try {
       const cf = (transaction.custom_fields ?? {}) as Record<string, unknown>
       const salary = Number(cf.salary ?? transaction.salary ?? 0)
@@ -972,7 +974,7 @@ function GenerateBillingEventsButton({
         candidateName,
         serviceType,
       })
-      await upsertBillingEvents(transaction.id, events)
+      await upsertBillingEvents(transaction.id, events, controller.signal)
 
       const isApproved = !transaction.needs_approval || !!transaction.approved_at
       if (isApproved) {
@@ -983,12 +985,14 @@ function GenerateBillingEventsButton({
           .eq('transaction_id', transaction.id)
           .eq('status', 'pending')
           .lte('billing_date', todayIso)
+          .abortSignal(controller.signal)
       }
 
       onGenerated()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'שגיאה')
     } finally {
+      clearTimeout(timer)
       setLoading(false)
     }
   }
@@ -1051,10 +1055,18 @@ function BillingEventRow({
 
   const handleDelete = async () => {
     setDeleting(true)
-    const { error } = await supabase.from('billing_events').delete().eq('id', event.id)
-    setDeleting(false)
-    if (error) { console.error('BillingEventRow delete error:', error); return }
-    onDeleted()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('billing_events').delete().eq('id', event.id).abortSignal(controller.signal)
+      if (error) throw error
+      onDeleted()
+    } catch (err) {
+      console.error('BillingEventRow delete error:', err)
+    } finally {
+      clearTimeout(timer)
+      setDeleting(false)
+    }
   }
 
   useEffect(() => {
@@ -1094,13 +1106,18 @@ function BillingEventRow({
       }
     }
 
-    const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id)
-    setSavingField(null)
-    if (error) {
-      console.error('BillingEventRow save error:', error)
-      return
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    try {
+      const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id).abortSignal(controller.signal)
+      if (error) throw error
+      onSaved()
+    } catch (err) {
+      console.error('BillingEventRow save error:', err)
+    } finally {
+      clearTimeout(timer)
+      setSavingField(null)
     }
-    onSaved()
   }
 
   const ILS = new Intl.NumberFormat('he-IL', {
