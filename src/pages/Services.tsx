@@ -144,14 +144,21 @@ export default function Services() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const { count, error: cntErr } = await supabase
-        .from('transactions')
-        .select('id', { head: true, count: 'exact' })
-        .eq('service_type_id', id)
-      if (cntErr) throw cntErr
-      if ((count ?? 0) > 0) throw new Error(`לא ניתן למחוק — קיימות ${count} עסקאות המשויכות לסוג שירות זה`)
-      const { error } = await supabase.from('service_types').delete().eq('id', id)
-      if (error) throw error
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      try {
+        const { count, error: cntErr } = await supabase
+          .from('transactions')
+          .select('id', { head: true, count: 'exact' })
+          .eq('service_type_id', id)
+          .abortSignal(controller.signal)
+        if (cntErr) throw cntErr
+        if ((count ?? 0) > 0) throw new Error(`לא ניתן למחוק — קיימות ${count} עסקאות המשויכות לסוג שירות זה`)
+        const { error } = await supabase.from('service_types').delete().eq('id', id).abortSignal(controller.signal)
+        if (error) throw error
+      } finally {
+        clearTimeout(timer)
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['service_types'] })

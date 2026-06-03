@@ -122,16 +122,23 @@ export default function Suppliers() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      // Check if any transactions reference this supplier
-      const { count, error: cntErr } = await supabase
-        .from('transactions')
-        .select('id', { head: true, count: 'exact' })
-        .eq('supplier_id', id)
-      if (cntErr) throw cntErr
-      if ((count ?? 0) > 0)
-        throw new Error(`לא ניתן למחוק — קיימות ${count} עסקאות המשויכות לספק זה`)
-      const { error } = await supabase.from('suppliers').delete().eq('id', id)
-      if (error) throw error
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      try {
+        // Check if any transactions reference this supplier
+        const { count, error: cntErr } = await supabase
+          .from('transactions')
+          .select('id', { head: true, count: 'exact' })
+          .eq('supplier_id', id)
+          .abortSignal(controller.signal)
+        if (cntErr) throw cntErr
+        if ((count ?? 0) > 0)
+          throw new Error(`לא ניתן למחוק — קיימות ${count} עסקאות המשויכות לספק זה`)
+        const { error } = await supabase.from('suppliers').delete().eq('id', id).abortSignal(controller.signal)
+        if (error) throw error
+      } finally {
+        clearTimeout(timer)
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['suppliers'] })

@@ -119,20 +119,29 @@ export default function Transactions() {
 
   const approveMut = useMutation({
     mutationFn: async (txnId: string) => {
-      const nowIso = new Date().toISOString()
-      const { error } = await supabase
-        .from('transactions')
-        .update({ approved_by: profile!.id, approved_at: nowIso })
-        .eq('id', txnId)
-      if (error) throw error
-      // Move pending events whose billing_date has passed to to_bill.
-      const today = new Date().toISOString().slice(0, 10)
-      await supabase
-        .from('billing_events')
-        .update({ status: 'to_bill' })
-        .eq('transaction_id', txnId)
-        .eq('status', 'pending')
-        .lte('billing_date', today)
+      // 20s abort so a hung approve can't freeze the row's button.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      try {
+        const nowIso = new Date().toISOString()
+        const { error } = await supabase
+          .from('transactions')
+          .update({ approved_by: profile!.id, approved_at: nowIso })
+          .eq('id', txnId)
+          .abortSignal(controller.signal)
+        if (error) throw error
+        // Move pending events whose billing_date has passed to to_bill.
+        const today = new Date().toISOString().slice(0, 10)
+        await supabase
+          .from('billing_events')
+          .update({ status: 'to_bill' })
+          .eq('transaction_id', txnId)
+          .eq('status', 'pending')
+          .lte('billing_date', today)
+          .abortSignal(controller.signal)
+      } finally {
+        clearTimeout(timer)
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['transactions'] })

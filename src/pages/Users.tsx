@@ -72,8 +72,15 @@ function useUpdateRole() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, role }: { id: string; role: UserRole }) => {
-      const { error } = await supabase.from('profiles').update({ role }).eq('id', id)
-      if (error) throw error
+      // 20s abort so a hung role change can't leave the select stuck disabled.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      try {
+        const { error } = await supabase.from('profiles').update({ role }).eq('id', id).abortSignal(controller.signal)
+        if (error) throw error
+      } finally {
+        clearTimeout(timer)
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profiles'] })

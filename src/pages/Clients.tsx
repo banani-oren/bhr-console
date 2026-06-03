@@ -440,13 +440,17 @@ export default function Clients() {
 
   async function handleDelete() {
     if (!deleteTarget) return
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
     try {
-      const { error } = await supabase.from('clients').delete().eq('id', deleteTarget.id)
+      const { error } = await supabase.from('clients').delete().eq('id', deleteTarget.id).abortSignal(controller.signal)
       if (error) throw error
       queryClient.invalidateQueries({ queryKey: ['clients'] })
       setDeleteTarget(null)
     } catch (err) {
       console.error('Delete error:', err)
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 
