@@ -124,9 +124,9 @@ export default function Services() {
   const handleSave = async () => {
     if (!edit.name.trim()) return
     setSaveStatus('saving')
-    // 20s timeout so a hung request never leaves the dialog stuck on "שומר...".
+    // 10s timeout so a hung request never leaves the dialog stuck on "שומר...".
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       await saveMutation.mutateAsync(controller.signal)
       setSaveStatus('success')
@@ -145,7 +145,7 @@ export default function Services() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       try {
         const { count, error: cntErr } = await supabase
           .from('transactions')

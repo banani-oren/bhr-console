@@ -364,7 +364,7 @@ export default function Clients() {
     { editing: Client | null; payload: ReturnType<typeof formToPayload>; permissionIds: string[]; timeLogEnabled: boolean },
     string
   >({
-    timeoutMs: 20000,
+    timeoutMs: 10000,
     mutationFn: async ({ editing, payload, permissionIds, timeLogEnabled }, signal) => {
       let clientId = editing?.id ?? null
       if (editing) {
@@ -441,7 +441,7 @@ export default function Clients() {
   async function handleDelete() {
     if (!deleteTarget) return
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timeoutId = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { error } = await supabase.from('clients').delete().eq('id', deleteTarget.id).abortSignal(controller.signal)
       if (error) throw error
@@ -688,7 +688,7 @@ export default function Clients() {
           status: 'פעיל',
         }
         const ac = new AbortController()
-        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 10000)
         let insErr: unknown = null
         try {
           const res = await supabase.from('clients').insert(payload).abortSignal(ac.signal)
@@ -706,7 +706,7 @@ export default function Clients() {
       for (const u of importAnalysis.updateRows) {
         if (Object.keys(u.updates).length === 0) continue
         const ac = new AbortController()
-        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 10000)
         let updErr: unknown = null
         try {
           const res = await supabase.from('clients').update(u.updates).eq('id', u.existing.id).abortSignal(ac.signal)

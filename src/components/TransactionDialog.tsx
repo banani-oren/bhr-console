@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { useSaveWatchdog } from '@/hooks/useSaveWatchdog'
 import type {
   BillingEvent,
   Client,
@@ -224,6 +225,12 @@ export default function TransactionDialog({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
 
+  // Last-resort safety net backing up handleSave's own 10s abort timeout.
+  useSaveWatchdog(saveStatus === 'saving', () => {
+    setSaveStatus('error')
+    setSaveError('השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.')
+  })
+
   const selectedClient = useMemo(
     () => clients.find((c) => c.id === state.client_id) ?? null,
     [clients, state.client_id],
@@ -388,7 +395,7 @@ export default function TransactionDialog({
     const controller = new AbortController()
     const timeoutId = setTimeout(() => {
       controller.abort(new DOMException('timeout', 'AbortError'))
-    }, 20000)
+    }, 10000)
 
     try {
       const mirrored: Record<string, unknown> = {}
@@ -505,6 +512,8 @@ export default function TransactionDialog({
       }
 
       // Email approval recipients if a recruiter created a new transaction.
+      // Wired to the same abort signal/budget as the rest of handleSave so a hung
+      // edge-function call can't leave saveStatus stuck at 'saving' forever.
       if (!editing && isRecruiter && txnId) {
         try {
           await supabase.functions.invoke('send-approval-email', {
@@ -515,6 +524,7 @@ export default function TransactionDialog({
               serviceType: state.service_type_name,
               amount: payload.net_invoice_amount ?? 0,
             },
+            signal: controller.signal,
           })
         } catch (e) {
           console.warn('approval email skipped:', e)
@@ -953,7 +963,7 @@ function GenerateBillingEventsButton({
     setLoading(true)
     setError(null)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const cf = (transaction.custom_fields ?? {}) as Record<string, unknown>
       const salary = Number(cf.salary ?? transaction.salary ?? 0)
@@ -1056,7 +1066,7 @@ function BillingEventRow({
   const handleDelete = async () => {
     setDeleting(true)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { error } = await supabase.from('billing_events').delete().eq('id', event.id).abortSignal(controller.signal)
       if (error) throw error
@@ -1107,7 +1117,7 @@ function BillingEventRow({
     }
 
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id).abortSignal(controller.signal)
       if (error) throw error

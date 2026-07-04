@@ -92,7 +92,7 @@ export default function HoursEntryDialog({
   }, [open, startTime, endTime])
 
   const mut = useSafeMutation<void, void>({
-    timeoutMs: 20000,
+    timeoutMs: 10000,
     mutationFn: async (_args, signal) => {
       if (!clientId || !clientName) throw new Error('יש לבחור לקוח')
       const visit = new Date(visitDate)

@@ -37,7 +37,7 @@ export default function ProfileEditor({ variant = 'desktop' }: { variant?: Varia
   }, [profile])
 
   const saveProfile = useSafeMutation<{ full_name: string; phone: string | null }, void>({
-    timeoutMs: 20000,
+    timeoutMs: 10000,
     mutationFn: async (payload, signal) => {
       if (!profile) throw new Error('לא מחובר')
       const { error } = await supabase
@@ -163,8 +163,17 @@ function ChangePasswordDialog({
   const [localError, setLocalError] = useState<string | null>(null)
 
   const mut = useSafeMutation<{ newPassword: string }, void>({
-    mutationFn: async ({ newPassword }) => {
-      const { error } = await supabase.auth.updateUser({ password: newPassword })
+    mutationFn: async ({ newPassword }, signal) => {
+      // supabase.auth.updateUser() takes no abort signal, so race it against the
+      // hook's own timeout instead — otherwise a hung request leaves the button
+      // stuck on "מעדכן..." forever (mirrors the guard in Team.tsx's saveMutation).
+      const { error } = await Promise.race([
+        supabase.auth.updateUser({ password: newPassword }),
+        new Promise<never>((_, reject) => {
+          if (signal.aborted) { reject(new DOMException('timeout', 'AbortError')); return }
+          signal.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
+        }),
+      ])
       if (error) throw error
     },
     successHoldMs: 1800,
@@ -294,8 +303,17 @@ function ChangeEmailDialog({
   const [sentTo, setSentTo] = useState<string | null>(null)
 
   const mut = useSafeMutation<{ newEmail: string }, string>({
-    mutationFn: async ({ newEmail }) => {
-      const { error } = await supabase.auth.updateUser({ email: newEmail })
+    mutationFn: async ({ newEmail }, signal) => {
+      // supabase.auth.updateUser() takes no abort signal, so race it against the
+      // hook's own timeout instead — otherwise a hung request leaves the button
+      // stuck on "שולח..." forever (mirrors the guard in Team.tsx's saveMutation).
+      const { error } = await Promise.race([
+        supabase.auth.updateUser({ email: newEmail }),
+        new Promise<never>((_, reject) => {
+          if (signal.aborted) { reject(new DOMException('timeout', 'AbortError')); return }
+          signal.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
+        }),
+      ])
       if (error) throw error
       return newEmail
     },

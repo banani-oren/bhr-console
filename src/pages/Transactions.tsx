@@ -119,9 +119,9 @@ export default function Transactions() {
 
   const approveMut = useMutation({
     mutationFn: async (txnId: string) => {
-      // 20s abort so a hung approve can't freeze the row's button.
+      // 10s abort so a hung approve can't freeze the row's button.
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       try {
         const nowIso = new Date().toISOString()
         const { error } = await supabase

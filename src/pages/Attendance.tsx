@@ -97,7 +97,7 @@ export default function Attendance() {
       ...(notes.trim() ? { notes: notes.trim().slice(0, 250) } : {}),
     }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { error } = await supabase.from('attendance_log').insert(payload).abortSignal(controller.signal)
       if (error) throw error
@@ -271,6 +271,7 @@ function RequestEditButton({
   const [proposedNotes, setProposedNotes] = useState(entry.notes ?? '')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   if (!open) {
     return (
@@ -288,21 +289,23 @@ function RequestEditButton({
   const handleSubmit = async () => {
     if (!reason.trim()) return
     setSaving(true)
+    setError(null)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
-      const { error } = await supabase.from('attendance_edit_requests').insert({
+      const { error: reqError } = await supabase.from('attendance_edit_requests').insert({
         attendance_log_id: entry.id,
         profile_id: profileId,
         proposed_logged_at: new Date(proposedTime).toISOString(),
         proposed_notes: proposedNotes.trim() || null,
         reason: reason.trim(),
       }).abortSignal(controller.signal)
-      if (error) throw error
+      if (reqError) throw reqError
       setOpen(false)
       onSubmitted()
-    } catch {
-      alert('שגיאה בשליחת הבקשה')
+    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setError(isTimeout ? 'השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.' : 'שגיאה בשליחת הבקשה')
     } finally {
       clearTimeout(timer)
       setSaving(false)
@@ -347,6 +350,7 @@ function RequestEditButton({
           placeholder="חובה — הסבר מדוע"
         />
       </div>
+      {error && <p className="text-red-600 text-[11px] text-right" dir="rtl">{error}</p>}
       <div className="flex gap-1">
         <button
           type="button"
@@ -383,6 +387,7 @@ function AdminEditButton({
   )
   const [notes, setNotes] = useState(pair.outEntry?.notes ?? '')
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   if (!open) {
     return (
@@ -399,14 +404,15 @@ function AdminEditButton({
 
   const handleSave = async () => {
     setSaving(true)
+    setError(null)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     const updates: Array<PromiseLike<unknown>> = [
       supabase.from('attendance_log')
         .update({ logged_at: new Date(inTime).toISOString() })
         .eq('id', pair.inEntry.id)
         .abortSignal(controller.signal)
-        .then(({ error }) => { if (error) throw error }),
+        .then(({ error: updError }) => { if (updError) throw updError }),
     ]
     if (pair.outEntry && outTime) {
       updates.push(
@@ -414,15 +420,16 @@ function AdminEditButton({
           .update({ logged_at: new Date(outTime).toISOString(), notes: notes.trim() || null })
           .eq('id', pair.outEntry.id)
           .abortSignal(controller.signal)
-          .then(({ error }) => { if (error) throw error }),
+          .then(({ error: updError }) => { if (updError) throw updError }),
       )
     }
     try {
       await Promise.all(updates)
       setOpen(false)
       onSaved()
-    } catch {
-      alert('שגיאה בשמירה')
+    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setError(isTimeout ? 'השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.' : 'שגיאה בשמירה')
     } finally {
       clearTimeout(timer)
       setSaving(false)
@@ -448,6 +455,7 @@ function AdminEditButton({
           </div>
         </>
       )}
+      {error && <p className="text-red-600 text-[11px] text-right" dir="rtl">{error}</p>}
       <div className="flex gap-1">
         <button type="button" disabled={saving} onClick={() => void handleSave()} className="flex-1 bg-amber-600 text-white rounded px-2 py-1 disabled:opacity-50">
           {saving ? '...' : 'שמור'}
@@ -468,22 +476,26 @@ function AdminDeleteButton({
 }) {
   const [confirm, setConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleDelete = async () => {
     setDeleting(true)
+    setError(null)
     const ids = [pair.inEntry.id, pair.outEntry?.id].filter(Boolean) as string[]
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
-      const { error } = await supabase
+      const { error: delError } = await supabase
         .from('attendance_log')
         .delete()
         .in('id', ids)
         .abortSignal(controller.signal)
-      if (error) throw error
+      if (delError) throw delError
       onDeleted()
     } catch (err) {
       console.error('attendance delete error:', err)
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setError(isTimeout ? 'פג זמן — נסה שנית' : 'שגיאה במחיקה')
     } finally {
       clearTimeout(timer)
       setDeleting(false)
@@ -521,6 +533,7 @@ function AdminDeleteButton({
       >
         ביטול
       </button>
+      {error && <span className="text-red-600 text-[11px]">{error}</span>}
     </div>
   )
 }
@@ -742,7 +755,7 @@ function PendingEditRequests() {
     req: { proposed_logged_at: string; proposed_notes: string | null },
   ) => {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       if (approve) {
         const { error: logErr } = await supabase.from('attendance_log')

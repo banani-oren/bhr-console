@@ -177,7 +177,7 @@ export default function MyHoursView() {
   // unbilled hours of the selected client (admin only — preserved from the
   // old ניהול שעות tab).
   const hoursBillingMut = useSafeMutation<void, void>({
-    timeoutMs: 20000,
+    timeoutMs: 10000,
     mutationFn: async (_args, signal) => {
       if (!selectedClient || !clientId) throw new Error('לא נבחר לקוח')
       if (!selectedClient.hourly_rate) throw new Error('תעריף שעה לא הוגדר ללקוח')

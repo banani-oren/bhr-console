@@ -416,7 +416,7 @@ function BillingEventDashRow({
       patch.status = 'billed'
     }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id).abortSignal(controller.signal)
       if (error) throw error

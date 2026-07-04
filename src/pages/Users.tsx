@@ -31,6 +31,7 @@ import {
 } from '@/components/ui/select'
 import { Plus, Trash2, KeyRound, Pencil } from 'lucide-react'
 import UserEditDialog from '@/components/UserEditDialog'
+import { useSaveWatchdog } from '@/hooks/useSaveWatchdog'
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'מנהל',
@@ -72,9 +73,9 @@ function useUpdateRole() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, role }: { id: string; role: UserRole }) => {
-      // 20s abort so a hung role change can't leave the select stuck disabled.
+      // 10s abort so a hung role change can't leave the select stuck disabled.
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       try {
         const { error } = await supabase.from('profiles').update({ role }).eq('id', id).abortSignal(controller.signal)
         if (error) throw error
@@ -99,18 +100,24 @@ export default function Users() {
 
   const handleImpersonate = async (targetUser: UserProfile) => {
     setImpersonatingId(targetUser.id)
+    // 10s abort so a hung edge-function call can't leave the button stuck forever.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { data, error } = await supabase.functions.invoke('impersonate-user', {
         body: { target_user_id: targetUser.id },
+        signal: controller.signal,
       })
       if (error) throw error
       if (data?.error) throw new Error(data.error)
       if (!data?.url) throw new Error('לא התקבל קישור')
       window.open(data.url, '_blank', 'noopener')
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'שגיאה'
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      const msg = isTimeout ? 'פג זמן — בדוק חיבור לאינטרנט ונסה שנית' : (err instanceof Error ? err.message : 'שגיאה')
       alert(`שגיאה בהתחברות בתור ${targetUser.full_name}: ${msg}`)
     } finally {
+      clearTimeout(timer)
       setImpersonatingId(null)
     }
   }
@@ -138,6 +145,13 @@ export default function Users() {
   // Edit dialog
   const [editTarget, setEditTarget] = useState<UserProfile | null>(null)
 
+  // Last-resort safety net: these four flows call functions.invoke/auth.* directly
+  // (not useSafeMutation), so a last-resort watchdog backs up their own 10s timeouts.
+  useSaveWatchdog(isInviting, () => { setIsInviting(false); setInviteError('השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.') })
+  useSaveWatchdog(isDeleting, () => { setIsDeleting(false); setDeleteError('השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.') })
+  useSaveWatchdog(resetLoading !== null, () => setResetLoading(null))
+  useSaveWatchdog(impersonatingId !== null, () => setImpersonatingId(null))
+
   function openInviteDialog() {
     setInviteForm(emptyInviteForm)
     setInviteSuccess(false)
@@ -158,6 +172,9 @@ export default function Users() {
     if (!inviteForm.email.trim() || !inviteForm.full_name.trim()) return
     setIsInviting(true)
     setInviteError(null)
+    // 10s abort so a hung edge-function call can't leave the button stuck forever.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { data, error } = await supabase.functions.invoke('invite-user', {
         body: {
@@ -165,6 +182,7 @@ export default function Users() {
           full_name: inviteForm.full_name.trim(),
           role: inviteForm.role,
         },
+        signal: controller.signal,
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
@@ -176,9 +194,13 @@ export default function Users() {
         )
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש'
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      const message = isTimeout
+        ? 'השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.'
+        : (err instanceof Error ? err.message : 'אירעה שגיאה בעת הזמנת המשתמש')
       setInviteError(message)
     } finally {
+      clearTimeout(timer)
       setIsInviting(false)
     }
   }
@@ -186,21 +208,33 @@ export default function Users() {
   async function handleResetPassword(email: string) {
     setResetStatus(null)
     setResetLoading(email)
+    // resetPasswordForEmail takes no abort signal, so race it against a 10s
+    // timer instead — a hung request otherwise leaves the button stuck forever.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        // Direct the user to /set-password so the recovery session is handled
-        // correctly (the page reads the #type=recovery hash before it's stripped).
-        redirectTo: `${window.location.origin}/set-password`,
-      })
+      const { error } = await Promise.race([
+        supabase.auth.resetPasswordForEmail(email, {
+          // Direct the user to /set-password so the recovery session is handled
+          // correctly (the page reads the #type=recovery hash before it's stripped).
+          redirectTo: `${window.location.origin}/set-password`,
+        }),
+        new Promise<never>((_, reject) => {
+          if (controller.signal.aborted) { reject(new DOMException('timeout', 'AbortError')); return }
+          controller.signal.addEventListener('abort', () => reject(new DOMException('timeout', 'AbortError')), { once: true })
+        }),
+      ])
       if (error) {
         setResetStatus({ email, ok: false, errorMsg: error.message })
       } else {
         setResetStatus({ email, ok: true })
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'שגיאה לא ידועה'
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      const msg = isTimeout ? 'פג זמן — בדוק חיבור לאינטרנט ונסה שנית' : (err instanceof Error ? err.message : 'שגיאה לא ידועה')
       setResetStatus({ email, ok: false, errorMsg: msg })
     } finally {
+      clearTimeout(timer)
       setResetLoading(null)
       setTimeout(() => setResetStatus(null), 6000)
     }
@@ -210,9 +244,13 @@ export default function Users() {
     if (!deleteTarget) return
     setIsDeleting(true)
     setDeleteError(null)
+    // 10s abort so a hung edge-function call can't leave the button stuck forever.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       const { data, error } = await supabase.functions.invoke('delete-user', {
         body: { user_id: deleteTarget.id },
+        signal: controller.signal,
       })
       if (error) throw new Error(error.message)
       if (data?.error) throw new Error(data.error)
@@ -220,9 +258,13 @@ export default function Users() {
       setDeleteTarget(null)
     } catch (err) {
       console.error('Delete user error:', err)
-      const message = err instanceof Error ? err.message : 'שגיאה במחיקת המשתמש'
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      const message = isTimeout
+        ? 'השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.'
+        : (err instanceof Error ? err.message : 'שגיאה במחיקת המשתמש')
       setDeleteError(message)
     } finally {
+      clearTimeout(timer)
       setIsDeleting(false)
     }
   }

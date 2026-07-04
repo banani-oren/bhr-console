@@ -18,12 +18,12 @@ export function useTable<T>(table: string, options?: { orderBy?: string; ascendi
   })
 }
 
-// Self-contained 20s abort: a hung insert/update/delete can never leave the
+// Self-contained 10s abort: a hung insert/update/delete can never leave the
 // caller's mutation pending forever. The controller is internal so no call
 // site needs to pass a signal.
 function withSaveTimeout<R>(work: (signal: AbortSignal) => Promise<R>): Promise<R> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
   return work(controller.signal).finally(() => clearTimeout(timer))
 }
 

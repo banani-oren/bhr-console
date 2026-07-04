@@ -103,7 +103,7 @@ export default function SetPassword() {
 
       if (user) {
         const ac = new AbortController()
-        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 20000)
+        const t = setTimeout(() => ac.abort(new DOMException('timeout', 'AbortError')), 10000)
         try {
           const { error: profErr } = await supabase
             .from('profiles')

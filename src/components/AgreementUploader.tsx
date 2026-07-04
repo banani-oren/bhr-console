@@ -177,9 +177,9 @@ export default function AgreementUploader({ clients }: { clients: Client[] }) {
   const confirmItem = async (item: PendingItem) => {
     if (!item.extracted || !item.chosenClientId) return
     const clientId = item.chosenClientId
-    // 20s abort so a hung client insert/update can't stall the confirm flow.
+    // 10s abort so a hung client insert/update can't stall the confirm flow.
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
       if (clientId === 'new') {
         // Create a new client stub from extracted fields.

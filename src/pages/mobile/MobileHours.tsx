@@ -144,7 +144,7 @@ export default function MobileHours() {
         return
       }
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      const timeout = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       try {
         const { error: insErr } = await supabase.from('hours_log').insert(payload).abortSignal(controller.signal)
         if (insErr) throw insErr
@@ -177,7 +177,7 @@ export default function MobileHours() {
     let flushed = 0
     for (const item of queue) {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 20000)
+      const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       let error: unknown = null
       try {
         const res = await supabase.from('hours_log').insert(item.payload).abortSignal(controller.signal)
