@@ -101,8 +101,11 @@ export default function BillingReports() {
         .order('billing_date', { ascending: true })
       if (clientId) q = q.eq('transactions.client_id', clientId)
       if (statusFilter !== 'all') q = q.eq('status', statusFilter)
-      if (dateFrom) q = q.gte('billing_date', dateFrom)
-      if (dateTo) q = q.lte('billing_date', dateTo)
+      // Paid events are reported by when they were actually received
+      // (payment_date), not when they were originally invoiced.
+      const dateColumn = statusFilter === 'paid' ? 'payment_date' : 'billing_date'
+      if (dateFrom) q = q.gte(dateColumn, dateFrom)
+      if (dateTo) q = q.lte(dateColumn, dateTo)
       if (serviceTypeFilter !== 'all') q = q.eq('transactions.service_type', serviceTypeFilter)
       const { data, error } = await q
       if (error) throw error
@@ -195,13 +198,19 @@ export default function BillingReports() {
 
   // Totals
   const totals = useMemo(() => {
-    let toBill = 0, billed = 0, outstanding = 0
+    let toBill = 0, billed = 0, paid = 0, outstanding = 0
     for (const e of filteredEvents) {
-      if (e.status === 'to_bill') toBill += Number(e.amount) || 0
-      if (e.status === 'billed') billed += Number(e.amount) || 0
-      if (e.status === 'pending' || e.status === 'to_bill') outstanding += Number(e.amount) || 0
+      const amount = Number(e.amount) || 0
+      if (e.status === 'to_bill') toBill += amount
+      // "סה"כ חויב" = cumulative amount ever invoiced, whether or not it has
+      // since been paid.
+      if (e.status === 'billed' || e.status === 'paid') billed += amount
+      if (e.status === 'paid') paid += amount
+      // "יתרה לגבייה" = invoiced but not yet paid (matches the accuracy rule:
+      // לגבייה = billed only).
+      if (e.status === 'billed') outstanding += amount
     }
-    return { toBill, billed, outstanding }
+    return { toBill, billed, paid, outstanding }
   }, [filteredEvents])
 
   return (
@@ -374,6 +383,10 @@ export default function BillingReports() {
             <div className="flex items-center gap-4">
               <span className="text-muted-foreground">יתרה לגבייה:</span>
               <span className="font-semibold text-amber-700">{formatCurrency(totals.outstanding)}</span>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-muted-foreground">סה"כ שולם:</span>
+              <span className="font-semibold text-emerald-700">{formatCurrency(totals.paid)}</span>
             </div>
           </div>
         )}

@@ -40,6 +40,8 @@ import {
   Check,
   Pencil,
   Loader2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 
 const CHART_COLORS = ['#7c3aed', '#a855f7', '#c084fc', '#e9d5ff', '#8b5cf6']
@@ -296,6 +298,102 @@ function PendingApprovalsCard() {
   )
 }
 
+type ScheduleRow = {
+  id: string
+  amount: number
+  description: string | null
+  paymentDate: string | null
+  clientName: string | null
+}
+
+function ExpectedPaymentSchedule() {
+  const { profile } = useAuth()
+  const storageKey = `bhr_payment_schedule_collapsed_${profile?.id ?? 'anon'}`
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(storageKey) === '1'
+  })
+
+  const { data: rows = [] } = useQuery<ScheduleRow[]>({
+    queryKey: ['admin-dashboard-payment-schedule'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('billing_events')
+        .select('id, amount, description, payment_date, transactions!inner(client_name)')
+        .eq('status', 'billed')
+        .order('payment_date', { ascending: true, nullsFirst: false })
+      if (error) throw error
+      const list = (data ?? []) as unknown as {
+        id: string
+        amount: number | string | null
+        description: string | null
+        payment_date: string | null
+        transactions: { client_name: string | null } | null
+      }[]
+      return list.map((r) => ({
+        id: r.id,
+        amount: Number(r.amount) || 0,
+        description: r.description,
+        paymentDate: r.payment_date,
+        clientName: r.transactions?.client_name ?? null,
+      }))
+    },
+  })
+
+  const toggle = () => {
+    setCollapsed((prev) => {
+      const next = !prev
+      window.localStorage.setItem(storageKey, next ? '1' : '0')
+      return next
+    })
+  }
+
+  if (rows.length === 0) return null
+
+  const total = rows.reduce((sum, r) => sum + r.amount, 0)
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardTitle className="text-base font-semibold">לוח תשלומים צפוי</CardTitle>
+        <Button size="sm" variant="ghost" onClick={toggle} className="gap-1 text-xs text-muted-foreground">
+          {collapsed ? <><ChevronDown className="h-4 w-4" /> הצג</> : <><ChevronUp className="h-4 w-4" /> הסתר</>}
+        </Button>
+      </CardHeader>
+      {!collapsed && (
+        <>
+          <CardContent className="px-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-right px-4">לקוח</TableHead>
+                  <TableHead className="text-right px-4">תיאור</TableHead>
+                  <TableHead className="text-right px-4">סכום</TableHead>
+                  <TableHead className="text-right px-4">תאריך תשלום צפוי</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="px-4 font-medium">{r.clientName ?? '—'}</TableCell>
+                    <TableCell className="px-4 text-xs text-muted-foreground">{r.description ?? '—'}</TableCell>
+                    <TableCell className="px-4 font-medium">{ILS.format(r.amount)}</TableCell>
+                    <TableCell className="px-4"><DateCell value={r.paymentDate} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+          <div className="flex items-center justify-end gap-2 px-4 py-3 border-t text-sm">
+            <span className="text-muted-foreground">סה"כ לגבייה:</span>
+            <span className="font-semibold text-amber-700">{ILS.format(total)}</span>
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
 export default function AdminDashboard() {
   const { data: billingEvents = [], isLoading } = useQuery<EventRow[]>({
     queryKey: ['admin-dashboard-billing-events'],
@@ -439,6 +537,8 @@ export default function AdminDashboard() {
           </Card>
         ))}
       </div>
+
+      <ExpectedPaymentSchedule />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
