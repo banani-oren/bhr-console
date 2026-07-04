@@ -30,6 +30,16 @@ export function formatWorkDate(workDate: string): string {
   return `${d}/${m}/${y}`
 }
 
+const HEBREW_DAYS = ['יום א׳', 'יום ב׳', 'יום ג׳', 'יום ד׳', 'יום ה׳', 'יום ו׳', 'שבת']
+
+/** Formats a YYYY-MM-DD work_date as "יום ד׳ dd/MM/yyyy". */
+export function formatWorkDateWithDay(workDate: string): string {
+  // Noon avoids any UTC/local timezone shift rolling the date to the day before.
+  const d = new Date(`${workDate}T12:00:00`)
+  if (isNaN(d.getTime())) return formatWorkDate(workDate)
+  return `${HEBREW_DAYS[d.getDay()]} ${formatWorkDate(workDate)}`
+}
+
 export type AttendanceStatus =
   | { kind: 'in'; since: string }
   | { kind: 'out'; since: string }

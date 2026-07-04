@@ -7,7 +7,7 @@ import type { AttendanceLog } from '@/lib/types'
 import {
   todayIsrael,
   formatTime,
-  formatWorkDate,
+  formatWorkDateWithDay,
   computeStatus,
   nextAction,
   dayPairs,
@@ -35,6 +35,11 @@ import {
 } from '@/components/ui/table'
 
 const ALL = '__all__'
+const MONTH_ALL = '__all_months__'
+const HE_MONTHS = [
+  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
+]
 
 type EmployeeOption = { id: string; full_name: string; role: string }
 
@@ -382,10 +387,12 @@ function AdminEditButton({
 }) {
   const [open, setOpen] = useState(false)
   const [inTime, setInTime] = useState(toLocalInputValue(pair.inEntry.logged_at))
+  const [inNotes, setInNotes] = useState(pair.inEntry.notes ?? '')
   const [outTime, setOutTime] = useState(
     pair.outEntry ? toLocalInputValue(pair.outEntry.logged_at) : '',
   )
-  const [notes, setNotes] = useState(pair.outEntry?.notes ?? '')
+  const [outNotes, setOutNotes] = useState(pair.outEntry?.notes ?? '')
+  const [addingOut, setAddingOut] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -407,24 +414,36 @@ function AdminEditButton({
     setError(null)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
-    const updates: Array<PromiseLike<unknown>> = [
-      supabase.from('attendance_log')
-        .update({ logged_at: new Date(inTime).toISOString() })
+    try {
+      const { error: e1 } = await supabase
+        .from('attendance_log')
+        .update({ logged_at: new Date(inTime).toISOString(), notes: inNotes.trim() || null })
         .eq('id', pair.inEntry.id)
         .abortSignal(controller.signal)
-        .then(({ error: updError }) => { if (updError) throw updError }),
-    ]
-    if (pair.outEntry && outTime) {
-      updates.push(
-        supabase.from('attendance_log')
-          .update({ logged_at: new Date(outTime).toISOString(), notes: notes.trim() || null })
-          .eq('id', pair.outEntry.id)
+      if (e1) throw e1
+
+      if (pair.outEntry) {
+        if (outTime) {
+          const { error: e2 } = await supabase
+            .from('attendance_log')
+            .update({ logged_at: new Date(outTime).toISOString(), notes: outNotes.trim() || null })
+            .eq('id', pair.outEntry.id)
+            .abortSignal(controller.signal)
+          if (e2) throw e2
+        }
+      } else if (addingOut && outTime) {
+        const { error: e3 } = await supabase
+          .from('attendance_log')
+          .insert({
+            profile_id: pair.inEntry.profile_id,
+            action: 'check_out',
+            logged_at: new Date(outTime).toISOString(),
+            notes: outNotes.trim() || null,
+          })
           .abortSignal(controller.signal)
-          .then(({ error: updError }) => { if (updError) throw updError }),
-      )
-    }
-    try {
-      await Promise.all(updates)
+        if (e3) throw e3
+      }
+
       setOpen(false)
       onSaved()
     } catch (err) {
@@ -440,20 +459,20 @@ function AdminEditButton({
     <div className="border rounded-md p-2 space-y-1.5 bg-amber-50/40 text-xs w-64">
       <p className="font-medium text-amber-800">עריכת רשומה (אדמין)</p>
       <div>
-        <label className="text-muted-foreground">כניסה</label>
+        <label className="text-green-700 font-medium">כניסה</label>
         <input type="datetime-local" className="w-full border rounded px-2 py-1 text-xs mt-0.5" value={inTime} onChange={(e) => setInTime(e.target.value)} dir="ltr" />
+        <input type="text" placeholder="הערות (אופציונלי)" className="w-full border rounded px-2 py-1 text-xs mt-0.5" maxLength={250} value={inNotes} onChange={(e) => setInNotes(e.target.value)} dir="rtl" />
       </div>
-      {pair.outEntry && (
-        <>
-          <div>
-            <label className="text-muted-foreground">יציאה</label>
-            <input type="datetime-local" className="w-full border rounded px-2 py-1 text-xs mt-0.5" value={outTime} onChange={(e) => setOutTime(e.target.value)} dir="ltr" />
-          </div>
-          <div>
-            <label className="text-muted-foreground">תיאור</label>
-            <input type="text" className="w-full border rounded px-2 py-1 text-xs mt-0.5" maxLength={250} value={notes} onChange={(e) => setNotes(e.target.value)} dir="rtl" />
-          </div>
-        </>
+      {pair.outEntry || addingOut ? (
+        <div>
+          <label className="text-orange-700 font-medium">יציאה</label>
+          <input type="datetime-local" className="w-full border rounded px-2 py-1 text-xs mt-0.5" value={outTime} onChange={(e) => setOutTime(e.target.value)} dir="ltr" />
+          <input type="text" placeholder="הערות יציאה (אופציונלי)" className="w-full border rounded px-2 py-1 text-xs mt-0.5" maxLength={250} value={outNotes} onChange={(e) => setOutNotes(e.target.value)} dir="rtl" />
+        </div>
+      ) : (
+        <button type="button" onClick={() => setAddingOut(true)} className="text-purple-700 underline">
+          + הוסף יציאה
+        </button>
       )}
       {error && <p className="text-red-600 text-[11px] text-right" dir="rtl">{error}</p>}
       <div className="flex gap-1">
@@ -543,14 +562,45 @@ function AttendanceReport({ today }: { today: string }) {
   const queryClient = useQueryClient()
   const isAdmin = profile?.role === 'admin'
 
+  const [todayY, todayM] = today.split('-').map(Number)
+  const currentMonthKey = `${todayY}-${String(todayM).padStart(2, '0')}`
+  const currentMonthFrom = `${currentMonthKey}-01`
+
   const [employeeId, setEmployeeId] = useState<string>(ALL)
-  const [dateFrom, setDateFrom] = useState<string>(today)
+  const [monthKey, setMonthKey] = useState<string>(currentMonthKey)
+  const [dateFrom, setDateFrom] = useState<string>(currentMonthFrom)
   const [dateTo, setDateTo] = useState<string>(today)
   const [submitted, setSubmitted] = useState<{
     employeeId: string
     from: string
     to: string
-  } | null>(null)
+  } | null>({ employeeId: ALL, from: currentMonthFrom, to: today })
+
+  const monthOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = []
+    for (let i = 0; i < 12; i++) {
+      let y = todayY
+      let m = todayM - i
+      while (m <= 0) { m += 12; y -= 1 }
+      opts.push({ value: `${y}-${String(m).padStart(2, '0')}`, label: `${HE_MONTHS[m - 1]} ${y}` })
+    }
+    return opts
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today])
+
+  const handleMonthChange = (value: string | null) => {
+    const v = value || MONTH_ALL
+    setMonthKey(v)
+    if (v === MONTH_ALL) {
+      setDateFrom('')
+      setDateTo('')
+    } else {
+      const [y, m] = v.split('-').map(Number)
+      const lastDay = new Date(y, m, 0).getDate()
+      setDateFrom(`${v}-01`)
+      setDateTo(`${v}-${String(lastDay).padStart(2, '0')}`)
+    }
+  }
 
   const { data: employees = [] } = useQuery<EmployeeOption[]>({
     queryKey: ['attendance_employees'],
@@ -574,10 +624,10 @@ function AttendanceReport({ today }: { today: string }) {
       let q = supabase
         .from('attendance_log')
         .select('*')
-        .gte('work_date', submitted!.from)
-        .lte('work_date', submitted!.to)
         .order('work_date', { ascending: false })
         .order('logged_at', { ascending: true })
+      if (submitted!.from) q = q.gte('work_date', submitted!.from)
+      if (submitted!.to) q = q.lte('work_date', submitted!.to)
       if (submitted!.employeeId !== ALL) q = q.eq('profile_id', submitted!.employeeId)
       const { data, error } = await q
       if (error) throw error
@@ -625,7 +675,7 @@ function AttendanceReport({ today }: { today: string }) {
       </div>
 
       <Card className="p-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end">
           <div className="space-y-1">
             <Label className="text-xs text-purple-700">עובד</Label>
             <Select value={employeeId} onValueChange={(v) => setEmployeeId(v || ALL)}>
@@ -639,6 +689,26 @@ function AttendanceReport({ today }: { today: string }) {
                 {employees.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
                     {e.full_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs text-purple-700">בחר חודש</Label>
+            <Select value={monthKey} onValueChange={handleMonthChange}>
+              <SelectTrigger>
+                <span className="truncate text-sm">
+                  {monthKey === MONTH_ALL
+                    ? 'הכל'
+                    : monthOptions.find((o) => o.value === monthKey)?.label ?? monthKey}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MONTH_ALL}>הכל</SelectItem>
+                {monthOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -687,7 +757,7 @@ function AttendanceReport({ today }: { today: string }) {
                   r.pairs.length === 0 ? [] : r.pairs.map((pair, pi) => (
                     <TableRow key={`${r.profileId}__${r.workDate}__${pi}`}>
                       <TableCell className="font-medium">{pi === 0 ? r.name : ''}</TableCell>
-                      <TableCell>{pi === 0 ? formatWorkDate(r.workDate) : ''}</TableCell>
+                      <TableCell className="whitespace-nowrap">{pi === 0 ? formatWorkDateWithDay(r.workDate) : ''}</TableCell>
                       <TableCell dir="ltr" className="text-right text-green-700 font-medium">
                         {formatTime(pair.inEntry.logged_at)}
                       </TableCell>
