@@ -280,7 +280,7 @@ export default function MobileHours() {
 
   return (
     <div className="p-4 space-y-3 pb-24">
-      <Card className="p-3 flex items-center justify-between bg-purple-50 border-purple-100">
+      <Card className="p-3 flex flex-row items-center justify-between bg-purple-50 border-purple-100">
         <button onClick={() => goMonth(-1)} className="p-2 text-purple-700" aria-label="חודש קודם">
           <ChevronRight className="h-5 w-5" />
         </button>
@@ -293,7 +293,7 @@ export default function MobileHours() {
         </button>
       </Card>
 
-      <Card className="p-3 flex items-center justify-around text-center">
+      <Card className="p-3 flex flex-row items-center justify-around text-center">
         <div>
           <p className="text-xl font-bold text-purple-900">{summary.totalHours}</p>
           <p className="text-[11px] text-muted-foreground">סה"כ שעות</p>
