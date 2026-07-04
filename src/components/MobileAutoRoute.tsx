@@ -2,11 +2,10 @@ import { useEffect, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 
-// Batch 5 Phase C: detect mobile via UA + viewport width and auto-redirect
-// to /m/hours UNLESS the user has explicitly opted into desktop view.
-// Override flag (`bhr_force_desktop=1`) is set when an admin clicks
-// "תצוגת דסקטופ" inside /m, and cleared when they click "תצוגת מובייל"
-// in the desktop sidebar.
+// Detect mobile via UA + viewport width and auto-redirect to the /m
+// landing page UNLESS the user has explicitly opted into desktop view.
+// Override flag (`bhr_force_desktop=1`) is set when a user clicks
+// "תצוגת דסקטופ" inside /m.
 export default function MobileAutoRoute() {
   const { profile } = useAuth()
   const navigate = useNavigate()
@@ -29,7 +28,7 @@ export default function MobileAutoRoute() {
     if (window.localStorage.getItem('bhr_force_desktop') === '1') return
 
     ran.current = true
-    navigate('/m/hours', { replace: true })
+    navigate('/m', { replace: true })
   }, [profile, navigate, location.pathname])
 
   return null

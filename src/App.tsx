@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from '@/lib/auth'
 import RequireRole from '@/components/RequireRole'
@@ -17,6 +17,7 @@ import Bonuses from '@/pages/Bonuses'
 import Attendance from '@/pages/Attendance'
 import Profile from '@/pages/Profile'
 import MobileShell from '@/pages/mobile/MobileShell'
+import MobileLanding from '@/pages/mobile/MobileLanding'
 import MobileHours from '@/pages/mobile/MobileHours'
 import MobileAttendance from '@/pages/mobile/MobileAttendance'
 import MobileProfile from '@/pages/mobile/MobileProfile'
@@ -140,22 +141,25 @@ export default function App() {
                 </RequireRole>
               }
             />
-            {/* Batch 5 Phase C: mobile is scoped to hours-only. The
-                /m/transactions route from batch 4 is removed — phones never
-                need the admin transactions surface. withLayout={false}
-                guarantees no admin sidebar leaks into MobileShell. */}
+            {/* Mobile is scoped to hours + attendance + profile only. `/m`
+                itself renders the landing page with zero chrome (no
+                MobileShell header/bottom-nav); the section routes below nest
+                inside MobileShell for the shared header + bottom nav.
+                withLayout={false} guarantees no admin sidebar leaks in. */}
             <Route
               path="/m"
               element={
                 <RequireRole allow={['admin', 'administration', 'recruiter']} withLayout={false}>
-                  <MobileShell />
+                  <Outlet />
                 </RequireRole>
               }
             >
-              <Route index element={<Navigate to="/m/hours" replace />} />
-              <Route path="hours" element={<MobileHours />} />
-              <Route path="attendance" element={<MobileAttendance />} />
-              <Route path="profile" element={<MobileProfile />} />
+              <Route index element={<MobileLanding />} />
+              <Route element={<MobileShell />}>
+                <Route path="hours" element={<MobileHours />} />
+                <Route path="attendance" element={<MobileAttendance />} />
+                <Route path="profile" element={<MobileProfile />} />
+              </Route>
               {/* Legacy mobile transactions route → redirect to hours. */}
               <Route path="transactions" element={<Navigate to="/m/hours" replace />} />
             </Route>

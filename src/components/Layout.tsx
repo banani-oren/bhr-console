@@ -13,7 +13,6 @@ import {
   Trophy,
   LogOut,
   Download,
-  Smartphone,
   Handshake,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
@@ -177,18 +176,6 @@ export default function Layout({ children }: LayoutProps) {
               <span>התקן BHR Console</span>
             </button>
           )}
-          <button
-            onClick={() => {
-              if (typeof window !== 'undefined') {
-                window.localStorage.setItem('bhr_force_desktop', '0')
-              }
-              navigate('/m/hours')
-            }}
-            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium border border-purple-400 text-purple-200 hover:bg-purple-600 hover:text-white transition-colors mb-1"
-          >
-            <Smartphone size={16} />
-            <span>תצוגת מובייל</span>
-          </button>
           <button
             onClick={handleSignOut}
             className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground transition-colors"

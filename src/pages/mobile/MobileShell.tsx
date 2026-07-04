@@ -19,17 +19,17 @@ export default function MobileShell() {
   }
 
   return (
-    <div dir="rtl" className="min-h-[100dvh] flex flex-col bg-background">
-      <header className="px-4 py-3 border-b bg-card flex items-center justify-between">
+    <div dir="rtl" className="min-h-[100dvh] flex flex-col bg-gray-50">
+      <header className="px-4 py-3 bg-purple-950 text-white flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-purple-600 text-white font-bold text-sm">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-white/15 text-white font-bold text-sm">
             B
           </div>
           <div className="min-w-0">
-            <p className="text-xs text-muted-foreground truncate">
+            <p className="text-xs text-purple-100 truncate">
               {profile?.full_name ?? user?.email}
             </p>
-            <p className="text-[10px] tracking-wide text-purple-600">
+            <p className="text-[10px] tracking-wide text-purple-300">
               {profile?.role === 'admin'
                 ? 'מנהל'
                 : profile?.role === 'administration'
@@ -40,7 +40,7 @@ export default function MobileShell() {
         </div>
         <button
           onClick={handleDesktopView}
-          className="text-xs text-purple-700 hover:text-purple-900 flex items-center gap-1 px-2 py-1 rounded-md hover:bg-purple-50"
+          className="text-xs text-purple-200 hover:text-white flex items-center gap-1 px-2 py-1 rounded-md hover:bg-white/10"
           aria-label="תצוגת דסקטופ"
         >
           <Monitor className="h-3.5 w-3.5" />
@@ -52,7 +52,7 @@ export default function MobileShell() {
         <Outlet />
       </main>
 
-      <nav className="fixed bottom-0 inset-x-0 h-16 bg-card border-t grid grid-cols-3 text-sm">
+      <nav className="fixed bottom-0 inset-x-0 bg-white border-t grid grid-cols-3 text-sm pb-[env(safe-area-inset-bottom)]">
         <BottomTab to="/m/hours" icon={<Clock className="h-6 w-6" />} label="שעות" />
         <BottomTab to="/m/attendance" icon={<CalendarCheck className="h-6 w-6" />} label="נוכחות" />
         <BottomTab to="/m/profile" icon={<UserCircle className="h-6 w-6" />} label="פרופיל" />
@@ -67,8 +67,8 @@ function BottomTab({ to, icon, label }: { to: string; icon: React.ReactNode; lab
       to={to}
       className={({ isActive }) =>
         cn(
-          'flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform',
-          isActive ? 'text-purple-600' : 'text-muted-foreground hover:text-foreground',
+          'flex flex-col items-center justify-center gap-0.5 min-h-[56px] active:scale-95 transition-transform border-t-2',
+          isActive ? 'text-purple-700 border-purple-700' : 'text-muted-foreground border-transparent hover:text-foreground',
         )
       }
     >

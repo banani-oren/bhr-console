@@ -11,6 +11,7 @@ import {
   nextAction,
   dayPairs,
   formatHours,
+  formatWorkDateWithDay,
 } from '@/lib/attendance'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -90,6 +91,11 @@ export default function MobileAttendance() {
 
   return (
     <div dir="rtl" className="p-4 space-y-4">
+      <Card className="p-3 text-center bg-purple-50 border-purple-100">
+        <p className="font-semibold text-purple-900">נוכחות</p>
+        <p className="text-xs text-purple-600">{formatWorkDateWithDay(today)}</p>
+      </Card>
+
       <Card className="p-4 space-y-3">
         <div className="text-center">
           <p className="text-xs text-muted-foreground">סטטוס נוכחי</p>

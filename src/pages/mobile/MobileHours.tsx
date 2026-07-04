@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, WifiOff, RefreshCw } from 'lucide-react'
+import { Plus, WifiOff, RefreshCw, ChevronRight, ChevronLeft, Pencil, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { Client, HoursLog as HoursLogType } from '@/lib/types'
@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import {
   Sheet,
   SheetContent,
@@ -17,6 +18,12 @@ import {
 } from '@/components/ui/sheet'
 import ClientPicker from '@/components/ClientPicker'
 import { enqueueHoursEntry, readQueue, removeFromQueue } from '@/lib/offlineQueue'
+import { formatWorkDateWithDay } from '@/lib/attendance'
+
+const HE_MONTHS = [
+  'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
+]
 
 function computeHours(start: string, end: string): number | null {
   if (!start || !end) return null
@@ -36,8 +43,17 @@ export default function MobileHours() {
   const { profile } = useAuth()
   const queryClient = useQueryClient()
   const isAdmin = profile?.role === 'admin'
+  const now = new Date()
+
+  const [month, setMonth] = useState(now.getMonth() + 1)
+  const [year, setYear] = useState(now.getFullYear())
 
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<HoursLogType | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
   const [clientId, setClientId] = useState<string | null>(null)
   const [clientName, setClientName] = useState<string>('')
   const [visitDate, setVisitDate] = useState(today())
@@ -52,6 +68,15 @@ export default function MobileHours() {
   useEffect(() => {
     refreshPending()
   }, [])
+
+  const goMonth = (delta: number) => {
+    let m = month + delta
+    let y = year
+    while (m > 12) { m -= 12; y += 1 }
+    while (m < 1) { m += 12; y -= 1 }
+    setMonth(m)
+    setYear(y)
+  }
 
   const { data: permittedClients = [] } = useQuery<Client[]>({
     queryKey: ['permitted-clients', profile?.id, isAdmin],
@@ -79,16 +104,15 @@ export default function MobileHours() {
   })
 
   const { data: entries = [] } = useQuery<HoursLogType[]>({
-    queryKey: ['m-hours_log', profile?.id],
+    queryKey: ['m-hours_log', profile?.id, month, year],
     enabled: !!profile?.id,
     queryFn: async () => {
-      const since = new Date()
-      since.setDate(since.getDate() - 14)
       const { data, error } = await supabase
         .from('hours_log')
         .select('*')
         .eq('profile_id', profile!.id)
-        .gte('visit_date', since.toISOString().slice(0, 10))
+        .eq('month', month)
+        .eq('year', year)
         .order('visit_date', { ascending: false })
       if (error) throw error
       return data as HoursLogType[]
@@ -106,9 +130,15 @@ export default function MobileHours() {
     return [...g.entries()].sort((a, b) => b[0].localeCompare(a[0]))
   }, [entries])
 
+  const summary = useMemo(() => {
+    const totalHours = entries.reduce((sum, e) => sum + (e.hours || 0), 0)
+    return { totalHours, sessions: entries.length }
+  }, [entries])
+
   const computed = computeHours(startTime, endTime)
 
   const resetForm = () => {
+    setEditingId(null)
     setClientId(null)
     setClientName('')
     setVisitDate(today())
@@ -116,6 +146,23 @@ export default function MobileHours() {
     setEndTime('')
     setDescription('')
     setError(null)
+  }
+
+  const openAdd = () => {
+    resetForm()
+    setSheetOpen(true)
+  }
+
+  const openEdit = (entry: HoursLogType) => {
+    setEditingId(entry.id)
+    setClientId(entry.client_id)
+    setClientName(entry.client_name)
+    setVisitDate(entry.visit_date)
+    setStartTime(entry.start_time ?? '09:00')
+    setEndTime(entry.end_time ?? '')
+    setDescription(entry.description ?? '')
+    setError(null)
+    setSheetOpen(true)
   }
 
   const handleSave = async () => {
@@ -136,7 +183,7 @@ export default function MobileHours() {
     setSaving(true)
     setError(null)
     try {
-      if (!navigator.onLine) {
+      if (!editingId && !navigator.onLine) {
         await enqueueHoursEntry(payload)
         await refreshPending()
         setSheetOpen(false)
@@ -146,8 +193,17 @@ export default function MobileHours() {
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
       try {
-        const { error: insErr } = await supabase.from('hours_log').insert(payload).abortSignal(controller.signal)
-        if (insErr) throw insErr
+        if (editingId) {
+          const { error: updErr } = await supabase
+            .from('hours_log')
+            .update(payload)
+            .eq('id', editingId)
+            .abortSignal(controller.signal)
+          if (updErr) throw updErr
+        } else {
+          const { error: insErr } = await supabase.from('hours_log').insert(payload).abortSignal(controller.signal)
+          if (insErr) throw insErr
+        }
       } finally {
         clearTimeout(timeout)
       }
@@ -156,8 +212,7 @@ export default function MobileHours() {
       setSheetOpen(false)
       resetForm()
     } catch (err) {
-      // If we lost network mid-save, queue locally for retry.
-      if (!navigator.onLine) {
+      if (!editingId && !navigator.onLine) {
         await enqueueHoursEntry(payload)
         await refreshPending()
         setSheetOpen(false)
@@ -168,6 +223,31 @@ export default function MobileHours() {
       setError(err instanceof Error ? err.message : 'שגיאה')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeleting(true)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
+    try {
+      const { error: delErr } = await supabase
+        .from('hours_log')
+        .delete()
+        .eq('id', deleteTarget.id)
+        .abortSignal(controller.signal)
+      if (delErr) throw delErr
+      queryClient.invalidateQueries({ queryKey: ['m-hours_log'] })
+      queryClient.invalidateQueries({ queryKey: ['hours_log'] })
+      setDeleteTarget(null)
+      setExpandedId(null)
+    } catch (err) {
+      console.error('mobile hours delete error:', err)
+      setError(err instanceof Error ? err.message : 'שגיאה במחיקה')
+    } finally {
+      clearTimeout(timeout)
+      setDeleting(false)
     }
   }
 
@@ -199,7 +279,32 @@ export default function MobileHours() {
   }
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="p-4 space-y-3 pb-24">
+      <Card className="p-3 flex items-center justify-between bg-purple-50 border-purple-100">
+        <button onClick={() => goMonth(-1)} className="p-2 text-purple-700" aria-label="חודש קודם">
+          <ChevronRight className="h-5 w-5" />
+        </button>
+        <div className="text-center">
+          <p className="font-semibold text-purple-900">שעות עבודה</p>
+          <p className="text-xs text-purple-600">{HE_MONTHS[month - 1]} {year}</p>
+        </div>
+        <button onClick={() => goMonth(1)} className="p-2 text-purple-700" aria-label="חודש הבא">
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+      </Card>
+
+      <Card className="p-3 flex items-center justify-around text-center">
+        <div>
+          <p className="text-xl font-bold text-purple-900">{summary.totalHours}</p>
+          <p className="text-[11px] text-muted-foreground">סה"כ שעות</p>
+        </div>
+        <div className="w-px h-8 bg-border" />
+        <div>
+          <p className="text-xl font-bold text-purple-900">{summary.sessions}</p>
+          <p className="text-[11px] text-muted-foreground">דיווחים</p>
+        </div>
+      </Card>
+
       {pendingCount > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-md px-3 py-2 text-xs flex items-center justify-between">
           <span className="flex items-center gap-1 text-amber-800">
@@ -215,16 +320,119 @@ export default function MobileHours() {
         </div>
       )}
 
-      <Button
-        onClick={() => setSheetOpen(true)}
-        className="w-full h-14 text-base bg-purple-600 hover:bg-purple-700 text-white shadow-md"
+      <div className="space-y-3">
+        {groups.length === 0 ? (
+          <Card className="p-6 text-center text-sm text-muted-foreground">
+            אין דיווחים בחודש זה.
+          </Card>
+        ) : (
+          groups.map(([date, rows]) => (
+            <Card key={date} className="p-3 space-y-2">
+              <p className="text-xs font-medium text-purple-700">{formatWorkDateWithDay(date)}</p>
+              <div className="space-y-1">
+                {rows.map((r) => {
+                  const billed = !!r.billed_transaction_id
+                  const expanded = expandedId === r.id
+                  return (
+                    <div key={r.id} className="border-b last:border-0 py-1.5">
+                      <button
+                        className="w-full flex items-center justify-between text-sm text-right"
+                        onClick={() => setExpandedId(expanded ? null : r.id)}
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium flex items-center gap-1.5">
+                            {r.client_name}
+                            {billed && (
+                              <Badge variant="outline" className="text-green-700 border-green-300 text-[9px]">
+                                חויב ✓
+                              </Badge>
+                            )}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            <span dir="ltr">
+                              {(r.start_time ?? '—')} → {(r.end_time ?? '—')}
+                            </span>
+                            {!expanded && r.description ? ` · ${r.description}` : ''}
+                          </p>
+                        </div>
+                        <span className="text-purple-700 font-semibold text-sm shrink-0 ms-2">{r.hours} ש'</span>
+                      </button>
+                      {expanded && (
+                        <div className="mt-2 space-y-2">
+                          {r.description && (
+                            <p className="text-xs text-muted-foreground bg-muted/30 rounded-md p-2">
+                              {r.description}
+                            </p>
+                          )}
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1"
+                              disabled={billed}
+                              title={billed ? 'נעול — חויב' : 'עריכה'}
+                              onClick={() => openEdit(r)}
+                            >
+                              <Pencil className="h-3.5 w-3.5 ml-1" /> עריכה
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1 text-red-600 border-red-200 hover:bg-red-50"
+                              disabled={billed}
+                              title={billed ? 'נעול — חויב' : 'מחיקה'}
+                              onClick={() => setDeleteTarget(r)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 ml-1" /> מחיקה
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          ))
+        )}
+      </div>
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-end" onClick={() => setDeleteTarget(null)}>
+          <Card className="w-full rounded-b-none p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm text-center">
+              למחוק את הדיווח של <span className="font-medium">{deleteTarget.client_name}</span>?
+            </p>
+            {error && <p className="text-xs text-red-600 text-center">{error}</p>}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 text-red-600 border-red-200 hover:bg-red-50"
+                onClick={handleDelete}
+                disabled={deleting}
+              >
+                {deleting ? 'מוחק...' : 'כן, מחק'}
+              </Button>
+              <Button variant="outline" className="flex-1" onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                ביטול
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <button
+        onClick={openAdd}
+        className="fixed bottom-20 left-4 z-30 flex items-center justify-center w-14 h-14 rounded-full bg-purple-700 hover:bg-purple-800 text-white shadow-lg active:scale-95 transition-transform"
+        aria-label="דווח שעות"
       >
-        <Plus className="h-5 w-5 ml-1" /> דווח שעות
-      </Button>
+        <Plus className="h-6 w-6" />
+      </button>
+
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent className="max-h-[92vh] overflow-y-auto" dir="rtl">
+        <SheetContent side="bottom" className="max-h-[92vh] overflow-y-auto rounded-t-2xl" dir="rtl">
           <SheetHeader>
-            <SheetTitle>דיווח שעות</SheetTitle>
+            <SheetTitle>{editingId ? 'עריכת דיווח' : 'דיווח שעות'}</SheetTitle>
           </SheetHeader>
           <div className="py-3 space-y-3">
             {permittedClients.length === 0 ? (
@@ -274,15 +482,15 @@ export default function MobileHours() {
                   <Button
                     onClick={handleSave}
                     disabled={saving || !clientId || !startTime || !endTime}
-                    className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                    className="flex-1 h-12 bg-purple-600 hover:bg-purple-700 text-white"
                   >
                     {saving ? 'שומר...' : 'שמור'}
                   </Button>
-                  <Button variant="outline" onClick={() => setSheetOpen(false)} disabled={saving}>
+                  <Button variant="outline" className="h-12" onClick={() => setSheetOpen(false)} disabled={saving}>
                     ביטול
                   </Button>
                 </div>
-                {!navigator.onLine && (
+                {!navigator.onLine && !editingId && (
                   <p className="text-[11px] text-muted-foreground text-center">
                     המכשיר לא מחובר לאינטרנט — הדיווח ישמר מקומית ויסונכרן כשהחיבור יחזור.
                   </p>
@@ -292,36 +500,6 @@ export default function MobileHours() {
           </div>
         </SheetContent>
       </Sheet>
-
-      <div className="space-y-3">
-        {groups.length === 0 ? (
-          <Card className="p-6 text-center text-sm text-muted-foreground">
-            אין דיווחים בשבועיים האחרונים.
-          </Card>
-        ) : (
-          groups.map(([date, rows]) => (
-            <Card key={date} className="p-3 space-y-2">
-              <p className="text-xs font-medium text-purple-700">{date}</p>
-              <div className="space-y-1">
-                {rows.map((r) => (
-                  <div key={r.id} className="flex items-center justify-between text-sm border-b last:border-0 py-1">
-                    <div>
-                      <p className="font-medium">{r.client_name}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        <span dir="ltr">
-                          {(r.start_time ?? '—')} → {(r.end_time ?? '—')}
-                        </span>
-                        {r.description ? ` · ${r.description}` : ''}
-                      </p>
-                    </div>
-                    <span className="text-purple-700 font-semibold text-sm">{r.hours} ש'</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          ))
-        )}
-      </div>
     </div>
   )
 }
