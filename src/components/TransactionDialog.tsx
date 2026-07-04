@@ -73,6 +73,8 @@ const SECTION2_MANAGED_KEYS = new Set([
   'warranty_end_date',
 ])
 
+type ExecutionDate = { date: string; hours: number }
+
 export type DialogInitial = {
   kind?: TransactionKind
   service_type_id?: string | null
@@ -600,15 +602,41 @@ export default function TransactionDialog({
   }
 
   const isGiyus = state.service_type_name === 'גיוס'
+  const isHadracha = state.service_type_name === 'הדרכה'
+
+  // הדרכה pricing: מחיר (custom.price) × number of execution dates + travel.
+  const executionDates = (state.custom.execution_dates as ExecutionDate[] | undefined) ?? []
+  const hadrachaPrice = Number(state.custom.price) || 0
+  const hadrachaTravelEnabled = !!state.custom.travel_billing_enabled
+  const hadrachaTravelAmount = hadrachaTravelEnabled ? Number(state.custom.travel_billing_amount) || 0 : 0
+  const hadrachaTotal = hadrachaPrice * executionDates.length + hadrachaTravelAmount
+
+  const setExecutionDates = (dates: ExecutionDate[]) => setCustom('execution_dates', dates)
+
+  // Always keep at least one (blank) execution-date row while on הדרכה.
+  useEffect(() => {
+    if (isHadracha && executionDates.length === 0) {
+      setCustom('execution_dates', [{ date: '', hours: 0 }])
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHadracha, executionDates.length])
+
+  // Keep net_invoice_amount (and its custom_fields mirror) in sync with the
+  // live הדרכה total so both the on-screen total and the saved amount match.
+  useEffect(() => {
+    if (!isHadracha) return
+    setCustom('net_invoice_amount', Math.round(hadrachaTotal * 100) / 100)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHadracha, hadrachaPrice, executionDates.length, hadrachaTravelEnabled, hadrachaTravelAmount])
 
   const renderField = (f: ServiceField) => {
     if (SECTION2_MANAGED_KEYS.has(f.key)) return null
     const value = state.custom[f.key]
     const widthCls = f.width === 'full' ? 'md:col-span-2' : ''
     const label = `${f.label}${f.derived ? ' 🔄' : ''}`
-    const wrap = (child: React.ReactNode) => (
+    const wrap = (child: React.ReactNode, labelOverride?: string) => (
       <div key={f.key} className={`space-y-1 ${widthCls}`}>
-        <Label className="text-purple-700">{label}</Label>
+        <Label className="text-purple-700">{labelOverride ?? label}</Label>
         {child}
       </div>
     )
@@ -638,6 +666,39 @@ export default function TransactionDialog({
           />
         </div>,
       ]
+    }
+
+    // גיוס gets an optional candidate number right below the candidate name, so
+    // billing can reference a number instead of exposing the candidate's name.
+    if (f.key === 'candidate_name' && isGiyus) {
+      return [
+        <div key="candidate_name" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">{label}</Label>
+          <Input value={(value as string) ?? ''} onChange={(e) => setCustom(f.key, e.target.value)} {...inputProps} />
+        </div>,
+        <div key="candidate_number" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">מספר מועמד</Label>
+          <Input
+            value={(state.custom.candidate_number as string) ?? ''}
+            onChange={(e) => setCustom('candidate_number', e.target.value)}
+            placeholder="אופציונלי"
+          />
+        </div>,
+      ]
+    }
+
+    // הדרכה: relabel the flat-fee "מחיר" field for clarity (still custom.price).
+    if (f.key === 'price' && isHadracha) {
+      return wrap(
+        <Input
+          type="number"
+          dir="ltr"
+          value={(value as number | string | undefined) ?? ''}
+          onChange={(e) => setCustom(f.key, e.target.value === '' ? null : Number(e.target.value))}
+          {...inputProps}
+        />,
+        'מחיר הדרכה',
+      )
     }
 
     switch (f.type) {
@@ -771,6 +832,85 @@ export default function TransactionDialog({
             {!isTimePeriod && !selectedServiceType && (
               <p className="text-sm text-muted-foreground mt-3">בחר סוג שירות להצגת שדות.</p>
             )}
+
+            {isHadracha && (
+              <div className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label className="text-purple-700">תאריכי ביצוע</Label>
+                  {executionDates.map((ed, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <DateInput
+                        value={ed.date}
+                        onChange={(e) => {
+                          const next = [...executionDates]
+                          next[i] = { ...next[i], date: e.target.value }
+                          setExecutionDates(next)
+                        }}
+                      />
+                      <Input
+                        type="number"
+                        dir="ltr"
+                        min={0}
+                        max={24}
+                        className="w-24"
+                        placeholder="שעות"
+                        value={ed.hours ?? ''}
+                        onChange={(e) => {
+                          const next = [...executionDates]
+                          next[i] = { ...next[i], hours: e.target.value === '' ? 0 : Number(e.target.value) }
+                          setExecutionDates(next)
+                        }}
+                      />
+                      <span className="text-xs text-muted-foreground shrink-0">שע&apos;</span>
+                      <button
+                        type="button"
+                        disabled={executionDates.length <= 1}
+                        onClick={() => setExecutionDates(executionDates.filter((_, idx) => idx !== i))}
+                        className="text-muted-foreground hover:text-red-500 disabled:opacity-30 transition-colors"
+                        title="הסר תאריך"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setExecutionDates([...executionDates, { date: '', hours: 0 }])}
+                    className="text-sm text-purple-700 underline"
+                  >
+                    + הוסף תאריך
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={hadrachaTravelEnabled}
+                    onCheckedChange={(v) => setCustom('travel_billing_enabled', v)}
+                  />
+                  <Label>חיוב נסיעות</Label>
+                  {hadrachaTravelEnabled && (
+                    <Input
+                      type="number"
+                      dir="ltr"
+                      className="w-32"
+                      placeholder="סכום ₪"
+                      value={(state.custom.travel_billing_amount as number | string | undefined) ?? ''}
+                      onChange={(e) =>
+                        setCustom('travel_billing_amount', e.target.value === '' ? null : Number(e.target.value))
+                      }
+                    />
+                  )}
+                </div>
+
+                <div className="rounded-lg bg-purple-50 p-3 text-sm">
+                  <p className="font-semibold text-purple-900">סה&quot;כ לחיוב: {fmt(hadrachaTotal)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    ({fmt(hadrachaPrice)} × {executionDates.length} תאריכים
+                    {hadrachaTravelEnabled ? ` + ${fmt(hadrachaTravelAmount)} נסיעות` : ''})
+                  </p>
+                </div>
+              </div>
+            )}
             {isTimePeriod && (
               <Card className="p-3 mt-4 bg-amber-50/50">
                 <h4 className="text-xs font-semibold text-amber-800 mb-2">דיווח שעות</h4>
@@ -794,55 +934,61 @@ export default function TransactionDialog({
 
           <Separator />
 
-          {/* Section 2 — תאריכים */}
+          {/* Section 2 — תאריכים. The date sub-fields don't apply to הדרכה
+              (no work-start/end, warranty, or close date for a training
+              session) — הערות stays visible for every service type. */}
           <div>
             <h3 className="text-sm font-semibold text-purple-700 mb-3">תאריכים</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>תאריך התחלת עבודה</Label>
-                <DateInput
-                  value={state.work_start_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, work_start_date: e.target.value || null }))}
-                />
-                <p className="text-[11px] text-muted-foreground">בעת שמירה — נוצרים אירועי חיוב לפי פיצול התשלום של הלקוח.</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label>תאריך סיום עבודה</Label>
-                <DateInput
-                  value={state.work_end_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, work_end_date: e.target.value || null }))}
-                />
-                <p className="text-[11px] text-muted-foreground">בעת שמירה — אירועי חיוב עתידיים מבוטלים.</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="flex items-center gap-1">
-                  תקופת אחריות מסתיימת
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const days = selectedClient?.warranty_days ?? null
-                      if (state.work_start_date && days != null) {
-                        setState((s) => ({ ...s, warranty_end_date: addDays(state.work_start_date!, days) }))
-                      }
-                    }}
-                    className="text-purple-500 hover:text-purple-700"
-                    title="חשב מחדש מתחילת עבודה + תקופת אחריות"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                  </button>
-                </Label>
-                <DateInput
-                  value={state.warranty_end_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, warranty_end_date: e.target.value || null }))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>תאריך סגירה</Label>
-                <DateInput
-                  value={state.close_date ?? ''}
-                  onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
-                />
-              </div>
+              {!isHadracha && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>תאריך התחלת עבודה</Label>
+                    <DateInput
+                      value={state.work_start_date ?? ''}
+                      onChange={(e) => setState((s) => ({ ...s, work_start_date: e.target.value || null }))}
+                    />
+                    <p className="text-[11px] text-muted-foreground">בעת שמירה — נוצרים אירועי חיוב לפי פיצול התשלום של הלקוח.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>תאריך סיום עבודה</Label>
+                    <DateInput
+                      value={state.work_end_date ?? ''}
+                      onChange={(e) => setState((s) => ({ ...s, work_end_date: e.target.value || null }))}
+                    />
+                    <p className="text-[11px] text-muted-foreground">בעת שמירה — אירועי חיוב עתידיים מבוטלים.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="flex items-center gap-1">
+                      תקופת אחריות מסתיימת
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const days = selectedClient?.warranty_days ?? null
+                          if (state.work_start_date && days != null) {
+                            setState((s) => ({ ...s, warranty_end_date: addDays(state.work_start_date!, days) }))
+                          }
+                        }}
+                        className="text-purple-500 hover:text-purple-700"
+                        title="חשב מחדש מתחילת עבודה + תקופת אחריות"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </button>
+                    </Label>
+                    <DateInput
+                      value={state.warranty_end_date ?? ''}
+                      onChange={(e) => setState((s) => ({ ...s, warranty_end_date: e.target.value || null }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>תאריך סגירה</Label>
+                    <DateInput
+                      value={state.close_date ?? ''}
+                      onChange={(e) => setState((s) => ({ ...s, close_date: e.target.value || null }))}
+                    />
+                  </div>
+                </>
+              )}
               <div className="space-y-1.5 md:col-span-2">
                 <Label>הערות</Label>
                 <Textarea
