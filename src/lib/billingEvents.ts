@@ -79,22 +79,43 @@ export function generateServiceBillingEvents(params: {
     ? paymentSplit
     : [{ percent: 100, days: 0 }]
 
-  return split.map((s, i) => {
-    const gross = totalCommission * (s.percent / 100)
-    const advance = i === 0 ? (advanceAmount ?? 0) : 0
-    const supplierAmt = Math.round(gross * (supplierPercent / 100) * 100) / 100
-    const amount = Math.round((gross - advance) * 100) / 100
-    const billingDate = addDays(workStartDate, s.days)
-    const description = [
-      serviceType,
-      candidateName,
-      `${s.percent}%`,
-      i === 0 && advance > 0 ? `(בניכוי מקדמה ₪${advance.toLocaleString('he-IL')})` : null,
-    ].filter(Boolean).join(' · ')
+  const events: BillingEventDraft[] = []
+  const advance = Math.round((advanceAmount ?? 0) * 100) / 100
+  const hasAdvance = advance > 0
+  let eventIndex = 1
 
-    return {
+  if (hasAdvance) {
+    const advanceSupplierAmt = Math.round(advance * (supplierPercent / 100) * 100) / 100
+    events.push({
       transaction_id: transactionId,
-      event_index: i + 1,
+      event_index: eventIndex++,
+      amount: advance,
+      description: [serviceType, candidateName, 'מקדמה'].filter(Boolean).join(' · '),
+      billing_date: workStartDate,
+      status: 'pending' as const,
+      invoice_number: null,
+      payment_date: null,
+      receipt_number: null,
+      advance_applied: advance,
+      supplier_amount: advanceSupplierAmt,
+    })
+  }
+
+  // Remaining commission after the advance is split across the client's payment
+  // terms exactly as before the advance existed — payment_split_json percentages
+  // always apply to what's left to collect, not the original gross total.
+  const remaining = hasAdvance ? Math.max(totalCommission - advance, 0) : totalCommission
+
+  for (const s of split) {
+    const gross = remaining * (s.percent / 100)
+    const supplierAmt = Math.round(gross * (supplierPercent / 100) * 100) / 100
+    const amount = Math.round(gross * 100) / 100
+    const billingDate = addDays(workStartDate, s.days)
+    const description = [serviceType, candidateName, `${s.percent}%`].filter(Boolean).join(' · ')
+
+    events.push({
+      transaction_id: transactionId,
+      event_index: eventIndex++,
       amount,
       description,
       billing_date: billingDate,
@@ -102,10 +123,12 @@ export function generateServiceBillingEvents(params: {
       invoice_number: null,
       payment_date: null,
       receipt_number: null,
-      advance_applied: advance,
+      advance_applied: 0,
       supplier_amount: supplierAmt,
-    }
-  })
+    })
+  }
+
+  return events
 }
 
 export function generateTimePeriodBillingEvent(params: {
@@ -197,4 +220,78 @@ export function resolveAdvanceAmount(
   if (advanceType === 'fixed') return advanceAmount
   if (advanceType === 'percent') return salary * (advanceAmount / 100)
   return 0
+}
+
+/**
+ * Recomputes billing events for a גיוס transaction after final_salary changes,
+ * when some events may already be billed/paid (and therefore locked/untouchable).
+ *
+ * The advance always stays derived from expected salary (locked once generated —
+ * never recalculated here). Split events are regenerated from final salary using
+ * generateServiceBillingEvents as the reference shape (same event_index/dates/
+ * descriptions a fresh generation would produce), but any event_index that's
+ * already billed/paid is left out of the result entirely (untouched in the DB).
+ * The LAST still-open event absorbs whatever delta remains so that
+ * locked-events-total + regenerated-events-total == the new total commission.
+ */
+export function reconcileFinalSalaryBillingEvents(params: {
+  transactionId: string
+  existingEvents: BillingEvent[]
+  finalSalary: number
+  commissionPercent: number
+  workStartDate: string
+  paymentSplit: PaymentSplit[]
+  advanceAmount: number
+  supplierPercent: number
+  candidateName: string
+  serviceType: string
+}): { toUpsert: BillingEventDraft[]; warning: string | null } {
+  const {
+    transactionId, existingEvents, finalSalary, commissionPercent,
+    workStartDate, paymentSplit, advanceAmount, supplierPercent,
+    candidateName, serviceType,
+  } = params
+
+  const locked = existingEvents.filter((e) => e.status === 'billed' || e.status === 'paid')
+  const lockedIndices = new Set(locked.map((e) => e.event_index))
+  const lockedSum = locked.reduce((sum, e) => sum + e.amount, 0)
+
+  const newTotalCommission = finalSalary * (commissionPercent / 100)
+
+  // Always pass the real advanceAmount here (even if the advance event itself is
+  // already locked) so the resulting event_index layout (1=advance, 2+=splits)
+  // matches the transaction's actual shape — the lockedIndices filter below is
+  // what excludes the advance from toRegen when it's already billed/paid, not a
+  // change to advanceAmount. Passing 0 here would shift every split event's
+  // index down by one and misalign it against the real DB rows.
+  const fresh = generateServiceBillingEvents({
+    transactionId,
+    salary: finalSalary,
+    commissionPercent,
+    workStartDate,
+    paymentSplit,
+    advanceAmount,
+    supplierPercent,
+    candidateName,
+    serviceType,
+  })
+  const toRegen = fresh.filter((e) => !lockedIndices.has(e.event_index))
+
+  let warning: string | null = null
+  if (toRegen.length > 0) {
+    const lastIdx = toRegen.length - 1
+    const sumOfOthers = toRegen.slice(0, lastIdx).reduce((sum, e) => sum + e.amount, 0)
+    const reconciled = Math.round((newTotalCommission - lockedSum - sumOfOthers) * 100) / 100
+    if (reconciled < 0) {
+      warning = 'שכר סופי גורם לסכום שלילי באירוע החיוב האחרון — יש לבדוק ידנית.'
+    }
+    toRegen[lastIdx] = { ...toRegen[lastIdx], amount: reconciled }
+  } else if (Math.round((newTotalCommission - lockedSum) * 100) / 100 !== 0) {
+    // Every event is already billed/paid — there's no open slot left to absorb
+    // the delta between the old and new total commission. Nothing to upsert;
+    // just tell the admin so they know to reconcile manually if needed.
+    warning = 'כל אירועי החיוב כבר חויבו/שולמו — לא ניתן לעדכן אוטומטית את ההפרש משכר סופי. יש לבדוק ידנית.'
+  }
+
+  return { toUpsert: toRegen, warning }
 }

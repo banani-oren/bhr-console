@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { DateInput } from '@/components/ui/date-input'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Trash2 } from 'lucide-react'
@@ -24,6 +24,7 @@ import {
   cancelFutureBillingEvents,
   generateServiceBillingEvents,
   parsePaymentTermDays,
+  reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
 } from '@/lib/billingEvents'
@@ -224,6 +225,10 @@ export default function TransactionDialog({
   const [state, setState] = useState<DialogState>(() => emptyState(profile?.full_name ?? ''))
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
+  // Snapshot of final_salary as loaded, so handleSave can tell whether the admin
+  // actually changed it (vs. just re-saving other fields) before offering to
+  // recalculate billing events.
+  const originalFinalSalaryRef = useRef<number>(0)
 
   // Last-resort safety net backing up handleSave's own 10s abort timeout.
   useSaveWatchdog(saveStatus === 'saving', () => {
@@ -271,6 +276,7 @@ export default function TransactionDialog({
       const legacySignDate =
         editing.close_date ??
         (typeof custom.sign_date === 'string' ? (custom.sign_date as string) : null)
+      originalFinalSalaryRef.current = Number(custom.final_salary) || 0
       setState({
         kind: editing.kind ?? 'service',
         service_type_id: editing.service_type_id,
@@ -296,6 +302,7 @@ export default function TransactionDialog({
         net_invoice_amount: editing.net_invoice_amount,
       })
     } else {
+      originalFinalSalaryRef.current = 0
       const s = emptyState(profile?.full_name ?? '')
       if (initial) {
         s.kind = initial.kind ?? s.kind
@@ -389,6 +396,19 @@ export default function TransactionDialog({
   const transactionApproved = !!editing?.approved_at || !editing?.needs_approval
 
   const handleSave = async () => {
+    // Ask BEFORE starting the abort timer — window.confirm() blocks the thread,
+    // and a slow decision here must not eat into the network request's timeout
+    // budget (which would fire the moment the dialog closes).
+    const isGiyusNow = state.service_type_name === 'גיוס'
+    const finalSalaryNow = Number(state.custom.final_salary) || 0
+    const finalSalaryChanged = isGiyusNow && finalSalaryNow !== originalFinalSalaryRef.current
+    const hasExistingEvents = !!editing && txnBillingEvents.length > 0
+    if (finalSalaryChanged && hasExistingEvents) {
+      const proceed = window.confirm('שכר סופי עודכן. לעדכן את אירועי החיוב בהתאם?')
+      if (!proceed) return
+    }
+    const shouldReconcile = finalSalaryChanged && hasExistingEvents
+
     setSaveStatus('saving')
     setSaveError(null)
 
@@ -442,12 +462,16 @@ export default function TransactionDialog({
         ...approvalFields,
       }
 
-      // For service kind: compute net_invoice_amount from salary × commission% (no billing_percent)
+      // For service kind: compute net_invoice_amount from salary × commission% (no billing_percent).
+      // For גיוס, final_salary (once set) is the more accurate figure and takes priority.
       if (state.kind === 'service') {
-        const salary = Number(state.custom.salary) || 0
+        const expectedSalary = Number(state.custom.salary) || 0
+        const finalSalaryVal = Number(state.custom.final_salary) || 0
+        const isGiyusNow = state.service_type_name === 'גיוס'
+        const effectiveSalaryForInvoice = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
         const commPct = Number(state.custom.commission_percent) || 0
-        if (salary > 0 && commPct > 0) {
-          const totalCommission = Math.round(salary * (commPct / 100) * 100) / 100
+        if (effectiveSalaryForInvoice > 0 && commPct > 0) {
+          const totalCommission = Math.round(effectiveSalaryForInvoice * (commPct / 100) * 100) / 100
           payload.net_invoice_amount = totalCommission
           payload.commission_amount = totalCommission
         }
@@ -471,26 +495,47 @@ export default function TransactionDialog({
 
       // Generate billing events for service transactions when work_start_date is set.
       if (state.kind === 'service' && state.work_start_date && txnId) {
-        const salary = Number(state.custom.salary) || 0
+        const expectedSalary = Number(state.custom.salary) || 0
+        const finalSalaryVal = Number(state.custom.final_salary) || 0
+        const effectiveSalary = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
         const commissionPct = Number(state.custom.commission_percent) || 0
         const supplierPct = state.supplier_percent ?? 0
         const paymentSplit = selectedClient?.payment_split_json ?? []
         const advType: AdvanceType = effectiveAdvanceType
         const advAmount = effectiveAdvanceAmount ? Number(effectiveAdvanceAmount) : null
-        const advance = resolveAdvanceAmount(advType || null, advAmount, salary, commissionPct)
+        // Advance is always derived from expected salary — locked once generated,
+        // never recalculated from final_salary.
+        const advance = resolveAdvanceAmount(advType || null, advAmount, expectedSalary, commissionPct)
 
-        const events = generateServiceBillingEvents({
-          transactionId: txnId,
-          salary,
-          commissionPercent: commissionPct,
-          workStartDate: state.work_start_date,
-          paymentSplit,
-          advanceAmount: advance,
-          supplierPercent: supplierPct,
-          candidateName: String(state.custom.candidate_name ?? ''),
-          serviceType: state.service_type_name,
-        })
-        await upsertBillingEvents(txnId, events, controller.signal)
+        if (shouldReconcile) {
+          const { toUpsert, warning } = reconcileFinalSalaryBillingEvents({
+            transactionId: txnId,
+            existingEvents: txnBillingEvents,
+            finalSalary: effectiveSalary,
+            commissionPercent: commissionPct,
+            workStartDate: state.work_start_date,
+            paymentSplit,
+            advanceAmount: advance,
+            supplierPercent: supplierPct,
+            candidateName: String(state.custom.candidate_name ?? ''),
+            serviceType: state.service_type_name,
+          })
+          await upsertBillingEvents(txnId, toUpsert, controller.signal)
+          if (warning) window.alert(warning)
+        } else {
+          const events = generateServiceBillingEvents({
+            transactionId: txnId,
+            salary: effectiveSalary,
+            commissionPercent: commissionPct,
+            workStartDate: state.work_start_date,
+            paymentSplit,
+            advanceAmount: advance,
+            supplierPercent: supplierPct,
+            candidateName: String(state.custom.candidate_name ?? ''),
+            serviceType: state.service_type_name,
+          })
+          await upsertBillingEvents(txnId, events, controller.signal)
+        }
 
         // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
         const txnApproved = approvalFields.approved_at != null || (editing && editing.approved_at)
@@ -554,6 +599,8 @@ export default function TransactionDialog({
     }
   }
 
+  const isGiyus = state.service_type_name === 'גיוס'
+
   const renderField = (f: ServiceField) => {
     if (SECTION2_MANAGED_KEYS.has(f.key)) return null
     const value = state.custom[f.key]
@@ -566,6 +613,33 @@ export default function TransactionDialog({
       </div>
     )
     const inputProps = { disabled: !!f.derived }
+
+    // גיוס gets two salary fields (expected + final) instead of the usual one.
+    if (f.key === 'salary' && isGiyus) {
+      return [
+        <div key="salary" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">שכר משוער</Label>
+          <Input
+            type="number"
+            dir="ltr"
+            value={(value as number | string | undefined) ?? ''}
+            onChange={(e) => setCustom('salary', e.target.value === '' ? null : Number(e.target.value))}
+            {...inputProps}
+          />
+        </div>,
+        <div key="final_salary" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">שכר סופי</Label>
+          <Input
+            type="number"
+            dir="ltr"
+            placeholder="אופציונלי — עד לאישור המשרה"
+            value={(state.custom.final_salary as number | string | undefined) ?? ''}
+            onChange={(e) => setCustom('final_salary', e.target.value === '' ? null : Number(e.target.value))}
+          />
+        </div>,
+      ]
+    }
+
     switch (f.type) {
       case 'text':
         return wrap(
@@ -912,7 +986,10 @@ function BillingEventsPanel({
   transaction: Transaction
   selectedClient: Client | null
 }) {
+  const { profile } = useAuth()
+  const isAdmin = profile?.role === 'admin'
   const paymentTermsDays = parsePaymentTermDays(selectedClient?.payment_terms)
+  const nextEventIndex = events.reduce((m, e) => Math.max(m, e.event_index), 0) + 1
 
   return (
     <div>
@@ -943,7 +1020,132 @@ function BillingEventsPanel({
           ))}
         </div>
       )}
+      {isAdmin && (
+        <div className="mt-3">
+          <AddBillingEventButton
+            transactionId={transaction.id}
+            nextEventIndex={nextEventIndex}
+            onAdded={onChange}
+          />
+        </div>
+      )}
     </div>
+  )
+}
+
+function AddBillingEventButton({
+  transactionId,
+  nextEventIndex,
+  onAdded,
+}: {
+  transactionId: string
+  nextEventIndex: number
+  onAdded: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [billingDate, setBillingDate] = useState('')
+  const [description, setDescription] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!open) {
+    return (
+      <Button
+        size="sm"
+        variant="outline"
+        className="text-purple-700 border-purple-300"
+        onClick={() => setOpen(true)}
+      >
+        + הוסף אירוע
+      </Button>
+    )
+  }
+
+  const handleAdd = async () => {
+    const amountNum = Number(amount)
+    if (amount === '' || isNaN(amountNum) || !billingDate) {
+      setError('יש למלא סכום ותאריך חשבון')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
+    try {
+      const { error: insertErr } = await supabase
+        .from('billing_events')
+        .insert({
+          transaction_id: transactionId,
+          event_index: nextEventIndex,
+          amount: amountNum,
+          billing_date: billingDate,
+          description: description.trim() || 'תשלום ידני',
+          status: 'pending',
+          invoice_number: null,
+          payment_date: null,
+          receipt_number: null,
+          advance_applied: 0,
+          supplier_amount: 0,
+        })
+        .abortSignal(controller.signal)
+      if (insertErr) throw insertErr
+      setOpen(false)
+      setAmount('')
+      setBillingDate('')
+      setDescription('')
+      onAdded()
+    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setError(isTimeout ? 'פג זמן — נסה שנית' : 'שגיאה בהוספת האירוע')
+    } finally {
+      clearTimeout(timer)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card className="p-3 space-y-2">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">סכום</Label>
+          <Input
+            type="number"
+            dir="ltr"
+            className="h-8 text-sm"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">תאריך חשבון</Label>
+          <DateInput value={billingDate} onChange={(e) => setBillingDate(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">תיאור</Label>
+          <Input
+            className="h-8 text-sm"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="תשלום ידני"
+          />
+        </div>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          disabled={saving}
+          onClick={() => void handleAdd()}
+          className="bg-purple-600 hover:bg-purple-700 text-white"
+        >
+          {saving ? 'שומר...' : 'שמור'}
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setOpen(false)} disabled={saving}>
+          ביטול
+        </Button>
+      </div>
+    </Card>
   )
 }
 
@@ -1059,12 +1261,16 @@ function BillingEventRow({
   const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
   const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
   const [taxInvoiceDateOverride, setTaxInvoiceDateOverride] = useState(event.payment_date ?? '')
+  const [amountOverride, setAmountOverride] = useState(String(event.amount))
+  const [billingDateOverride, setBillingDateOverride] = useState(event.billing_date ?? '')
   const [savingField, setSavingField] = useState<string | null>(null)
+  const [rowError, setRowError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   const handleDelete = async () => {
     setDeleting(true)
+    setRowError(null)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
     try {
@@ -1073,6 +1279,8 @@ function BillingEventRow({
       onDeleted()
     } catch (err) {
       console.error('BillingEventRow delete error:', err)
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setRowError(isTimeout ? 'פג זמן — נסה שנית' : 'שגיאה במחיקה')
     } finally {
       clearTimeout(timer)
       setDeleting(false)
@@ -1083,7 +1291,9 @@ function BillingEventRow({
     setInvoiceNumber(event.invoice_number ?? '')
     setReceiptNumber(event.receipt_number ?? '')
     setTaxInvoiceDateOverride(event.payment_date ?? '')
-  }, [event.id, event.invoice_number, event.receipt_number, event.payment_date])
+    setAmountOverride(String(event.amount))
+    setBillingDateOverride(event.billing_date ?? '')
+  }, [event.id, event.invoice_number, event.receipt_number, event.payment_date, event.amount, event.billing_date])
 
   const calculatedTaxDate = event.billing_date
     ? calculateTaxInvoiceDate(event.billing_date, paymentTermsDays)
@@ -1092,11 +1302,12 @@ function BillingEventRow({
   const taxDateDisplay = taxInvoiceDateOverride || calculatedTaxDate || ''
 
   const saveField = async (
-    field: 'invoice_number' | 'payment_date' | 'receipt_number',
-    value: string,
+    field: 'invoice_number' | 'payment_date' | 'receipt_number' | 'amount' | 'billing_date',
+    value: string | number,
   ) => {
     setSavingField(field)
-    const patch: Record<string, unknown> = { [field]: value || null }
+    setRowError(null)
+    const patch: Record<string, unknown> = { [field]: value === '' ? null : value }
 
     if (field === 'invoice_number') {
       if (value && event.status !== 'billed' && event.status !== 'paid') {
@@ -1124,6 +1335,8 @@ function BillingEventRow({
       onSaved()
     } catch (err) {
       console.error('BillingEventRow save error:', err)
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setRowError(isTimeout ? 'פג זמן — נסה שנית' : 'שגיאה בשמירה')
     } finally {
       clearTimeout(timer)
       setSavingField(null)
@@ -1145,7 +1358,20 @@ function BillingEventRow({
           <Badge variant="outline" className="text-xs">{STATUS_LABEL[event.status]}</Badge>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-base font-bold text-purple-900">{ILS.format(event.amount)}</span>
+          <Input
+            type="number"
+            dir="ltr"
+            className="h-7 w-28 text-sm font-bold text-purple-900"
+            value={amountOverride}
+            onChange={(e) => setAmountOverride(e.target.value)}
+            onBlur={() => {
+              const n = Number(amountOverride)
+              if (amountOverride !== '' && !isNaN(n) && n !== event.amount) {
+                void saveField('amount', n)
+              }
+            }}
+            title={ILS.format(event.amount)}
+          />
           {!deleteConfirm ? (
             <button
               type="button"
@@ -1178,6 +1404,8 @@ function BillingEventRow({
         </div>
       </div>
 
+      {rowError && <p className="text-xs text-destructive text-right" dir="rtl">{rowError}</p>}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="space-y-2 border border-blue-100 rounded-lg p-3 bg-blue-50/30">
           <h4 className="text-xs font-semibold text-blue-800 flex items-center gap-1">
@@ -1187,14 +1415,17 @@ function BillingEventRow({
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">תאריך חשבון</Label>
-              <p className="text-sm font-medium">
-                {event.billing_date
-                  ? new Intl.DateTimeFormat('he-IL', {
-                      day: '2-digit', month: '2-digit', year: 'numeric',
-                      timeZone: 'Asia/Jerusalem',
-                    }).format(new Date(event.billing_date))
-                  : '—'}
-              </p>
+              <Input
+                type="date"
+                className="h-7 text-sm"
+                value={billingDateOverride}
+                onChange={(e) => setBillingDateOverride(e.target.value)}
+                onBlur={() => {
+                  if (billingDateOverride && billingDateOverride !== (event.billing_date ?? '')) {
+                    void saveField('billing_date', billingDateOverride)
+                  }
+                }}
+              />
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">מספר חשבון עסקה</Label>
