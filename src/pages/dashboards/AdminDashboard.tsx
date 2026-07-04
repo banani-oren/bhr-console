@@ -1,6 +1,10 @@
-import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
+import { usePendingApprovals } from '@/hooks/usePendingApprovals'
+import type { Transaction } from '@/lib/types'
+import TransactionDialog from '@/components/TransactionDialog'
 import {
   Card,
   CardContent,
@@ -16,6 +20,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { DateCell } from '@/components/ui/date-cell'
 import {
   BarChart,
@@ -32,6 +37,9 @@ import {
   Clock,
   CheckCircle2,
   TrendingUp,
+  Check,
+  Pencil,
+  Loader2,
 } from 'lucide-react'
 
 const CHART_COLORS = ['#7c3aed', '#a855f7', '#c084fc', '#e9d5ff', '#8b5cf6']
@@ -134,6 +142,157 @@ function RevenueTooltip({ active, payload, label }: {
       <p className="font-medium text-foreground mb-1">{label}</p>
       <p className="text-muted-foreground">{ILS.format(payload[0].value)}</p>
     </div>
+  )
+}
+
+function getCandidateName(t: Transaction): string {
+  if (t.candidate_name) return t.candidate_name
+  const custom = t.custom_fields?.candidate_name
+  return typeof custom === 'string' && custom ? custom : '—'
+}
+
+function PendingApprovalsCard() {
+  const { profile } = useAuth()
+  const queryClient = useQueryClient()
+  const { data: pending = [] } = usePendingApprovals(true)
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [approveError, setApproveError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<Transaction | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  const handleApprove = async (txnId: string) => {
+    setApprovingId(txnId)
+    setApproveError(null)
+    // 10s abort so a hung approve can't freeze the row's button.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
+    try {
+      const nowIso = new Date().toISOString()
+      const { error } = await supabase
+        .from('transactions')
+        .update({ approved_by: profile!.id, approved_at: nowIso })
+        .eq('id', txnId)
+        .abortSignal(controller.signal)
+      if (error) throw error
+      // Move pending events whose billing_date has passed to to_bill (mirrors
+      // the approve action on the Transactions page for consistent behavior).
+      const today = new Date().toISOString().slice(0, 10)
+      await supabase
+        .from('billing_events')
+        .update({ status: 'to_bill' })
+        .eq('transaction_id', txnId)
+        .eq('status', 'pending')
+        .lte('billing_date', today)
+        .abortSignal(controller.signal)
+      queryClient.invalidateQueries({ queryKey: ['pending_approvals'] })
+      queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      queryClient.invalidateQueries({ queryKey: ['billing_events'] })
+    } catch (err) {
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setApproveError(isTimeout ? 'האישור לא הושלם — פג זמן. נסה שנית.' : 'שגיאה באישור — נסה שנית')
+    } finally {
+      clearTimeout(timer)
+      setApprovingId(null)
+    }
+  }
+
+  if (pending.length === 0) return null
+
+  return (
+    <>
+      <Card className="border-amber-200">
+        <CardHeader>
+          <CardTitle className="text-base font-semibold text-amber-800">
+            ממתין לאישור ({pending.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-0 space-y-2">
+          {approveError && <p className="px-4 text-sm text-destructive">{approveError}</p>}
+
+          {/* Desktop table */}
+          <div className="hidden sm:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-right px-4">לקוח</TableHead>
+                  <TableHead className="text-right px-4">שירות</TableHead>
+                  <TableHead className="text-right px-4">מועמד</TableHead>
+                  <TableHead className="text-right px-4">מוביל</TableHead>
+                  <TableHead className="text-right px-4">פעולות</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pending.map((t) => (
+                  <TableRow key={t.id}>
+                    <TableCell className="px-4 font-medium">{t.client_name}</TableCell>
+                    <TableCell className="px-4">{t.service_type}</TableCell>
+                    <TableCell className="px-4">{getCandidateName(t)}</TableCell>
+                    <TableCell className="px-4">{t.service_lead || '—'}</TableCell>
+                    <TableCell className="px-4">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => void handleApprove(t.id)}
+                          disabled={approvingId === t.id}
+                          className="bg-green-600 hover:bg-green-700 text-white"
+                        >
+                          {approvingId === t.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <>
+                              <Check className="h-4 w-4" /> אשר
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => { setEditing(t); setDialogOpen(true) }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Mobile (375px): simple list — client name + actions only */}
+          <ul className="sm:hidden divide-y divide-border px-4">
+            {pending.map((t) => (
+              <li key={t.id} className="flex items-center justify-between gap-2 py-2">
+                <span className="text-sm font-medium truncate">{t.client_name}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    onClick={() => void handleApprove(t.id)}
+                    disabled={approvingId === t.id}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {approvingId === t.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Check className="h-4 w-4" />
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setEditing(t); setDialogOpen(true) }}
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+
+      <TransactionDialog open={dialogOpen} onOpenChange={setDialogOpen} editing={editing} />
+    </>
   )
 }
 
@@ -261,6 +420,8 @@ export default function AdminDashboard() {
   return (
     <div className="p-6 space-y-6" dir="rtl">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">דשבורד</h1>
+
+      <PendingApprovalsCard />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {kpiCards.map((card) => (

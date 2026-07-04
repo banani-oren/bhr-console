@@ -19,6 +19,7 @@ import {
 import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { usePendingApprovals } from '@/hooks/usePendingApprovals'
 
 // Captured by the beforeinstallprompt listener so the sidebar can call prompt()
 // at a user-initiated moment (Chrome / Edge on desktop + Android only).
@@ -63,6 +64,9 @@ export default function Layout({ children }: LayoutProps) {
   const navigate = useNavigate()
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isStandalone, setIsStandalone] = useState(false)
+  const isAdmin = profile?.role === 'admin'
+  const { data: pendingApprovals = [] } = usePendingApprovals(isAdmin)
+  const pendingApprovalsCount = isAdmin ? pendingApprovals.length : 0
 
   const visibleItems = profile
     ? NAV_ITEMS.filter((item) => item.allow.includes(profile.role))
@@ -126,7 +130,12 @@ export default function Layout({ children }: LayoutProps) {
                 )
               }
             >
-              <span className="shrink-0 text-sidebar-primary">{item.icon}</span>
+              <span className="relative shrink-0 text-sidebar-primary">
+                {item.icon}
+                {item.to === '/transactions' && pendingApprovalsCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-500" />
+                )}
+              </span>
               <span>{item.label}</span>
             </NavLink>
           ))}
