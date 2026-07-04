@@ -617,7 +617,12 @@ function AttendanceReport({ today }: { today: string }) {
     return m
   }, [employees])
 
-  const { data: reportRows = [], isFetching } = useQuery<ReportRow[]>({
+  // Name resolution is intentionally NOT done inside queryFn: the report now
+  // fires on mount alongside the employees query, so nameById may still be
+  // empty when this queryFn runs. Baking '—' into the cached result would
+  // never self-correct once employees finishes loading (same queryKey ⇒ no
+  // re-run). Names are resolved reactively below via a plain useMemo instead.
+  const { data: reportRowsRaw = [], isFetching } = useQuery<Omit<ReportRow, 'name'>[]>({
     queryKey: ['attendance_report', submitted],
     enabled: submitted !== null,
     queryFn: async () => {
@@ -642,30 +647,31 @@ function AttendanceReport({ today }: { today: string }) {
         groups.set(key, arr)
       }
 
-      const out: ReportRow[] = []
+      const out: Omit<ReportRow, 'name'>[] = []
       for (const [key, entries] of groups) {
         const [profileId, workDate] = key.split('__')
         const pairs = dayPairs(entries)
         const totalHours = pairs.reduce((s, p) => s + p.hours, 0)
         const hasOpen = pairs.some((p) => p.open)
-        out.push({
-          profileId,
-          name: nameById.get(profileId) ?? '—',
-          workDate,
-          pairs,
-          totalHours,
-          hasOpen,
-        })
+        out.push({ profileId, workDate, pairs, totalHours, hasOpen })
       }
-      // Sort by date desc, then employee name asc.
-      out.sort(
-        (a, b) =>
-          b.workDate.localeCompare(a.workDate) ||
-          a.name.localeCompare(b.name, 'he'),
-      )
       return out
     },
   })
+
+  const reportRows = useMemo(() => {
+    const withNames: ReportRow[] = reportRowsRaw.map((r) => ({
+      ...r,
+      name: nameById.get(r.profileId) ?? '—',
+    }))
+    // Sort by date desc, then employee name asc.
+    withNames.sort(
+      (a, b) =>
+        b.workDate.localeCompare(a.workDate) ||
+        a.name.localeCompare(b.name, 'he'),
+    )
+    return withNames
+  }, [reportRowsRaw, nameById])
 
   return (
     <div className="space-y-3">
