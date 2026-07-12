@@ -21,12 +21,12 @@ import {
 import {
   addDays,
   calculateTaxInvoiceDate,
-  cancelFutureBillingEvents,
   generateServiceBillingEvents,
   parsePaymentTermDays,
   reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
+  type BillingEventDraft,
 } from '@/lib/billingEvents'
 import ClientPicker from '@/components/ClientPicker'
 import AdvanceEditor, { type AdvanceType } from '@/components/AdvanceEditor'
@@ -485,18 +485,22 @@ export default function TransactionDialog({
         }
       }
 
-      let txnId: string | null = editing?.id ?? null
-      if (editing) {
-        const { error } = await supabase.from('transactions').update(payload).eq('id', editing.id).abortSignal(controller.signal)
-        if (error) throw error
-      } else {
-        const { data, error } = await supabase.from('transactions').insert(payload).select('id').abortSignal(controller.signal).single()
-        if (error) throw error
-        txnId = (data as { id: string } | null)?.id ?? null
-      }
+      // Compute the billing-events draft rows client-side (math unchanged —
+      // see billingEvents.ts) but do NOT write them yet. They're passed
+      // alongside the transaction payload to a single atomic RPC below, so
+      // the transaction row and its billing events either all persist or
+      // none do — no more orphaned partial saves from a stall between the
+      // separate round-trips this used to take.
+      let events: BillingEventDraft[] = []
+      let reconcileWarning: string | null = null
+      const shouldGenerateEvents = state.kind === 'service' && !!state.work_start_date
 
-      // Generate billing events for service transactions when work_start_date is set.
-      if (state.kind === 'service' && state.work_start_date && txnId) {
+      if (shouldGenerateEvents && state.work_start_date) {
+        const workStartDate = state.work_start_date
+        // Never persisted — the RPC always resolves the real transaction_id
+        // server-side (see save_transaction_with_events), so this is just a
+        // placeholder to satisfy the draft shape for a not-yet-inserted row.
+        const placeholderTxnId = editing?.id ?? crypto.randomUUID()
         const expectedSalary = Number(state.custom.salary) || 0
         const finalSalaryVal = Number(state.custom.final_salary) || 0
         const effectiveSalary = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
@@ -511,56 +515,56 @@ export default function TransactionDialog({
 
         if (shouldReconcile) {
           const { toUpsert, warning } = reconcileFinalSalaryBillingEvents({
-            transactionId: txnId,
+            transactionId: placeholderTxnId,
             existingEvents: txnBillingEvents,
             finalSalary: effectiveSalary,
             commissionPercent: commissionPct,
-            workStartDate: state.work_start_date,
+            workStartDate,
             paymentSplit,
             advanceAmount: advance,
             supplierPercent: supplierPct,
             candidateName: String(state.custom.candidate_name ?? ''),
             serviceType: state.service_type_name,
           })
-          await upsertBillingEvents(txnId, toUpsert, controller.signal)
-          if (warning) window.alert(warning)
+          events = toUpsert
+          reconcileWarning = warning
         } else {
-          const events = generateServiceBillingEvents({
-            transactionId: txnId,
+          events = generateServiceBillingEvents({
+            transactionId: placeholderTxnId,
             salary: effectiveSalary,
             commissionPercent: commissionPct,
-            workStartDate: state.work_start_date,
+            workStartDate,
             paymentSplit,
             advanceAmount: advance,
             supplierPercent: supplierPct,
             candidateName: String(state.custom.candidate_name ?? ''),
             serviceType: state.service_type_name,
           })
-          await upsertBillingEvents(txnId, events, controller.signal)
-        }
-
-        // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
-        const txnApproved = approvalFields.approved_at != null || (editing && editing.approved_at)
-        if (txnApproved) {
-          const todayIso = new Date().toISOString().slice(0, 10)
-          await supabase
-            .from('billing_events')
-            .update({ status: 'to_bill' })
-            .eq('transaction_id', txnId)
-            .eq('status', 'pending')
-            .lte('billing_date', todayIso)
-            .abortSignal(controller.signal)
         }
       }
 
-      // Cancel future billing events when work_end_date is set.
-      if (state.work_end_date && txnId) {
-        await cancelFutureBillingEvents(txnId, state.work_end_date, controller.signal)
-      }
+      // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
+      const txnApproved = !!(approvalFields.approved_at != null || (editing && editing.approved_at))
+
+      const { data: rpcTxnId, error: rpcError } = await supabase
+        .rpc('save_transaction_with_events', {
+          p_mode: editing ? 'update' : 'insert',
+          p_id: editing?.id ?? null,
+          p_payload: payload,
+          p_events: events,
+          p_flip_to_bill: shouldGenerateEvents && txnApproved,
+          p_work_end_date: state.work_end_date || null,
+        })
+        .abortSignal(controller.signal)
+      if (rpcError) throw rpcError
+      const txnId = rpcTxnId as string | null
+
+      if (reconcileWarning) window.alert(reconcileWarning)
 
       // Email approval recipients if a recruiter created a new transaction.
-      // Wired to the same abort signal/budget as the rest of handleSave so a hung
-      // edge-function call can't leave saveStatus stuck at 'saving' forever.
+      // Best-effort, post-save: the transaction + billing events already
+      // committed atomically via the RPC above, so an email failure here
+      // must never fail or roll back the save.
       if (!editing && isRecruiter && txnId) {
         try {
           await supabase.functions.invoke('send-approval-email', {

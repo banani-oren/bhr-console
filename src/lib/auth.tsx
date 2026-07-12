@@ -112,27 +112,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!cancelled && !initialResolved) setLoading(false)
     }, 10000)
 
+    // Loads the profile row (+ email reconciliation) for a signed-in user.
+    // Must only ever be invoked OUTSIDE the onAuthStateChange callback (see
+    // below) — supabase-js's GoTrueClient serializes auth operations behind
+    // an internal lock, and the callback below is invoked WHILE that lock is
+    // held. Awaiting another locked call (getSession, which every
+    // supabase.from() request makes internally to attach the access token)
+    // from inside the callback creates a circular wait: the outer operation
+    // is awaiting the callback, and the callback is awaiting a call that
+    // queues behind the outer operation. It deadlocks forever with the
+    // request never even reaching the network (proven via runtime repro).
+    const loadProfile = async (authUser: User) => {
+      const { data: profileRow } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', authUser.id)
+        .single()
+      if (cancelled) return
+      const reconciled = await syncProfileEmailIfStale(
+        authUser,
+        profileRow as Profile | null,
+      )
+      if (cancelled) return
+      setUser(authUser)
+      setProfile(reconciled)
+    }
+
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return
 
       if (event === 'PASSWORD_RECOVERY') {
         setRecoveryMode(true)
         if (session?.user) {
-          const { data: profileRow } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single()
-          if (cancelled) return
-          const reconciled = await syncProfileEmailIfStale(
-            session.user,
-            profileRow as Profile | null,
-          )
-          if (cancelled) return
           setUser(session.user)
-          setProfile(reconciled)
           if (!initialResolved) {
             initialResolved = true
             setLoading(false)
@@ -145,6 +159,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clean.searchParams.delete('type')
             window.history.replaceState({}, '', clean.toString())
           } catch { /* ignore */ }
+          // Deferred (see loadProfile comment above): runs after this
+          // callback returns and the auth lock is released.
+          setTimeout(() => {
+            if (!cancelled) void loadProfile(session.user)
+          }, 0)
         }
         return
       }
@@ -152,27 +171,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!initialResolved) return
 
       if (session?.user) {
-        const { data: profileRow } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single()
-        if (cancelled) return
-        const reconciled = await syncProfileEmailIfStale(
-          session.user,
-          profileRow as Profile | null,
-        )
-        if (!cancelled) {
-          setUser(session.user)
-          setProfile(reconciled)
-        }
+        setTimeout(() => {
+          if (!cancelled) void loadProfile(session.user)
+        }, 0)
       } else {
-        if (!cancelled) {
-          setRecoveryMode(false)
-          try { window.sessionStorage.removeItem('bhr_recovery_mode') } catch { /* ignore */ }
-          setUser(null)
-          setProfile(null)
-        }
+        setRecoveryMode(false)
+        try { window.sessionStorage.removeItem('bhr_recovery_mode') } catch { /* ignore */ }
+        setUser(null)
+        setProfile(null)
       }
     })
 
