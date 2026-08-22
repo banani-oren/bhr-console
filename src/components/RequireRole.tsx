@@ -2,6 +2,7 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
 import Layout from '@/components/Layout'
+import { useIsMobileDevice } from '@/hooks/useIsMobileDevice'
 
 export const DEFAULT_LANDING: Record<UserRole, string> = {
   admin: '/',
@@ -21,6 +22,7 @@ type Props = {
 
 export default function RequireRole({ allow, children, withLayout = true }: Props) {
   const { user, profile, loading, recoveryMode } = useAuth()
+  const isMobile = useIsMobileDevice()
 
   if (loading) {
     return (
@@ -43,6 +45,14 @@ export default function RequireRole({ allow, children, withLayout = true }: Prop
 
   if (!allow.includes(profile.role)) {
     return <Navigate to={DEFAULT_LANDING[profile.role]} replace />
+  }
+
+  // Mobile hard lock: the desktop shell must never render on a phone, not even
+  // for a single frame before MobileAutoRoute's effect fires. Routes that bring
+  // their own mobile shell (withLayout={false}, i.e. everything under /m) are
+  // unaffected.
+  if (withLayout && isMobile) {
+    return <Navigate to="/m" replace />
   }
 
   return withLayout ? <Layout>{children}</Layout> : <>{children}</>

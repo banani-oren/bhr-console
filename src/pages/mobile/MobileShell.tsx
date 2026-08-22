@@ -1,22 +1,14 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Clock, CalendarCheck, UserCircle, Monitor } from 'lucide-react'
+import { NavLink, Outlet } from 'react-router-dom'
+import { Clock, CalendarCheck, UserCircle } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
-// Batch 5 Phase C: stripped-down mobile shell — only two tabs (שעות,
-// פרופיל). Header has a "תצוגת דסקטופ" link that sets the localStorage
-// override flag so the auto-redirect in MobileAutoRoute won't bounce
-// back to /m on the next navigation.
+// Batch 8 Phase 1: the mobile lock has no desktop opt-out (see
+// MobileAutoRoute + RequireRole), so the "תצוגת דסקטופ" escape-hatch button
+// that used to live in this header was removed — it would no longer do
+// anything (any navigation to a desktop route bounces straight back to /m).
 export default function MobileShell() {
   const { profile, user } = useAuth()
-  const navigate = useNavigate()
-
-  const handleDesktopView = () => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('bhr_force_desktop', '1')
-    }
-    navigate('/')
-  }
 
   return (
     <div dir="rtl" className="min-h-[100dvh] flex flex-col bg-gray-50">
@@ -38,14 +30,6 @@ export default function MobileShell() {
             </p>
           </div>
         </div>
-        <button
-          onClick={handleDesktopView}
-          className="text-xs text-purple-200 hover:text-white flex items-center gap-1 px-2 py-1 rounded-md hover:bg-white/10"
-          aria-label="תצוגת דסקטופ"
-        >
-          <Monitor className="h-3.5 w-3.5" />
-          <span>תצוגת דסקטופ</span>
-        </button>
       </header>
 
       <main className="flex-1 overflow-y-auto pb-16">
