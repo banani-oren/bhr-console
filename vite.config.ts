@@ -48,6 +48,9 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
+        // Default precache limit is 2 MiB; the main bundle (xlsx + recharts +
+        // the app) crossed that with the Batch 8 Phase 4 reports page.
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/auth\//, /^\/functions\//],
         runtimeCaching: [

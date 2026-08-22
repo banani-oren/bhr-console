@@ -13,6 +13,7 @@ import Users from '@/pages/Users'
 import Services from '@/pages/Services'
 import Suppliers from '@/pages/Suppliers'
 import BillingReports from '@/pages/BillingReports'
+import Reports from '@/pages/Reports'
 import Bonuses from '@/pages/Bonuses'
 import Attendance from '@/pages/Attendance'
 import Profile from '@/pages/Profile'
@@ -114,6 +115,14 @@ export default function App() {
               element={
                 <RequireRole allow={['admin', 'administration']}>
                   <BillingReports />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <RequireRole allow={['admin']}>
+                  <Reports />
                 </RequireRole>
               }
             />

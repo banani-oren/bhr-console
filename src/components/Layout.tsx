@@ -14,6 +14,7 @@ import {
   LogOut,
   Download,
   Handshake,
+  BarChart3,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
@@ -47,6 +48,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'יומן שעות',     to: '/hours',        icon: <Clock size={18} />,           allow: ['admin', 'administration', 'recruiter'] },
   { label: 'נוכחות',        to: '/attendance',   icon: <CalendarCheck size={18} />,   allow: ['admin', 'administration', 'recruiter'] },
   { label: 'דוחות חיוב',    to: '/billing-reports', icon: <FileText size={18} />,     allow: ['admin', 'administration'] },
+  { label: 'דוחות',         to: '/reports',      icon: <BarChart3 size={18} />,       allow: ['admin'] },
   { label: 'בונוסים',       to: '/bonuses',      icon: <Trophy size={18} />,          allow: ['admin'] },
   { label: 'צוות',          to: '/team',         icon: <UserCog size={18} />,         allow: ['admin'] },
   { label: 'שירותים',       to: '/services',     icon: <Briefcase size={18} />,       allow: ['admin'] },
