@@ -672,6 +672,26 @@ export default function TransactionDialog({
       ]
     }
 
+    // גיוס gets an optional position number directly above the position name
+    // (מספר משרה → שם משרה → מועמד → מספר מועמד), migrated from the merged
+    // השמה service type (Batch 8 Phase 2).
+    if (f.key === 'position_name' && isGiyus) {
+      return [
+        <div key="position_number" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">מספר משרה</Label>
+          <Input
+            value={(state.custom.position_number as string) ?? ''}
+            onChange={(e) => setCustom('position_number', e.target.value)}
+            placeholder="אופציונלי"
+          />
+        </div>,
+        <div key="position_name" className={`space-y-1 ${widthCls}`}>
+          <Label className="text-purple-700">{label}</Label>
+          <Input value={(value as string) ?? ''} onChange={(e) => setCustom(f.key, e.target.value)} {...inputProps} />
+        </div>,
+      ]
+    }
+
     // גיוס gets an optional candidate number right below the candidate name, so
     // billing can reference a number instead of exposing the candidate's name.
     if (f.key === 'candidate_name' && isGiyus) {
