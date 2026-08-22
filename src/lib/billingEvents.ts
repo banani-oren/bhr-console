@@ -64,20 +64,19 @@ export function generateServiceBillingEvents(params: {
   transactionId: string
   salary: number
   commissionPercent: number
-  workStartDate: string
+  workStartDate: string | null
   paymentSplit: PaymentSplit[]
   advanceAmount: number
   supplierPercent: number
   candidateName: string
   serviceType: string
+  advanceBillingDate?: string | null
 }): BillingEventDraft[] {
   const { transactionId, salary, commissionPercent, workStartDate,
-          paymentSplit, advanceAmount, supplierPercent, candidateName, serviceType } = params
+          paymentSplit, advanceAmount, supplierPercent, candidateName, serviceType,
+          advanceBillingDate } = params
 
   const totalCommission = salary * (commissionPercent / 100)
-  const split: PaymentSplit[] = paymentSplit.length > 0
-    ? paymentSplit
-    : [{ percent: 100, days: 0 }]
 
   const events: BillingEventDraft[] = []
   const advance = Math.round((advanceAmount ?? 0) * 100) / 100
@@ -91,7 +90,7 @@ export function generateServiceBillingEvents(params: {
       event_index: eventIndex++,
       amount: advance,
       description: [serviceType, candidateName, 'מקדמה'].filter(Boolean).join(' · '),
-      billing_date: workStartDate,
+      billing_date: advanceBillingDate ?? workStartDate,
       status: 'pending' as const,
       invoice_number: null,
       payment_date: null,
@@ -100,6 +99,17 @@ export function generateServiceBillingEvents(params: {
       supplier_amount: advanceSupplierAmt,
     })
   }
+
+  // Advance-only mode: no work-start date yet, so split events (whose dates
+  // are derived from it) can't be computed. The advance is emitted alone —
+  // see Batch 8 Phase 3.
+  if (!workStartDate) {
+    return events
+  }
+
+  const split: PaymentSplit[] = paymentSplit.length > 0
+    ? paymentSplit
+    : [{ percent: 100, days: 0 }]
 
   // Remaining commission after the advance is split across the client's payment
   // terms exactly as before the advance existed — payment_split_json percentages
@@ -210,16 +220,35 @@ export async function cancelFutureBillingEvents(
   if (error) throw error
 }
 
+/**
+ * The advance (מקדמה) is a PART OF THE COMMISSION, never an extra charge.
+ *
+ *  - 'fixed'   → a flat ₪ amount, capped at the total commission
+ *  - 'percent' → that percentage OF THE COMMISSION
+ *                (commission itself is salary × commissionPct / 100)
+ *
+ * Confirmed with Oren 2026-08-22: עמלה 75%, מקדמה 30%, שכר ₪10,000
+ * → commission ₪7,500 → advance ₪2,250, remaining ₪5,250.
+ * Previously this computed `salary × pct/100` (a % of GROSS SALARY), which
+ * coincides with the correct value only when commission_percent === 100.
+ */
 export function resolveAdvanceAmount(
   advanceType: string | null | undefined,
   advanceAmount: number | null | undefined,
   salary: number,
-  _commissionPct: number,
+  commissionPct: number,
 ): number {
   if (!advanceType || !advanceAmount) return 0
-  if (advanceType === 'fixed') return advanceAmount
-  if (advanceType === 'percent') return salary * (advanceAmount / 100)
-  return 0
+  const totalCommission = Math.round(salary * (commissionPct / 100) * 100) / 100
+  if (totalCommission <= 0) return 0
+  const raw =
+    advanceType === 'fixed'
+      ? advanceAmount
+      : advanceType === 'percent'
+      ? totalCommission * (advanceAmount / 100)
+      : 0
+  // The advance can never exceed the whole fee.
+  return Math.round(Math.min(raw, totalCommission) * 100) / 100
 }
 
 /**

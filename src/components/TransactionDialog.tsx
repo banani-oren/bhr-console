@@ -493,10 +493,15 @@ export default function TransactionDialog({
       // separate round-trips this used to take.
       let events: BillingEventDraft[] = []
       let reconcileWarning: string | null = null
-      const shouldGenerateEvents = state.kind === 'service' && !!state.work_start_date
+      // Split events need a work-start date (their billing_date is derived from it).
+      const canGenerateSplits = state.kind === 'service' && !!state.work_start_date
+      // The advance does NOT — it is due the moment the placement is opened, so it
+      // is emitted from תאריך פתיחה (entry_date) as soon as the client has an advance.
+      const canGenerateAdvanceOnly = state.kind === 'service' && isGiyusNow && !state.work_start_date
+      const shouldGenerateEvents = canGenerateSplits || canGenerateAdvanceOnly
 
-      if (shouldGenerateEvents && state.work_start_date) {
-        const workStartDate = state.work_start_date
+      if (shouldGenerateEvents) {
+        const workStartDate = state.work_start_date || null
         // Never persisted — the RPC always resolves the real transaction_id
         // server-side (see save_transaction_with_events), so this is just a
         // placeholder to satisfy the draft shape for a not-yet-inserted row.
@@ -513,7 +518,16 @@ export default function TransactionDialog({
         // never recalculated from final_salary.
         const advance = resolveAdvanceAmount(advType || null, advAmount, expectedSalary, commissionPct)
 
-        if (shouldReconcile) {
+        // A transaction that previously held only an advance-only event (created
+        // before a work-start date existed) must take the full regeneration path
+        // once a work-start date is added — reconcile assumes a complete event
+        // set already exists (splits at index 2+), which an advance-only set
+        // doesn't have.
+        const hadOnlyAdvanceEvent =
+          hasExistingEvents && txnBillingEvents.length === 1 && txnBillingEvents[0].event_index === 1
+        const effectiveShouldReconcile = shouldReconcile && !hadOnlyAdvanceEvent
+
+        if (effectiveShouldReconcile && workStartDate) {
           const { toUpsert, warning } = reconcileFinalSalaryBillingEvents({
             transactionId: placeholderTxnId,
             existingEvents: txnBillingEvents,
@@ -539,6 +553,7 @@ export default function TransactionDialog({
             supplierPercent: supplierPct,
             candidateName: String(state.custom.candidate_name ?? ''),
             serviceType: state.service_type_name,
+            advanceBillingDate: state.entry_date,
           })
         }
       }
@@ -1344,6 +1359,15 @@ function GenerateBillingEventsButton({
       const paymentSplit = selectedClient?.payment_split_json ?? []
       const candidateName = String(cf.candidate_name ?? transaction.candidate_name ?? '')
       const serviceType = transaction.service_type ?? ''
+      // A legacy transaction has no dialog-level override state, so the effective
+      // advance is simply the client's own configuration — same fallback handleSave
+      // uses when advance_type_override/advance_amount_override are empty.
+      const advance = resolveAdvanceAmount(
+        selectedClient?.advance_type ?? null,
+        selectedClient?.advance_amount ?? null,
+        salary,
+        commissionPct,
+      )
 
       const events = generateServiceBillingEvents({
         transactionId: transaction.id,
@@ -1351,10 +1375,11 @@ function GenerateBillingEventsButton({
         commissionPercent: commissionPct,
         workStartDate: transaction.work_start_date!,
         paymentSplit,
-        advanceAmount: 0,
+        advanceAmount: advance,
         supplierPercent: supplierPct,
         candidateName,
         serviceType,
+        advanceBillingDate: transaction.entry_date,
       })
       await upsertBillingEvents(transaction.id, events, controller.signal)
 

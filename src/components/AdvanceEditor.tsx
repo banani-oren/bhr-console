@@ -46,7 +46,7 @@ export default function AdvanceEditor({
           onClick={() => onTypeChange('percent')}
           className={tabClass(advanceType === 'percent')}
         >
-          אחוז מהשכר
+          אחוז מהעמלה
         </button>
       </div>
 
@@ -66,7 +66,7 @@ export default function AdvanceEditor({
 
       {advanceType === 'percent' && (
         <div className="space-y-1">
-          <Label className="text-xs">אחוז מהשכר (%)</Label>
+          <Label className="text-xs">אחוז מהעמלה (%)</Label>
           <Input
             type="number"
             dir="ltr"
@@ -75,7 +75,7 @@ export default function AdvanceEditor({
             placeholder="למשל 30"
           />
           <p className="text-xs text-muted-foreground">
-            % מהשכר הברוטו יגבה מראש וינוכה מהעמלה
+            % מהעמלה יגבה מראש כמקדמה; היתרה תחויב בהמשך
           </p>
         </div>
       )}
