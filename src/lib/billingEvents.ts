@@ -141,6 +141,50 @@ export function generateServiceBillingEvents(params: {
   return events
 }
 
+/**
+ * הדרכה (training) transactions bill as a single event for the whole
+ * engagement. The amount is the figure the dialog already computes and
+ * displays live (מחיר הדרכה × number of execution dates + travel), which is
+ * mirrored onto net_invoice_amount on save.
+ *
+ * billing_date = the LAST execution date — a training is invoiced once it has
+ * been delivered, not when it was booked. With no execution dates recorded
+ * yet, fall back to the transaction's entry_date (תאריך פתיחה) so the event
+ * still exists and can be corrected by hand.
+ */
+export function generateHadrachaBillingEvent(params: {
+  transactionId: string
+  amount: number
+  executionDates: string[]     // ISO yyyy-mm-dd, unsorted is fine
+  entryDate: string
+  trainingName: string
+  serviceType: string
+  supplierPercent: number
+}): BillingEventDraft | null {
+  const { transactionId, amount, executionDates, entryDate, trainingName, serviceType, supplierPercent } = params
+
+  const roundedAmount = Math.round(amount * 100) / 100
+  if (roundedAmount <= 0) return null
+
+  const validDates = executionDates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+  const billingDate = validDates.sort().at(-1) ?? entryDate
+  const supplierAmt = Math.round(roundedAmount * (supplierPercent / 100) * 100) / 100
+
+  return {
+    transaction_id: transactionId,
+    event_index: 1,
+    amount: roundedAmount,
+    description: [serviceType, trainingName].filter(Boolean).join(' · '),
+    billing_date: billingDate,
+    status: 'pending' as const,
+    invoice_number: null,
+    payment_date: null,
+    receipt_number: null,
+    advance_applied: 0,
+    supplier_amount: supplierAmt,
+  }
+}
+
 export function generateTimePeriodBillingEvent(params: {
   transactionId: string
   hoursTotal: number

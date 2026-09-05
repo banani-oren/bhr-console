@@ -21,6 +21,7 @@ import {
 import {
   addDays,
   calculateTaxInvoiceDate,
+  generateHadrachaBillingEvent,
   generateServiceBillingEvents,
   parsePaymentTermDays,
   reconcileFinalSalaryBillingEvents,
@@ -498,9 +499,63 @@ export default function TransactionDialog({
       // The advance does NOT — it is due the moment the placement is opened, so it
       // is emitted from תאריך פתיחה (entry_date) as soon as the client has an advance.
       const canGenerateAdvanceOnly = state.kind === 'service' && isGiyusNow && !state.work_start_date
-      const shouldGenerateEvents = canGenerateSplits || canGenerateAdvanceOnly
+      // הדרכה bills as a single event, generated from the live price × execution-
+      // dates + travel total the dialog already computes (Batch 8 Phase 5) —
+      // mutually exclusive with the גיוס advance/split tracks above.
+      const isHadrachaNow = state.service_type_name === 'הדרכה'
+      const canGenerateHadracha = state.kind === 'service' && isHadrachaNow
+      const shouldGenerateEvents = canGenerateSplits || canGenerateAdvanceOnly || canGenerateHadracha
 
-      if (shouldGenerateEvents) {
+      if (canGenerateHadracha) {
+        const executionDatesRaw = (state.custom.execution_dates as { date: string; hours?: number }[] | undefined) ?? []
+        const executionDateStrings = executionDatesRaw.map((d) => d?.date).filter((d): d is string => !!d)
+        // Same total the on-screen "סה"כ לחיוב" card shows and the useEffect
+        // mirrors onto net_invoice_amount — reused here, not recomputed, so the
+        // displayed total and the billed amount can never drift.
+        const hadrachaAmount = Number(state.custom.net_invoice_amount) || 0
+        const hadrachaEvent = generateHadrachaBillingEvent({
+          transactionId: editing?.id ?? crypto.randomUUID(),
+          amount: hadrachaAmount,
+          executionDates: executionDateStrings,
+          entryDate: state.entry_date,
+          trainingName: String(state.custom.workshop_name ?? ''),
+          serviceType: state.service_type_name,
+          supplierPercent: state.supplier_percent ?? 0,
+        })
+
+        // The RPC's delete-then-insert only reinserts rows present in p_events,
+        // so a manually-added event (+ הוסף אירוע, always at index ≥2) that
+        // hasn't progressed yet must be carried through explicitly here or it
+        // would be silently wiped by every regeneration.
+        const manualSurvivors: BillingEventDraft[] = txnBillingEvents
+          .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
+          .map((e) => ({
+            transaction_id: e.transaction_id,
+            event_index: e.event_index,
+            amount: e.amount,
+            description: e.description,
+            billing_date: e.billing_date,
+            status: e.status,
+            invoice_number: e.invoice_number,
+            payment_date: e.payment_date,
+            receipt_number: e.receipt_number,
+            advance_applied: e.advance_applied,
+            supplier_amount: e.supplier_amount,
+          }))
+
+        events = hadrachaEvent ? [hadrachaEvent, ...manualSurvivors] : manualSurvivors
+
+        // The index-1 event may already be billed/paid (locked) — the RPC
+        // already skips inserting over an occupied index, so the DB is safe
+        // either way, but warn rather than silently diverging when the
+        // recomputed amount would have differed.
+        const existingIndex1 = txnBillingEvents.find((e) => e.event_index === 1)
+        const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
+        if (isLocked && hadrachaEvent && Math.abs(hadrachaEvent.amount - existingIndex1.amount) > 0.005) {
+          reconcileWarning =
+            'אירוע החיוב של הדרכה זו כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
+        }
+      } else if (shouldGenerateEvents) {
         const workStartDate = state.work_start_date || null
         // Never persisted — the RPC always resolves the real transaction_id
         // server-side (see save_transaction_with_events), so this is just a
@@ -1172,7 +1227,14 @@ function BillingEventsPanel({
   selectedClient: Client | null
 }) {
   const { profile } = useAuth()
-  const isAdmin = profile?.role === 'admin'
+  // Billing-event management is the back-office function: both admin and
+  // מנהלה (administration) issue invoices and receipts, so both can add a
+  // manual event. The DB has always allowed this (see the
+  // administration_billing_events_all RLS policy) — the button was the only
+  // block (Batch 8 Phase 5). Recruiters are explicitly NOT included — their
+  // RLS policy is SELECT-only, so exposing the button to them would produce
+  // a confusing failure.
+  const canManageBillingEvents = profile?.role === 'admin' || profile?.role === 'administration'
   const paymentTermsDays = parsePaymentTermDays(selectedClient?.payment_terms)
   const nextEventIndex = events.reduce((m, e) => Math.max(m, e.event_index), 0) + 1
 
@@ -1205,7 +1267,7 @@ function BillingEventsPanel({
           ))}
         </div>
       )}
-      {isAdmin && (
+      {canManageBillingEvents && (
         <div className="mt-3">
           <AddBillingEventButton
             transactionId={transaction.id}
