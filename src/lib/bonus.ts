@@ -145,6 +145,7 @@ export function computeMonthlyBonusRows(
 export type BillingEventRevenueRow = {
   billing_date: string        // keep for backward compat (may be used elsewhere)
   payment_date: string | null // the date money was received
+  due_date: string | null     // the expected payment date — drives month attribution (D5)
   amount: number
   supplier_amount: number
   service_lead: string | null
@@ -159,6 +160,7 @@ type BillingEventTxn = {
 type BillingEventRowRaw = {
   billing_date: string | null
   payment_date: string | null
+  due_date: string | null
   amount: number | string | null
   supplier_amount: number | string | null
   transactions: BillingEventTxn | BillingEventTxn[] | null
@@ -167,8 +169,9 @@ type BillingEventRowRaw = {
 /**
  * Fetches only PAID billing events for approved transactions joined
  * to their transaction's service_lead. A bonus accrues only once the
- * customer has actually paid, so revenue is counted from status = 'paid'
- * events, attributed to the payment_date (when money was received).
+ * customer has actually paid (status = 'paid', unchanged — see Repair 4),
+ * but is attributed to the expected due-date month rather than the payment
+ * (receipt) month — see groupBillingRevenueByEmployeeMonth (Oren, 2026-09-13).
  */
 export async function fetchApprovedBillingEventRows(
   supabaseClient: import('@supabase/supabase-js').SupabaseClient,
@@ -178,6 +181,7 @@ export async function fetchApprovedBillingEventRows(
     .select(`
       billing_date,
       payment_date,
+      due_date,
       amount,
       supplier_amount,
       transactions!inner (
@@ -200,6 +204,7 @@ export async function fetchApprovedBillingEventRows(
       return {
         billing_date: row.billing_date,
         payment_date: (row as unknown as Record<string, unknown>).payment_date as string | null,
+        due_date: row.due_date,
         amount: Number(row.amount) || 0,
         supplier_amount: Number(row.supplier_amount) || 0,
         service_lead: t.service_lead ?? null,
@@ -216,8 +221,10 @@ export function groupBillingRevenueByEmployeeMonth(
   for (const row of rows) {
     const lead = (row.service_lead ?? '').trim().toLowerCase()
     if (!lead) continue
-    // Use payment_date (when money arrived) for month attribution.
-    const dateStr = row.payment_date ?? row.billing_date
+    // Bonus accrues only on paid events (gate unchanged, see Repair 4),
+    // attributed to the expected due-date month (Oren, 2026-09-13) — falls
+    // back to payment_date, then billing_date, for older rows with no due_date.
+    const dateStr = row.due_date ?? row.payment_date ?? row.billing_date
     if (!dateStr) continue
     const date = new Date(dateStr)
     if (isNaN(date.getTime())) continue

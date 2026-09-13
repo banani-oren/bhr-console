@@ -351,6 +351,7 @@ export default function BillingReports() {
                   <SortableHead col="status" label="סטטוס" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">חשבון עסקה</TableHead>
                   <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="due_date" label="תאריך פירעון" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">קבלה</TableHead>
                 </TableRow>
               </TableHeader>
@@ -480,6 +481,9 @@ function BillingEventDashRow({
           onBlur={() => paymentDate !== (event.payment_date ?? '') && saveField('payment_date', paymentDate)}
           className="h-8 text-xs"
         />
+      </TableCell>
+      <TableCell>
+        <DateCell value={event.due_date} />
       </TableCell>
       <TableCell>
         <Input

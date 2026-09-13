@@ -31,6 +31,12 @@ export function addDays(iso: string, days: number): string {
  *
  * Calendar arithmetic is done in UTC to avoid local-vs-UTC drift when the input
  * "YYYY-MM-DD" is parsed as UTC midnight by the Date constructor.
+ *
+ * The Postgres function `bhr_calc_due_date` (migration 20260913_due_date.sql) is
+ * the authoritative, DB-persisted implementation of this same formula — it is
+ * what actually populates `billing_events.due_date`. This client-side copy is
+ * only a live preview shown in TransactionDialog before a row is saved. Keep
+ * the two in lockstep if the formula ever changes.
  */
 export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(invoiceDate)
@@ -58,7 +64,10 @@ export function computeEventStatus(
   return 'pending'
 }
 
-export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at'>
+// due_date / due_date_is_manual are intentionally omitted: they are computed
+// and persisted by the DB trigger `trg_billing_events_due_date` on insert,
+// never set by draft-generation code.
+export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at' | 'due_date' | 'due_date_is_manual'>
 
 export function generateServiceBillingEvents(params: {
   transactionId: string
@@ -199,7 +208,8 @@ export function generateTimePeriodBillingEvent(params: {
   void params.paymentTerms
   const amount = Math.round(hoursTotal * hourlyRate * 100) / 100
   // billing_date = the proforma issue date = today when billing is generated.
-  // Tax-invoice date is calculated on-the-fly in the UI from billing_date + שוטף+X.
+  // due_date (expected payment date) is computed and persisted by the DB
+  // trigger from billing_date + payment_terms — not set here.
   const billingDate = new Date().toISOString().slice(0, 10)
 
   return {

@@ -1517,7 +1517,11 @@ function BillingEventRow({
 }) {
   const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
   const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
-  const [taxInvoiceDateOverride, setTaxInvoiceDateOverride] = useState(event.payment_date ?? '')
+  const calculatedTaxDate = event.billing_date
+    ? calculateTaxInvoiceDate(event.billing_date, paymentTermsDays)
+    : null
+  const [dueDateInput, setDueDateInput] = useState(event.due_date ?? calculatedTaxDate ?? '')
+  const [paymentDateActual, setPaymentDateActual] = useState(event.payment_date ?? '')
   const [amountOverride, setAmountOverride] = useState(String(event.amount))
   const [billingDateOverride, setBillingDateOverride] = useState(event.billing_date ?? '')
   const [savingField, setSavingField] = useState<string | null>(null)
@@ -1547,24 +1551,21 @@ function BillingEventRow({
   useEffect(() => {
     setInvoiceNumber(event.invoice_number ?? '')
     setReceiptNumber(event.receipt_number ?? '')
-    setTaxInvoiceDateOverride(event.payment_date ?? '')
+    setDueDateInput(event.due_date ?? calculatedTaxDate ?? '')
+    setPaymentDateActual(event.payment_date ?? '')
     setAmountOverride(String(event.amount))
     setBillingDateOverride(event.billing_date ?? '')
-  }, [event.id, event.invoice_number, event.receipt_number, event.payment_date, event.amount, event.billing_date])
-
-  const calculatedTaxDate = event.billing_date
-    ? calculateTaxInvoiceDate(event.billing_date, paymentTermsDays)
-    : null
-
-  const taxDateDisplay = taxInvoiceDateOverride || calculatedTaxDate || ''
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event.id, event.invoice_number, event.receipt_number, event.due_date, event.payment_date, event.amount, event.billing_date])
 
   const saveField = async (
-    field: 'invoice_number' | 'payment_date' | 'receipt_number' | 'amount' | 'billing_date',
-    value: string | number,
+    field: 'invoice_number' | 'payment_date' | 'receipt_number' | 'amount' | 'billing_date' | 'due_date' | 'due_date_is_manual',
+    value: string | number | boolean,
+    extra?: Record<string, unknown>,
   ) => {
     setSavingField(field)
     setRowError(null)
-    const patch: Record<string, unknown> = { [field]: value === '' ? null : value }
+    const patch: Record<string, unknown> = { [field]: value === '' ? null : value, ...extra }
 
     if (field === 'invoice_number') {
       if (value && event.status !== 'billed' && event.status !== 'paid') {
@@ -1576,8 +1577,10 @@ function BillingEventRow({
     if (field === 'receipt_number') {
       if (value) {
         patch.status = 'paid'
-        if (!event.payment_date && calculatedTaxDate) {
-          patch.payment_date = calculatedTaxDate
+        // A receipt number means money arrived now — default the actual
+        // payment date to today (still editable via "תאריך תשלום בפועל").
+        if (!event.payment_date) {
+          patch.payment_date = new Date().toISOString().slice(0, 10)
         }
       } else if (event.status === 'paid') {
         patch.status = event.invoice_number ? 'billed' : 'to_bill'
@@ -1710,10 +1713,10 @@ function BillingEventRow({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">
                 תאריך פירעון
-                {calculatedTaxDate && !taxInvoiceDateOverride && (
+                {!event.due_date_is_manual && (
                   <span className="text-purple-600 mr-1">(מחושב)</span>
                 )}
-                {taxInvoiceDateOverride && (
+                {event.due_date_is_manual && (
                   <span className="text-amber-600 mr-1">(ידני)</span>
                 )}
               </Label>
@@ -1721,25 +1724,22 @@ function BillingEventRow({
                 <Input
                   type="date"
                   className="h-7 text-sm"
-                  value={taxDateDisplay}
-                  onChange={(e) => setTaxInvoiceDateOverride(e.target.value)}
+                  value={dueDateInput}
+                  onChange={(e) => setDueDateInput(e.target.value)}
                   onBlur={() => {
-                    const newVal = taxInvoiceDateOverride || calculatedTaxDate || ''
-                    if (newVal !== (event.payment_date ?? '')) {
-                      void saveField('payment_date', newVal)
+                    if (dueDateInput !== (event.due_date ?? '')) {
+                      const isManual = dueDateInput !== (calculatedTaxDate ?? '')
+                      void saveField('due_date', dueDateInput, { due_date_is_manual: isManual })
                     }
                   }}
                 />
-                {taxInvoiceDateOverride && (
+                {event.due_date_is_manual && (
                   <button
                     type="button"
                     className="text-xs text-muted-foreground hover:text-foreground"
                     title="אפס לתאריך מחושב"
                     onClick={() => {
-                      setTaxInvoiceDateOverride('')
-                      if (calculatedTaxDate) {
-                        void saveField('payment_date', calculatedTaxDate)
-                      }
+                      void saveField('due_date_is_manual', false)
                     }}
                   >
                     ↩
@@ -1759,6 +1759,20 @@ function BillingEventRow({
                   }
                 }}
                 placeholder={savingField === 'receipt_number' ? 'שומר...' : 'מספר חשבונית'}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">תאריך תשלום בפועל</Label>
+              <Input
+                type="date"
+                className="h-7 text-sm"
+                value={paymentDateActual}
+                onChange={(e) => setPaymentDateActual(e.target.value)}
+                onBlur={() => {
+                  if (paymentDateActual !== (event.payment_date ?? '')) {
+                    void saveField('payment_date', paymentDateActual)
+                  }
+                }}
               />
             </div>
           </div>

@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
+import { format } from 'date-fns'
+import { he } from 'date-fns/locale'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
@@ -59,6 +61,7 @@ type EventRow = {
   supplier_amount: number
   billing_date: string | null
   payment_date: string | null
+  due_date: string | null
   status: string
   invoice_number: string | null
   description: string | null
@@ -73,6 +76,7 @@ type RawEventRow = {
   supplier_amount: number | string | null
   billing_date: string | null
   payment_date: string | null
+  due_date: string | null
   status: string
   invoice_number: string | null
   description: string | null
@@ -302,8 +306,29 @@ type ScheduleRow = {
   id: string
   amount: number
   description: string | null
-  paymentDate: string | null
+  dueDate: string | null
   clientName: string | null
+}
+
+// Groups schedule rows (already sorted ascending by due date, nulls last) into
+// contiguous per-month buckets for the cash-flow subtotal display. Rows with
+// no due_date (no billing_date at all yet) fall into a trailing "ללא תאריך" group.
+function groupByDueMonth(rows: ScheduleRow[]) {
+  const groups: { key: string; label: string; rows: ScheduleRow[]; subtotal: number }[] = []
+  for (const r of rows) {
+    const key = r.dueDate ? r.dueDate.slice(0, 7) : 'none'
+    let group = groups.at(-1)?.key === key ? groups.at(-1) : undefined
+    if (!group) {
+      const label = r.dueDate
+        ? format(new Date(`${r.dueDate}T00:00:00`), 'MMMM yyyy', { locale: he })
+        : 'ללא תאריך'
+      group = { key, label, rows: [], subtotal: 0 }
+      groups.push(group)
+    }
+    group.rows.push(r)
+    group.subtotal += r.amount
+  }
+  return groups
 }
 
 function ExpectedPaymentSchedule() {
@@ -319,22 +344,22 @@ function ExpectedPaymentSchedule() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
-        .select('id, amount, description, payment_date, transactions!inner(client_name)')
+        .select('id, amount, description, due_date, transactions!inner(client_name)')
         .eq('status', 'billed')
-        .order('payment_date', { ascending: true, nullsFirst: false })
+        .order('due_date', { ascending: true, nullsFirst: false })
       if (error) throw error
       const list = (data ?? []) as unknown as {
         id: string
         amount: number | string | null
         description: string | null
-        payment_date: string | null
+        due_date: string | null
         transactions: { client_name: string | null } | null
       }[]
       return list.map((r) => ({
         id: r.id,
         amount: Number(r.amount) || 0,
         description: r.description,
-        paymentDate: r.payment_date,
+        dueDate: r.due_date,
         clientName: r.transactions?.client_name ?? null,
       }))
     },
@@ -351,6 +376,7 @@ function ExpectedPaymentSchedule() {
   if (rows.length === 0) return null
 
   const total = rows.reduce((sum, r) => sum + r.amount, 0)
+  const groups = groupByDueMonth(rows)
 
   return (
     <Card>
@@ -373,13 +399,22 @@ function ExpectedPaymentSchedule() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="px-4 font-medium">{r.clientName ?? '—'}</TableCell>
-                    <TableCell className="px-4 text-xs text-muted-foreground">{r.description ?? '—'}</TableCell>
-                    <TableCell className="px-4 font-medium">{ILS.format(r.amount)}</TableCell>
-                    <TableCell className="px-4"><DateCell value={r.paymentDate} /></TableCell>
-                  </TableRow>
+                {groups.map((g) => (
+                  <Fragment key={g.key}>
+                    {g.rows.map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="px-4 font-medium">{r.clientName ?? '—'}</TableCell>
+                        <TableCell className="px-4 text-xs text-muted-foreground">{r.description ?? '—'}</TableCell>
+                        <TableCell className="px-4 font-medium">{ILS.format(r.amount)}</TableCell>
+                        <TableCell className="px-4"><DateCell value={r.dueDate} /></TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableCell colSpan={2} className="px-4 text-xs text-muted-foreground">סה"כ {g.label}</TableCell>
+                      <TableCell className="px-4 text-xs font-semibold text-amber-700">{ILS.format(g.subtotal)}</TableCell>
+                      <TableCell className="px-4" />
+                    </TableRow>
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>
@@ -401,7 +436,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from('billing_events')
         .select(`
-          id, amount, supplier_amount, billing_date, payment_date, status, invoice_number, description,
+          id, amount, supplier_amount, billing_date, payment_date, due_date, status, invoice_number, description,
           transactions!inner ( client_name, service_lead, needs_approval, approved_at )
         `)
         .neq('status', 'cancelled')
@@ -413,6 +448,7 @@ export default function AdminDashboard() {
         supplier_amount: Number(row.supplier_amount) || 0,
         billing_date: row.billing_date,
         payment_date: row.payment_date,
+        due_date: row.due_date,
         status: row.status,
         invoice_number: row.invoice_number,
         description: row.description,
@@ -445,9 +481,11 @@ export default function AdminDashboard() {
         pendingPaymentSum += ev.amount
         pendingPaymentCount += 1
       }
-      // Income = money actually received = paid events only. A billed event
-      // gets a calculated payment_date but the client hasn't paid yet, so it
-      // must NOT count as a receipt.
+      // Income = money actually received = paid events only, by payment_date
+      // (the actual receipt date — unchanged by the due_date feature). A
+      // billed event has an expected due_date but hasn't been paid yet, so
+      // it must NOT count as a receipt. due_date (תאריך תשלום צפוי) only
+      // feeds the cash-flow forecast widget above, never these KPIs.
       if (ev.status === 'paid' && ev.payment_date) {
         const pd = new Date(ev.payment_date)
         if (!isNaN(pd.getTime())) {

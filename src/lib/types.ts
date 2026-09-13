@@ -89,6 +89,8 @@ export type BillingEvent = {
   status: BillingEventStatus
   invoice_number: string | null
   payment_date: string | null
+  due_date: string | null
+  due_date_is_manual: boolean
   receipt_number: string | null
   advance_applied: number
   supplier_amount: number
