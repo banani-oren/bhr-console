@@ -777,6 +777,16 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 
 ## Phase History
 
+⚠️ **Numbering rule: each Repair number is used once.** Before writing a new
+prompt or phase row, check the highest `Repair N` number already in this
+table and take the next one — never reuse or guess. This rule exists because
+it was already broken once: **Repair 15** was used twice — an earlier,
+never-executed `repair15-advance-billing-event.md` was fully superseded and
+deleted during Batch 8 Phase 3 (see that row below) before the real Repair 15
+(Hours Billing Fields) was written — and a near-miss happened again with
+**Repair 16**, briefly duplicated as `repair16-collection-model.md` before
+being corrected to Repair 17 and deleted (2026-10-03, Oren).
+
 | Phase | Migration(s) | Status | Key Changes |
 |---|---|---|---|
 | Baseline | 20260418–20260426 | ✅ Live | Roles, RLS, service_types, suppliers, billing_reports |
