@@ -4,7 +4,8 @@ import { Plus, Pencil, Trash2, Receipt, FileText } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { Client, HoursLog } from '@/lib/types'
-import { addDays, parsePaymentTermDays } from '@/lib/billingEvents'
+import { generateTimePeriodBillingEvent } from '@/lib/billingEvents'
+import { formatDate } from '@/lib/dates'
 import { useSafeMutation } from '@/hooks/useSafeMutation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -154,11 +155,25 @@ export default function MyHoursView() {
     () => unbilledHours.reduce((s, h) => s + (Number(h.hours) || 0), 0),
     [unbilledHours],
   )
-  const billingAmount = selectedClient?.hourly_rate
-    ? Math.round(totalUnbilledHours * selectedClient.hourly_rate * 100) / 100
-    : 0
-  const termDays = parsePaymentTermDays(selectedClient?.payment_terms ?? null)
-  const billingDate = addDays(new Date().toISOString().slice(0, 10), termDays)
+
+  // Single source of truth for the amount + billing_date the confirmation
+  // modal shows and the mutation below persists — computed through the same
+  // generator so the preview and the saved event can never diverge (D1/D2).
+  const billingEventDraft = useMemo(() => {
+    if (!selectedClient?.hourly_rate || unbilledHours.length === 0) return null
+    const periodStart = unbilledHours[0]?.visit_date ?? ''
+    const periodEnd = unbilledHours[unbilledHours.length - 1]?.visit_date ?? ''
+    return generateTimePeriodBillingEvent({
+      transactionId: 'preview',
+      hoursTotal: totalUnbilledHours,
+      hourlyRate: selectedClient.hourly_rate,
+      clientName: selectedClient.name,
+      periodStart,
+      periodEnd,
+    })
+  }, [selectedClient, unbilledHours, totalUnbilledHours])
+  const billingAmount = billingEventDraft?.amount ?? 0
+  const billingDate = billingEventDraft?.billing_date ?? null
 
   const deleteMut = useSafeMutation<{ id: string }, void>({
     mutationFn: async ({ id }, signal) => {
@@ -187,61 +202,72 @@ export default function MyHoursView() {
       const periodEnd = unbilledHours[unbilledHours.length - 1]?.visit_date ?? ''
       const nowIso = new Date().toISOString()
 
-      const { data: txn, error: txnErr } = await supabase
-        .from('transactions')
-        .insert({
-          kind: 'time_period',
-          client_id: clientId,
-          client_name: selectedClient.name,
-          service_type: 'שעות עבודה',
-          period_start: periodStart,
-          period_end: periodEnd,
-          hours_total: totalUnbilledHours,
-          hourly_rate_used: selectedClient.hourly_rate,
-          net_invoice_amount: billingAmount,
-          billing_month: month,
-          billing_year: year,
-          entry_date: new Date().toISOString().slice(0, 10),
-          payment_status: 'ממתין',
-          needs_approval: false,
-          approved_at: nowIso,
-          approved_by: profile?.id ?? null,
-          created_by: profile?.id ?? null,
-          position_name: '',
-          candidate_name: '',
-          salary: 0,
-          commission_percent: 0,
-          commission_amount: 0,
-          service_lead: profile?.full_name ?? '',
+      // Computed the same way as the preview above (D1/D2) so the amount and
+      // billing_date shown in the confirmation modal and the saved event can
+      // never diverge.
+      const eventDraft = generateTimePeriodBillingEvent({
+        transactionId: 'pending', // the RPC resolves the real transaction id server-side
+        hoursTotal: totalUnbilledHours,
+        hourlyRate: selectedClient.hourly_rate,
+        clientName: selectedClient.name,
+        periodStart,
+        periodEnd,
+      })
+
+      const payload = {
+        kind: 'time_period',
+        client_id: clientId,
+        client_name: selectedClient.name,
+        service_type: 'שעות עבודה',
+        period_start: periodStart,
+        period_end: periodEnd,
+        hours_total: totalUnbilledHours,
+        hourly_rate_used: selectedClient.hourly_rate,
+        net_invoice_amount: eventDraft.amount,
+        billing_month: month,
+        billing_year: year,
+        entry_date: new Date().toISOString().slice(0, 10),
+        payment_status: 'ממתין',
+        needs_approval: false,
+        approved_at: nowIso,
+        approved_by: profile?.id ?? null,
+        created_by: profile?.id ?? null,
+        position_name: '',
+        candidate_name: '',
+        salary: 0,
+        commission_percent: 0,
+        commission_amount: 0,
+        service_lead: profile?.full_name ?? '',
+      }
+
+      // One atomic RPC: transaction + billing event commit together, so a
+      // stall can never leave an orphan transaction without its event (the
+      // partial-save hazard this replaces — see Repair 15).
+      const { data: txnId, error: rpcError } = await supabase
+        .rpc('save_transaction_with_events', {
+          p_mode: 'insert',
+          p_id: null,
+          p_payload: payload,
+          p_events: [eventDraft],
+          p_flip_to_bill: true,
+          p_work_end_date: null,
         })
-        .select('id')
         .abortSignal(signal)
-        .single()
-      if (txnErr || !txn) throw txnErr ?? new Error('שגיאה ביצירת עסקה')
+      if (rpcError || !txnId) throw rpcError ?? new Error('שגיאה ביצירת עסקה')
 
-      const txnId = (txn as { id: string }).id
-
+      // Linking the billed hours stays outside the RPC: a failure here leaves
+      // a correct transaction + billing event with unlinked hours (recoverable
+      // by hand), never an orphan transaction — unlike the old write order
+      // (transaction → hours_log → billing_events) this replaces.
       const hourIds = unbilledHours.map((h) => h.id)
       if (hourIds.length > 0) {
         const { error: linkErr } = await supabase
           .from('hours_log')
-          .update({ billed_transaction_id: txnId })
+          .update({ billed_transaction_id: txnId as string })
           .in('id', hourIds)
           .abortSignal(signal)
         if (linkErr) throw linkErr
       }
-
-      const { error: evtErr } = await supabase.from('billing_events').insert({
-        transaction_id: txnId,
-        event_index: 1,
-        amount: billingAmount,
-        description: `שעות עבודה · ${selectedClient.name} · ${periodStart} – ${periodEnd}`,
-        billing_date: billingDate,
-        status: 'pending',
-        advance_applied: 0,
-        supplier_amount: 0,
-      }).abortSignal(signal)
-      if (evtErr) throw evtErr
     },
     invalidate: [['transactions'], ['billing_events'], ['hours-log-view']],
     onSuccess: () => {
@@ -489,7 +515,11 @@ export default function MyHoursView() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">תאריך חיוב:</span>
-                <span>{billingDate}</span>
+                <span>{billingDate ? formatDate(billingDate) : '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">תאריך פירעון צפוי:</span>
+                <span className="text-xs text-muted-foreground">יחושב לפי תנאי התשלום של הלקוח לאחר השמירה</span>
               </div>
               {hoursBillingMut.saveStatus === 'error' && (
                 <p className="text-destructive">{hoursBillingMut.errorMessage ?? 'שגיאה'}</p>

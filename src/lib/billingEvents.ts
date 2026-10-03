@@ -23,6 +23,19 @@ export function addDays(iso: string, days: number): string {
 }
 
 /**
+ * Last calendar day of the month of an ISO "YYYY-MM-DD" date, computed in UTC
+ * (same approach as calculateTaxInvoiceDate) to avoid local-vs-UTC drift.
+ */
+export function endOfMonth(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso)
+  if (!m) return iso
+  const year = Number(m[1])
+  const month = Number(m[2]) // 1-12
+  const eom = new Date(Date.UTC(year, month, 0)) // day 0 of next month = last of this
+  return eom.toISOString().slice(0, 10)
+}
+
+/**
  * Calculates the expected חשבונית מס קבלה date using Israeli "שוטף+X" logic:
  * - Advance to the last day of the invoice month ("שוטף")
  * - Then add the specified number of additional days
@@ -194,6 +207,15 @@ export function generateHadrachaBillingEvent(params: {
   }
 }
 
+/**
+ * Hours (time_period) transactions bill as a single event per report.
+ *
+ * billing_date = the LAST DAY OF THE MONTH the report covers (Oren,
+ * 2026-10-03): advance to the end of periodEnd's month (falling back to
+ * periodStart, then today, if periodEnd is missing). Payment terms are
+ * applied ONLY by the due_date trigger on top of this — never baked in here,
+ * or the client's שוטף+X gets double-counted (the bug this replaces).
+ */
 export function generateTimePeriodBillingEvent(params: {
   transactionId: string
   hoursTotal: number
@@ -201,16 +223,11 @@ export function generateTimePeriodBillingEvent(params: {
   clientName: string
   periodStart: string
   periodEnd: string
-  paymentTerms: string | null
 }): BillingEventDraft {
   const { transactionId, hoursTotal, hourlyRate, clientName,
           periodStart, periodEnd } = params
-  void params.paymentTerms
   const amount = Math.round(hoursTotal * hourlyRate * 100) / 100
-  // billing_date = the proforma issue date = today when billing is generated.
-  // due_date (expected payment date) is computed and persisted by the DB
-  // trigger from billing_date + payment_terms — not set here.
-  const billingDate = new Date().toISOString().slice(0, 10)
+  const billingDate = endOfMonth(periodEnd || periodStart || new Date().toISOString().slice(0, 10))
 
   return {
     transaction_id: transactionId,

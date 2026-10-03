@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Printer, Plus } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Client, HoursLog, Profile } from '@/lib/types'
+import type { ServiceType } from '@/lib/serviceTypes'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -47,6 +48,17 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
       setSelectedEmployees(new Set())
     }
   }, [open, presetClientId, monthStart, today])
+
+  // Shares the ['service_types'] cache entry with TransactionDialog (same
+  // query shape) so looking up a שעות עבודה row here never duplicates it.
+  const { data: serviceTypes = [] } = useQuery<ServiceType[]>({
+    queryKey: ['service_types'],
+    queryFn: async () => {
+      const { data, error } = await supabase.from('service_types').select('*').order('display_order', { ascending: true })
+      if (error) throw error
+      return data as ServiceType[]
+    },
+  })
 
   const { data: timeLogClients = [] } = useQuery<Client[]>({
     queryKey: ['hours-report-clients'],
@@ -195,8 +207,14 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
 
   const handleCreateTransaction = () => {
     if (!selectedClient) return
+    // No service_types row is seeded for שעות עבודה (time_period transactions
+    // don't use the dynamic-fields system — see the 20260422 purge of the old
+    // דיווח שעות row) — this lookup only picks one up if Oren adds one by hand.
+    const hoursServiceType = serviceTypes.find((st) => st.name === 'שעות עבודה')
     setTxnInitial({
       kind: 'time_period',
+      service_type: 'שעות עבודה',
+      service_type_id: hoursServiceType?.id ?? null,
       client_id: selectedClient.id,
       client_name: selectedClient.name,
       period_start: periodStart,

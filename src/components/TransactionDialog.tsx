@@ -23,12 +23,14 @@ import {
   calculateTaxInvoiceDate,
   generateHadrachaBillingEvent,
   generateServiceBillingEvents,
+  generateTimePeriodBillingEvent,
   parsePaymentTermDays,
   reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
   type BillingEventDraft,
 } from '@/lib/billingEvents'
+import { DateCell } from '@/components/ui/date-cell'
 import ClientPicker from '@/components/ClientPicker'
 import AdvanceEditor, { type AdvanceType } from '@/components/AdvanceEditor'
 import {
@@ -78,6 +80,7 @@ type ExecutionDate = { date: string; hours: number }
 
 export type DialogInitial = {
   kind?: TransactionKind
+  service_type?: string
   service_type_id?: string | null
   client_id?: string | null
   client_name?: string
@@ -309,6 +312,7 @@ export default function TransactionDialog({
       const s = emptyState(profile?.full_name ?? '')
       if (initial) {
         s.kind = initial.kind ?? s.kind
+        s.service_type_name = initial.service_type ?? s.service_type_name
         s.service_type_id = initial.service_type_id ?? null
         s.client_id = initial.client_id ?? null
         s.client_name = initial.client_name ?? ''
@@ -465,6 +469,19 @@ export default function TransactionDialog({
         ...approvalFields,
       }
 
+      // time_period (hours billing): carry the hours fields through to the RPC —
+      // previously dropped here entirely, which is why a time_period save never
+      // persisted period/hours/rate/amount (see Repair 15).
+      if (state.kind === 'time_period') {
+        payload.period_start = state.period_start
+        payload.period_end = state.period_end
+        payload.hours_total = state.hours_total
+        payload.hourly_rate_used = state.hourly_rate_used
+        const hrs = Number(state.hours_total) || 0
+        const rate = Number(state.hourly_rate_used) || 0
+        if (hrs > 0 && rate > 0) payload.net_invoice_amount = Math.round(hrs * rate * 100) / 100
+      }
+
       // For service kind: compute net_invoice_amount from salary × commission% (no billing_percent).
       // For גיוס, final_salary (once set) is the more accurate figure and takes priority.
       if (state.kind === 'service') {
@@ -480,7 +497,7 @@ export default function TransactionDialog({
         }
       }
 
-      for (const k of ['commission_percent', 'salary', 'net_invoice_amount', 'commission_amount']) {
+      for (const k of ['commission_percent', 'salary', 'net_invoice_amount', 'commission_amount', 'hours_total', 'hourly_rate_used']) {
         if (payload[k] !== undefined && payload[k] !== null && payload[k] !== '') {
           payload[k] = Number(payload[k])
         }
@@ -504,7 +521,12 @@ export default function TransactionDialog({
       // mutually exclusive with the גיוס advance/split tracks above.
       const isHadrachaNow = state.service_type_name === 'הדרכה'
       const canGenerateHadracha = state.kind === 'service' && isHadrachaNow
-      const shouldGenerateEvents = canGenerateSplits || canGenerateAdvanceOnly || canGenerateHadracha
+      // דיווח שעות bills as a single event per report, same shape as הדרכה —
+      // see generateTimePeriodBillingEvent for the billing_date rule (D2).
+      const canGenerateTimePeriod =
+        state.kind === 'time_period' && !!state.period_end && (Number(state.hours_total) || 0) > 0
+      const shouldGenerateEvents =
+        canGenerateSplits || canGenerateAdvanceOnly || canGenerateHadracha || canGenerateTimePeriod
 
       if (canGenerateHadracha) {
         const executionDatesRaw = (state.custom.execution_dates as { date: string; hours?: number }[] | undefined) ?? []
@@ -554,6 +576,43 @@ export default function TransactionDialog({
         if (isLocked && hadrachaEvent && Math.abs(hadrachaEvent.amount - existingIndex1.amount) > 0.005) {
           reconcileWarning =
             'אירוע החיוב של הדרכה זו כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
+        }
+      } else if (canGenerateTimePeriod) {
+        const timePeriodEvent = generateTimePeriodBillingEvent({
+          transactionId: editing?.id ?? crypto.randomUUID(),
+          hoursTotal: Number(state.hours_total) || 0,
+          hourlyRate: Number(state.hourly_rate_used) || 0,
+          clientName: state.client_name,
+          periodStart: state.period_start ?? '',
+          periodEnd: state.period_end ?? '',
+        })
+
+        // Same reasoning as the הדרכה branch above: carry forward manually
+        // added events (event_index !== 1, not yet progressed) or the RPC's
+        // delete-then-insert wipes them.
+        const manualSurvivors: BillingEventDraft[] = txnBillingEvents
+          .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
+          .map((e) => ({
+            transaction_id: e.transaction_id,
+            event_index: e.event_index,
+            amount: e.amount,
+            description: e.description,
+            billing_date: e.billing_date,
+            status: e.status,
+            invoice_number: e.invoice_number,
+            payment_date: e.payment_date,
+            receipt_number: e.receipt_number,
+            advance_applied: e.advance_applied,
+            supplier_amount: e.supplier_amount,
+          }))
+
+        events = [timePeriodEvent, ...manualSurvivors]
+
+        const existingIndex1 = txnBillingEvents.find((e) => e.event_index === 1)
+        const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
+        if (isLocked && Math.abs(timePeriodEvent.amount - existingIndex1.amount) > 0.005) {
+          reconcileWarning =
+            'אירוע החיוב של דוח השעות הזה כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
         }
       } else if (shouldGenerateEvents) {
         const workStartDate = state.work_start_date || null
@@ -1008,14 +1067,18 @@ export default function TransactionDialog({
             {isTimePeriod && (
               <Card className="p-3 mt-4 bg-amber-50/50">
                 <h4 className="text-xs font-semibold text-amber-800 mb-2">דיווח שעות</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                   <div>
                     <Label className="text-xs">תקופה</Label>
-                    <p>{state.period_start ?? '—'} → {state.period_end ?? '—'}</p>
+                    <p><DateCell value={state.period_start} /> → <DateCell value={state.period_end} /></p>
                   </div>
                   <div>
                     <Label className="text-xs">סה"כ שעות</Label>
-                    <p>{state.hours_total ?? 0}</p>
+                    <p>{(state.hours_total ?? 0).toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs">תעריף שעה</Label>
+                    <p>{fmt(state.hourly_rate_used)}</p>
                   </div>
                   <div>
                     <Label className="text-xs">סכום נטו</Label>
