@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import type { BonusModel } from '@/lib/types'
+import { fetchBonusEvents, buildBonusLedger, currentMonthKey, actualForecastProgress, type BonusEvent } from '@/lib/bonus'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -49,128 +49,69 @@ const STATUS_BADGE: Record<string, string> = {
   cancelled: 'bg-gray-50 text-gray-700 border-gray-200',
 }
 
-type EventRow = {
-  amount: number
-  supplier_amount: number
-  billing_date: string | null
-  payment_date: string | null
-  status: string
-  client_name: string | null
-  candidate_name: string | null
-  service_type: string | null
-  description: string | null
-}
-
-type RawEventRow = {
-  amount: number | string | null
-  supplier_amount: number | string | null
-  billing_date: string | null
-  payment_date: string | null
-  status: string
-  description: string | null
-  transactions: { client_name: string | null; candidate_name: string | null; service_type: string | null; service_lead: string | null; needs_approval: boolean; approved_at: string | null } | null
-}
-
-function calcBonusTier(rev: number, model: BonusModel | null | undefined) {
-  if (!model?.tiers?.length) return null
-  const sorted = [...model.tiers].sort((a, b) => a.min - b.min)
-  const currentTier = [...sorted].reverse().find((t) => rev >= t.min) ?? sorted[0]
-  const currentIdx = sorted.findIndex((t) => t.min === currentTier.min)
-  const nextTier = currentIdx + 1 < sorted.length ? sorted[currentIdx + 1] : null
-  return { sorted, currentTier, nextTier }
-}
-
-function buildRecent6Months(events: EventRow[]) {
-  const now = new Date()
-  const months: { label: string; year: number; month: number }[] = []
+// 6 calendar months ending at todayKey, actual (paid, by payment_date) revenue
+// per month — sourced from the shared ledger, so this chart can never drift
+// from the hero card's own numbers.
+function buildRecent6Months(ledger: Map<string, import('@/lib/bonus').LedgerMonth>, todayKey: string) {
+  const [ty, tm] = todayKey.split('-').map(Number)
+  const out: { label: string; revenue: number }[] = []
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    months.push({
-      label: `${HE_MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`,
-      year: d.getFullYear(),
-      month: d.getMonth() + 1,
-    })
+    let y = ty
+    let m = tm - i
+    while (m <= 0) { m += 12; y -= 1 }
+    const key = `${y}-${String(m).padStart(2, '0')}`
+    out.push({ label: `${HE_MONTHS[m - 1]} ${String(y).slice(2)}`, revenue: ledger.get(key)?.actualRevenue ?? 0 })
   }
-  return months.map(({ label, year, month }) => {
-    const revenue = events.reduce((sum, ev) => {
-      // Income = money received = paid events, bucketed by payment_date —
-      // consistent with the bonus engine (src/lib/bonus.ts).
-      if (ev.status !== 'paid' || !ev.payment_date) return sum
-      const d = new Date(ev.payment_date)
-      if (isNaN(d.getTime())) return sum
-      if (d.getFullYear() === year && d.getMonth() + 1 === month) return sum + (ev.amount - ev.supplier_amount)
-      return sum
-    }, 0)
-    return { label, revenue }
-  })
+  return out
 }
 
 export default function RecruiterDashboard() {
   const { profile } = useAuth()
+  const todayKey = currentMonthKey()
 
-  const { data: myEvents = [], isLoading } = useQuery<EventRow[]>({
+  const { data: myEvents = [], isLoading, isError, refetch } = useQuery<BonusEvent[]>({
     queryKey: ['recruiter-dashboard-events', profile?.full_name],
     enabled: !!profile?.full_name,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('billing_events')
-        .select(`
-          amount, supplier_amount, billing_date, payment_date, status, description,
-          transactions!inner ( client_name, candidate_name, service_type, service_lead, needs_approval, approved_at )
-        `)
-        .neq('status', 'cancelled')
-        .ilike('transactions.service_lead', profile!.full_name)
-      if (error) throw error
-      const rows = (data ?? []) as unknown as RawEventRow[]
-      return rows
-        .filter((row) => row.transactions && (!row.transactions.needs_approval || row.transactions.approved_at != null))
-        .map((row) => ({
-          amount: Number(row.amount) || 0,
-          supplier_amount: Number(row.supplier_amount) || 0,
-          billing_date: row.billing_date,
-          payment_date: row.payment_date,
-          status: row.status,
-          description: row.description,
-          client_name: row.transactions?.client_name ?? null,
-          candidate_name: row.transactions?.candidate_name ?? null,
-          service_type: row.transactions?.service_type ?? null,
-        }))
-    },
+    queryFn: () => fetchBonusEvents(supabase, { leadName: profile!.full_name }),
   })
 
-  const now = new Date()
-  const curYear = now.getFullYear()
-  const curMonth = now.getMonth() + 1
+  const tiers = useMemo(() => profile?.bonus_model?.tiers ?? [], [profile?.bonus_model])
+  const ledger = useMemo(() => buildBonusLedger(myEvents, tiers, todayKey), [myEvents, tiers, todayKey])
+  const month = ledger.get(todayKey) ?? {
+    actualRevenue: 0, expectedRevenue: 0, forecastRevenue: 0, actualBonus: 0, forecastBonus: 0,
+    isPast: false, isCurrent: true, events: [],
+  }
+  const monthRevenue = month.actualRevenue
+  const monthForecastRevenue = month.forecastRevenue
 
-  const monthRevenue = useMemo(() => {
-    return myEvents.reduce((sum, ev) => {
-      // Income = money received = paid events, by payment_date — matches the
-      // bonus engine so the displayed bonus reflects what will actually be paid.
-      if (ev.status !== 'paid' || !ev.payment_date) return sum
-      const d = new Date(ev.payment_date)
-      if (isNaN(d.getTime())) return sum
-      if (d.getFullYear() === curYear && d.getMonth() + 1 === curMonth) {
-        return sum + (ev.amount - ev.supplier_amount)
-      }
-      return sum
-    }, 0)
-  }, [myEvents, curYear, curMonth])
-
-  const monthEventCount = useMemo(() => {
-    return myEvents.filter((ev) => {
-      if (!ev.billing_date) return false
-      const d = new Date(ev.billing_date)
-      return !isNaN(d.getTime()) && d.getFullYear() === curYear && d.getMonth() + 1 === curMonth
-    }).length
-  }, [myEvents, curYear, curMonth])
+  const monthEventCount = useMemo(
+    () => myEvents.filter((ev) => (ev.billing_date ?? '').slice(0, 7) === todayKey).length,
+    [myEvents, todayKey],
+  )
 
   const openCount = useMemo(
     () => myEvents.filter((ev) => ev.status === 'to_bill').length,
     [myEvents],
   )
 
-  const bonusInfo = calcBonusTier(monthRevenue, profile?.bonus_model)
-  const monthlyRevenue = useMemo(() => buildRecent6Months(myEvents), [myEvents])
+  // Current/next tier by ACTUAL revenue (fixes the below-first-tier bug: the
+  // old calcBonusTier fell back to the lowest tier's bonus with `?? sorted[0]`
+  // even when revenue hadn't reached it — showing e.g. ₪800 on ₪0 revenue).
+  const { currentTier, nextTier, actualPct, forecastPct, amountToNext } =
+    actualForecastProgress(monthRevenue, monthForecastRevenue, tiers)
+  // Does the forecast reach a higher tier than the actual one?
+  const forecastTier = useMemo(() => {
+    const sorted = [...tiers].sort((a, b) => a.min - b.min)
+    let fIdx = -1
+    for (let i = 0; i < sorted.length; i++) {
+      if (monthForecastRevenue >= sorted[i].min) fIdx = i
+      else break
+    }
+    const curMin = currentTier?.min
+    return fIdx >= 0 && sorted[fIdx].min !== curMin ? sorted[fIdx] : null
+  }, [tiers, monthForecastRevenue, currentTier])
+
+  const monthlyRevenue = useMemo(() => buildRecent6Months(ledger, todayKey), [ledger, todayKey])
 
   const recent5 = useMemo(() => {
     return [...myEvents]
@@ -186,19 +127,20 @@ export default function RecruiterDashboard() {
     )
   }
 
-  const progressPct = bonusInfo?.nextTier
-    ? Math.max(
-        0,
-        Math.min(
-          100,
-          ((monthRevenue - bonusInfo.currentTier.min) /
-            (bonusInfo.nextTier.min - bonusInfo.currentTier.min)) *
-            100,
-        ),
-      )
-    : 100
-
-  const remainingToNext = bonusInfo?.nextTier ? Math.max(0, bonusInfo.nextTier.min - monthRevenue) : 0
+  if (isError) {
+    return (
+      <div className="p-6 flex flex-col items-center justify-center min-h-[40vh] gap-3" dir="rtl">
+        <p className="text-sm text-destructive">שגיאה בטעינת נתוני הבונוס.</p>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="text-sm text-purple-700 underline"
+        >
+          נסה שנית
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6 space-y-6" dir="rtl">
@@ -209,27 +151,38 @@ export default function RecruiterDashboard() {
           <div>
             <p className="text-sm text-purple-800/80">הבונוס שלך החודש</p>
             <p className="text-5xl font-bold text-purple-900 mt-1">
-              {ILS.format(bonusInfo?.currentTier.bonus ?? 0)}
+              {ILS.format(month.actualBonus)}
             </p>
+            {profile?.bonus_model && (
+              <p className="text-sm text-purple-700/80 mt-1">
+                תחזית לחודש: <span className="font-semibold text-purple-800">{ILS.format(month.forecastBonus)}</span>
+              </p>
+            )}
           </div>
           {profile?.bonus_model ? (
             <div className="space-y-2">
-              {bonusInfo?.nextTier ? (
+              {nextTier ? (
                 <>
                   <div className="h-3 w-full rounded-full bg-purple-200 overflow-hidden relative">
-                    <div className="h-full bg-purple-600 transition-all" style={{ width: `${progressPct}%` }} />
+                    <div className="h-full bg-purple-300 transition-all" style={{ width: `${forecastPct}%` }} />
+                    <div className="h-full bg-purple-600 transition-all absolute inset-y-0 right-0" style={{ width: `${actualPct}%` }} />
                   </div>
                   <div className="flex justify-between text-xs text-purple-900/80">
-                    <span>{ILS.format(bonusInfo.currentTier.min)}</span>
+                    <span>{ILS.format(currentTier?.min ?? 0)}</span>
                     <span className="font-medium">הכנסה החודש: {ILS.format(monthRevenue)}</span>
-                    <span>{ILS.format(bonusInfo.nextTier.min)}</span>
+                    <span>{ILS.format(nextTier.min)}</span>
                   </div>
                   <p className="text-sm text-purple-900 font-medium">
-                    עוד {ILS.format(remainingToNext)} למדרגת {ILS.format(bonusInfo.nextTier.bonus)}
+                    עוד {ILS.format(amountToNext)} למדרגת {ILS.format(nextTier.bonus)}
                   </p>
+                  {forecastTier && (
+                    <p className="text-xs text-purple-700/80">בתחזית: מדרגת {ILS.format(forecastTier.bonus)}</p>
+                  )}
                 </>
-              ) : (
+              ) : currentTier ? (
                 <p className="text-sm text-purple-900 font-medium">הגעת למדרגה המקסימלית! 🎉</p>
+              ) : (
+                <p className="text-sm text-purple-900/80">טרם הגעת למדרגה הראשונה החודש. הכנסה החודש: {ILS.format(monthRevenue)}</p>
               )}
             </div>
           ) : (

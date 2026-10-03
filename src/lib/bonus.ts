@@ -1,7 +1,8 @@
-import type { BonusModel, BonusTier, Profile, Transaction } from './types'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { BonusTier } from './types'
 
 // ---------------------------------------------------------------------------
-// Tier math
+// Tier math (unchanged — non-cumulative, highest tier reached per month)
 // ---------------------------------------------------------------------------
 
 export function calculateBonus(revenue: number, tiers: BonusTier[]): number {
@@ -51,199 +52,288 @@ export function bonusBreakdown(revenue: number, tiers: BonusTier[]): BonusBreakd
   return { revenue, currentTier, nextTier, bonus, progressPct, amountToNext, tierIndex }
 }
 
+export type ActualForecastProgress = {
+  currentTier: BonusTier | null
+  nextTier: BonusTier | null
+  actualPct: number
+  forecastPct: number
+  amountToNext: number
+}
+
+/**
+ * Shared progress-bar math for every two-layer actual/forecast bar in the
+ * app (RecruiterDashboard hero, BonusWidget rows, Bonuses cards) — one
+ * formula so they can never drift from each other. currentTier/nextTier are
+ * always chosen by ACTUAL revenue (never forecast) so "how close am I" means
+ * the same thing everywhere.
+ */
+export function actualForecastProgress(
+  actualRevenue: number,
+  forecastRevenue: number,
+  tiers: BonusTier[],
+): ActualForecastProgress {
+  const sorted = [...tiers].sort((a, b) => a.min - b.min)
+  let idx = -1
+  for (let i = 0; i < sorted.length; i++) {
+    if (actualRevenue >= sorted[i].min) idx = i
+    else break
+  }
+  const currentTier = idx >= 0 ? sorted[idx] : null
+  const nextTier = idx + 1 < sorted.length ? sorted[idx + 1] : null
+  if (!nextTier) {
+    return { currentTier, nextTier: null, actualPct: 100, forecastPct: 100, amountToNext: 0 }
+  }
+  const lowerBound = currentTier?.min ?? 0
+  const span = Math.max(1, nextTier.min - lowerBound)
+  const actualPct = Math.max(0, Math.min(100, ((actualRevenue - lowerBound) / span) * 100))
+  const forecastPct = Math.max(0, Math.min(100, ((forecastRevenue - lowerBound) / span) * 100))
+  const amountToNext = Math.max(0, nextTier.min - actualRevenue)
+  return { currentTier, nextTier, actualPct, forecastPct, amountToNext }
+}
+
 // ---------------------------------------------------------------------------
-// Transaction → employee attribution
+// Repair 16 (2026-10-03) — one bonus engine, actual vs. forecast.
 //
-// Each transaction carries a `service_lead` field (the employee's name).
-// The bonus for a profile is calculated from transactions where
-// service_lead matches profile.full_name (case-insensitive).
-// ---------------------------------------------------------------------------
-
-export function filterByEmployee(txns: Transaction[], fullName: string): Transaction[] {
-  const needle = (fullName ?? '').trim().toLowerCase()
-  if (!needle) return []
-  return txns.filter((t) => (t.service_lead ?? '').trim().toLowerCase() === needle)
-}
-
-// Kept for backward compatibility — delegates to filterByEmployee when a name
-// is supplied; falls back to the legacy field/contains filter otherwise.
-export function filterRevenueTransactions(
-  txns: Transaction[],
-  model: BonusModel,
-  employeeName?: string,
-): Transaction[] {
-  if (employeeName) return filterByEmployee(txns, employeeName)
-  const f = model.filter
-  if (!f || !f.field) return txns
-  const needle = (f.contains ?? '').trim().toLowerCase()
-  if (!needle) return txns
-  return txns.filter((t) => {
-    const cell = (t as unknown as Record<string, unknown>)[f.field]
-    if (cell == null) return false
-    return String(cell).toLowerCase().includes(needle)
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Transaction → month attribution
+// Business rules confirmed by Oren, 2026-10-03 (see prompts/repair16-bonus-engine.md §2):
 //
-// PRIMARY:  billing_month / billing_year  (when revenue is actually collected)
-// FALLBACK: closing_month / closing_year  (when the deal was signed)
-// LAST:     entry_date
+// ACTUAL (בפועל): revenue = net (amount - supplier_amount) of billing_events
+// with status = 'paid', for approved transactions, where the employee is the
+// מוביל (transactions.service_lead). Month attribution = the month the money
+// was ACTUALLY received (payment_date) — this REVERSES the 2026-09-13 (D5)
+// rule that attributed by due_date. "בונוס משולם לפי התאריך שבו התקבל הכסף
+// בפועל ... אם התקבל תשלום ב-1/9, הסכום לבונוס ישולם כבר במשכורת ספטמבר."
+// Fallback for a paid event with NULL payment_date (legacy rows): due_date,
+// then billing_date.
+//
+// FORECAST (תחזית): forecast revenue for month M = actual paid revenue in M
+// + expected revenue in M, where expected = net of every OPEN event
+// (status IN pending/to_bill/billed, approved transactions only) whose
+// due_date (falling back to billing_date) falls in M. An open event dated
+// before the first day of the current month is rolled forward into the
+// CURRENT month (flagged overdue) rather than left stranded in a closed
+// past month. Past months are closed: forecast = actual there.
+//
+// Month keys are always derived from the 'YYYY-MM-DD' date STRING
+// (`.slice(0, 7)`), never `new Date(...).getMonth()`, to avoid timezone
+// drift turning a payment on the 1st into the previous month.
 // ---------------------------------------------------------------------------
 
-export function transactionMonth(t: Transaction): { month: number; year: number } | null {
-  // Billing date = when money lands = the correct month for bonus accumulation.
-  if (t.billing_year && t.billing_month) {
-    return { month: t.billing_month, year: t.billing_year }
-  }
-  // Fall back to deal-close date if billing not set.
-  if (t.closing_year && t.closing_month) {
-    return { month: t.closing_month, year: t.closing_year }
-  }
-  if (t.entry_date) {
-    const d = new Date(t.entry_date)
-    if (!Number.isNaN(d.getTime())) return { month: d.getMonth() + 1, year: d.getFullYear() }
-  }
-  return null
-}
+export type BonusEventStatus = 'pending' | 'to_bill' | 'billed' | 'paid'
 
-// ---------------------------------------------------------------------------
-// Monthly rollup
-// ---------------------------------------------------------------------------
-
-export type EmployeeBonusRow = {
-  profile: Profile
-  breakdown: BonusBreakdown
-  monthRevenue: number
-}
-
-export function computeMonthlyBonusRows(
-  profiles: Profile[],
-  txns: Transaction[],
-  month: number,
-  year: number,
-): EmployeeBonusRow[] {
-  const out: EmployeeBonusRow[] = []
-  for (const p of profiles) {
-    if (!p.bonus_model) continue
-    const filtered = filterByEmployee(txns, p.full_name ?? '').filter((t) => {
-      const tm = transactionMonth(t)
-      return tm && tm.month === month && tm.year === year
-    })
-    const monthRevenue = filtered.reduce((s, t) => s + (Number(t.net_invoice_amount) || 0), 0)
-    const breakdown = bonusBreakdown(monthRevenue, p.bonus_model.tiers)
-    out.push({ profile: p, breakdown, monthRevenue })
-  }
-  return out.sort((a, b) => b.breakdown.bonus - a.breakdown.bonus)
-}
-
-// ---------------------------------------------------------------------------
-// Phase 3: billing_events-based revenue calculation
-// ---------------------------------------------------------------------------
-
-export type BillingEventRevenueRow = {
-  billing_date: string        // keep for backward compat (may be used elsewhere)
-  payment_date: string | null // the date money was received
-  due_date: string | null     // the expected payment date — drives month attribution (D5)
+export type BonusEvent = {
+  id: string
+  transaction_id: string
+  service_lead: string | null
+  client_name: string | null
+  position_name: string | null
+  candidate_name: string | null
+  service_type: string | null
+  description: string | null
+  status: BonusEventStatus
   amount: number
   supplier_amount: number
-  service_lead: string | null
+  net: number // amount - supplier_amount
+  payment_date: string | null
+  due_date: string | null
+  billing_date: string | null
+  monthKey: string | null // 'YYYY-MM', per the rules above
+  kind: 'actual' | 'expected'
+  overdue: boolean
 }
 
-type BillingEventTxn = {
+/** Today's 'YYYY-MM' in Asia/Jerusalem, independent of the browser's local timezone. */
+export function currentMonthKey(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date()).slice(0, 7)
+}
+
+/** Trim, collapse inner whitespace, lowercase — for comparing service_lead to profile.full_name. */
+export function normalizeLead(name: string | null | undefined): string {
+  return (name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+type RawTxn = {
   service_lead: string | null
+  client_name: string | null
+  position_name: string | null
+  candidate_name: string | null
+  service_type: string | null
   needs_approval: boolean
   approved_at: string | null
 }
 
-type BillingEventRowRaw = {
-  billing_date: string | null
-  payment_date: string | null
-  due_date: string | null
+type RawBillingEventRow = {
+  id: string
+  transaction_id: string
   amount: number | string | null
   supplier_amount: number | string | null
-  transactions: BillingEventTxn | BillingEventTxn[] | null
+  status: string
+  description: string | null
+  payment_date: string | null
+  due_date: string | null
+  billing_date: string | null
+  transactions: RawTxn | RawTxn[] | null
+}
+
+function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEvent | null {
+  const t = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
+  if (!t) return null
+  if (t.needs_approval && t.approved_at == null) return null
+
+  const amount = Number(row.amount) || 0
+  const supplierAmount = Number(row.supplier_amount) || 0
+  const net = Math.round((amount - supplierAmount) * 100) / 100
+  const status = row.status as BonusEventStatus // query already excludes 'cancelled'
+
+  const base = {
+    id: row.id,
+    transaction_id: row.transaction_id,
+    service_lead: t.service_lead ?? null,
+    client_name: t.client_name ?? null,
+    position_name: t.position_name ?? null,
+    candidate_name: t.candidate_name ?? null,
+    service_type: t.service_type ?? null,
+    description: row.description,
+    status,
+    amount,
+    supplier_amount: supplierAmount,
+    net,
+    payment_date: row.payment_date,
+    due_date: row.due_date,
+    billing_date: row.billing_date,
+  }
+
+  if (status === 'paid') {
+    // §2.1 fallback chain for legacy rows with no payment_date.
+    const dateStr = row.payment_date ?? row.due_date ?? row.billing_date
+    return { ...base, monthKey: dateStr ? dateStr.slice(0, 7) : null, kind: 'actual', overdue: false }
+  }
+
+  // Open event: expected revenue, placed by due_date -> billing_date.
+  const dateStr = row.due_date ?? row.billing_date
+  let monthKey = dateStr ? dateStr.slice(0, 7) : null
+  let overdue = false
+  if (monthKey && monthKey < todayMonthKey) {
+    overdue = true
+    monthKey = todayMonthKey
+  }
+  return { ...base, monthKey, kind: 'expected', overdue }
 }
 
 /**
- * Fetches only PAID billing events for approved transactions joined
- * to their transaction's service_lead. A bonus accrues only once the
- * customer has actually paid (status = 'paid', unchanged — see Repair 4),
- * but is attributed to the expected due-date month rather than the payment
- * (receipt) month — see groupBillingRevenueByEmployeeMonth (Oren, 2026-09-13).
+ * Fetches every non-cancelled billing event (paid = actual, open = expected)
+ * for approved transactions, joined to the transaction's service_lead/client/
+ * position/candidate/service_type. Pass `leadName` to filter server-side (the
+ * RecruiterDashboard's own-employee view); omit it to fetch every event
+ * app-wide (Bonuses page / BonusWidget), which callers then group per
+ * employee client-side via `normalizeLead`.
  */
-export async function fetchApprovedBillingEventRows(
-  supabaseClient: import('@supabase/supabase-js').SupabaseClient,
-): Promise<BillingEventRevenueRow[]> {
-  const { data, error } = await supabaseClient
+export async function fetchBonusEvents(
+  supabaseClient: SupabaseClient,
+  opts?: { leadName?: string },
+): Promise<BonusEvent[]> {
+  let query = supabaseClient
     .from('billing_events')
     .select(`
-      billing_date,
-      payment_date,
-      due_date,
-      amount,
-      supplier_amount,
+      id, transaction_id, amount, supplier_amount, status, description,
+      payment_date, due_date, billing_date,
       transactions!inner (
-        service_lead,
-        needs_approval,
-        approved_at
+        service_lead, client_name, position_name, candidate_name, service_type,
+        needs_approval, approved_at
       )
     `)
-    .eq('status', 'paid')
+    .neq('status', 'cancelled')
 
+  if (opts?.leadName) {
+    query = query.ilike('transactions.service_lead', opts.leadName)
+  }
+
+  const { data, error } = await query
   if (error) throw error
 
-  const rows = (data ?? []) as unknown as BillingEventRowRaw[]
+  const todayMonthKey = currentMonthKey()
+  const rows = (data ?? []) as unknown as RawBillingEventRow[]
   return rows
-    .map((row) => {
-      const t = Array.isArray(row.transactions) ? row.transactions[0] : row.transactions
-      if (!t) return null
-      if (t.needs_approval && t.approved_at == null) return null
-      if (!row.billing_date) return null
-      return {
-        billing_date: row.billing_date,
-        payment_date: (row as unknown as Record<string, unknown>).payment_date as string | null,
-        due_date: row.due_date,
-        amount: Number(row.amount) || 0,
-        supplier_amount: Number(row.supplier_amount) || 0,
-        service_lead: t.service_lead ?? null,
-      }
-    })
-    .filter((r): r is BillingEventRevenueRow => r != null)
+    .map((row) => toBonusEvent(row, todayMonthKey))
+    .filter((e): e is BonusEvent => e != null)
 }
 
-/** Groups rows by service_lead → "YYYY-MM" → net revenue. */
-export function groupBillingRevenueByEmployeeMonth(
-  rows: BillingEventRevenueRow[],
-): Map<string, Map<string, number>> {
-  const result = new Map<string, Map<string, number>>()
-  for (const row of rows) {
-    const lead = (row.service_lead ?? '').trim().toLowerCase()
-    if (!lead) continue
-    // Bonus accrues only on paid events (gate unchanged, see Repair 4),
-    // attributed to the expected due-date month (Oren, 2026-09-13) — falls
-    // back to payment_date, then billing_date, for older rows with no due_date.
-    const dateStr = row.due_date ?? row.payment_date ?? row.billing_date
-    if (!dateStr) continue
-    const date = new Date(dateStr)
-    if (isNaN(date.getTime())) continue
-    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-    if (!result.has(lead)) result.set(lead, new Map())
-    const inner = result.get(lead)!
-    inner.set(monthKey, (inner.get(monthKey) ?? 0) + (row.amount - row.supplier_amount))
+export type LedgerMonth = {
+  actualRevenue: number
+  expectedRevenue: number
+  forecastRevenue: number
+  actualBonus: number
+  forecastBonus: number
+  isPast: boolean
+  isCurrent: boolean
+  events: BonusEvent[]
+}
+
+/**
+ * Groups events by monthKey and computes actual/expected/forecast revenue +
+ * tier bonus for each month present. A month with zero events (for this
+ * employee) simply has no entry — callers default to zero/₪0 for those.
+ * Sums in agorot integers to avoid float drift, per §3.1.
+ */
+export function buildBonusLedger(
+  events: BonusEvent[],
+  tiers: BonusTier[],
+  todayKey: string,
+): Map<string, LedgerMonth> {
+  const byMonth = new Map<string, BonusEvent[]>()
+  for (const e of events) {
+    if (!e.monthKey) continue
+    if (!byMonth.has(e.monthKey)) byMonth.set(e.monthKey, [])
+    byMonth.get(e.monthKey)!.push(e)
+  }
+
+  const result = new Map<string, LedgerMonth>()
+  for (const [monthKey, monthEvents] of byMonth) {
+    const isPast = monthKey < todayKey
+    const isCurrent = monthKey === todayKey
+
+    const actualCents = monthEvents
+      .filter((e) => e.kind === 'actual')
+      .reduce((s, e) => s + Math.round(e.net * 100), 0)
+    // The overdue roll-forward in fetchBonusEvents already guarantees no
+    // 'expected' event can land in a genuinely past month — this filter is
+    // the defensive, not the load-bearing, guarantee of that invariant.
+    const expectedCents = monthEvents
+      .filter((e) => e.kind === 'expected')
+      .reduce((s, e) => s + Math.round(e.net * 100), 0)
+
+    const actualRevenue = actualCents / 100
+    const expectedRevenue = isPast ? 0 : expectedCents / 100
+    const forecastRevenue = isPast ? actualRevenue : actualRevenue + expectedRevenue
+
+    const actualBonus = calculateBonus(actualRevenue, tiers)
+    const forecastBonus = isPast ? actualBonus : calculateBonus(forecastRevenue, tiers)
+
+    result.set(monthKey, {
+      actualRevenue,
+      expectedRevenue,
+      forecastRevenue,
+      actualBonus,
+      forecastBonus,
+      isPast,
+      isCurrent,
+      events: monthEvents,
+    })
   }
   return result
 }
 
-/** Returns net revenue for a given employee in a given month. */
-export function getBillingRevenue(
-  grouped: Map<string, Map<string, number>>,
-  fullName: string,
-  month: number,
-  year: number,
-): number {
-  const lead = (fullName ?? '').trim().toLowerCase()
-  const monthKey = `${year}-${String(month).padStart(2, '0')}`
-  return grouped.get(lead)?.get(monthKey) ?? 0
+/** Convenience accessor — returns an empty-but-valid month when nothing exists yet. */
+export function ledgerMonth(ledger: Map<string, LedgerMonth>, monthKey: string, isPast: boolean, isCurrent: boolean): LedgerMonth {
+  return (
+    ledger.get(monthKey) ?? {
+      actualRevenue: 0,
+      expectedRevenue: 0,
+      forecastRevenue: 0,
+      actualBonus: 0,
+      forecastBonus: 0,
+      isPast,
+      isCurrent,
+      events: [],
+    }
+  )
 }

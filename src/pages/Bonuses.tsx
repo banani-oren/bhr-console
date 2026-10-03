@@ -1,13 +1,12 @@
-// v2
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Trophy, ChevronLeft, Search, X } from 'lucide-react'
+import { Trophy, ChevronLeft, ChevronDown, Search, X } from 'lucide-react'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts'
 import { supabase } from '@/lib/supabase'
-import type { Profile } from '@/lib/types'
+import type { Profile, Transaction } from '@/lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,23 +16,47 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger,
 } from '@/components/ui/select'
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableFooter, TableHeader, TableRow,
 } from '@/components/ui/table'
+import { DateCell } from '@/components/ui/date-cell'
+import { SortableHead, toggleSortKey, compareBySort, type SortState } from '@/components/SortableHead'
+import TransactionDialog from '@/components/TransactionDialog'
 import {
-  computeMonthlyBonusRows, calculateBonus, bonusBreakdown,
-  fetchApprovedBillingEventRows, groupBillingRevenueByEmployeeMonth, getBillingRevenue,
-  type BillingEventRevenueRow,
+  fetchBonusEvents,
+  buildBonusLedger,
+  currentMonthKey,
+  normalizeLead,
+  actualForecastProgress,
+  type BonusEvent,
+  type LedgerMonth,
 } from '@/lib/bonus'
 
 const HEBREW_MONTHS = [
   'ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
   'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר',
 ]
+const HEBREW_MONTHS_SHORT = [
+  'ינו', 'פבר', 'מרץ', 'אפר', 'מאי', 'יונ',
+  'יול', 'אוג', 'ספט', 'אוק', 'נוב', 'דצמ',
+]
 
 const ROLE_LABELS_HE: Record<string, string> = {
   admin: 'מנהל',
   administration: 'מנהלה',
   recruiter: 'רכז/ת גיוס',
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: 'ממתין',
+  to_bill: 'לחיוב',
+  billed: 'חויב',
+  paid: 'שולם',
+}
+const STATUS_BADGE: Record<string, string> = {
+  pending: 'bg-gray-50 text-gray-700 border-gray-200',
+  to_bill: 'bg-blue-50 text-blue-700 border-blue-200',
+  billed: 'bg-amber-50 text-amber-700 border-amber-200',
+  paid: 'bg-emerald-50 text-emerald-700 border-emerald-300',
 }
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
@@ -47,6 +70,18 @@ const SORT_LABELS: Record<SortKey, string> = {
 }
 
 const TODAY = new Date()
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const monthKeyOf = (y: number, m: number) => `${y}-${pad2(m)}`
+
+const EMPTY_MONTH: LedgerMonth = {
+  actualRevenue: 0, expectedRevenue: 0, forecastRevenue: 0, actualBonus: 0, forecastBonus: 0,
+  isPast: false, isCurrent: true, events: [],
+}
+
+/** payment_date for a paid (actual) event, due_date -> billing_date for an open (expected) one. */
+function eventDisplayDate(e: BonusEvent): string | null {
+  return e.kind === 'actual' ? (e.payment_date ?? e.due_date ?? e.billing_date) : (e.due_date ?? e.billing_date)
+}
 
 export default function Bonuses() {
   const navigate = useNavigate()
@@ -56,12 +91,32 @@ export default function Bonuses() {
   const [periodYear, setPeriodYear] = useState<number>(TODAY.getFullYear())
   const [sortBy, setSortBy] = useState<SortKey>('bonus')
 
+  const [editingTxn, setEditingTxn] = useState<Transaction | null>(null)
+  const [txnDialogOpen, setTxnDialogOpen] = useState(false)
+  const [loadingTxnId, setLoadingTxnId] = useState<string | null>(null)
+
+  const openTransaction = async (id: string) => {
+    setLoadingTxnId(id)
+    try {
+      const { data, error } = await supabase.from('transactions').select('*').eq('id', id).single()
+      if (!error && data) {
+        setEditingTxn(data as Transaction)
+        setTxnDialogOpen(true)
+      }
+    } finally {
+      setLoadingTxnId(null)
+    }
+  }
+
+  const todayKey = currentMonthKey()
+  const selectedKey = monthKeyOf(periodYear, periodMonth)
+  const isPastPeriod = selectedKey < todayKey
+
   // 6 months forward (תחזית) + current + 23 months back = 30 entries.
   const monthOptions = useMemo(() => {
     const out: { y: number; m: number; label: string; future: boolean }[] = []
     const todayM = TODAY.getMonth() + 1
     const todayY = TODAY.getFullYear()
-    // Start 6 months ahead
     let y = todayY
     let m = todayM + 6
     while (m > 12) { m -= 12; y += 1 }
@@ -74,8 +129,7 @@ export default function Bonuses() {
     return out
   }, [])
 
-  // ALL employees (per spec C2.2 — not just bonus_model holders).
-  const { data: profiles = [] } = useQuery<Profile[]>({
+  const { data: profiles = [], isLoading: profilesLoading, isError: profilesError } = useQuery<Profile[]>({
     queryKey: ['all-employees-for-bonuses'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -88,51 +142,57 @@ export default function Bonuses() {
     },
   })
 
-  const { data: billingRows = [] } = useQuery<BillingEventRevenueRow[]>({
-    queryKey: ['billing-event-revenue'],
-    queryFn: () => fetchApprovedBillingEventRows(supabase),
+  const { data: events = [], isLoading: eventsLoading, isError: eventsError, refetch: refetchEvents } = useQuery<BonusEvent[]>({
+    queryKey: ['bonus-events'],
+    queryFn: () => fetchBonusEvents(supabase),
   })
 
-  const grouped = useMemo(() => groupBillingRevenueByEmployeeMonth(billingRows), [billingRows])
-
-  // Per-employee breakdown for the selected period.
   type Row = {
     profile: Profile
-    revenue: number
-    bonus: number
-    breakdown: ReturnType<typeof bonusBreakdown> | null
     hasModel: boolean
+    ledger: Map<string, LedgerMonth>
+    month: LedgerMonth
+    allEvents: BonusEvent[]
+    noDateEvents: BonusEvent[]
+    progress: ReturnType<typeof actualForecastProgress>
+    sortRevenue: number
+    sortBonus: number
     reachedTier: boolean
   }
 
   const rows: Row[] = useMemo(() => {
     return profiles.map((p) => {
+      const tiers = p.bonus_model?.tiers ?? []
+      const mine = events.filter((e) => normalizeLead(e.service_lead) === normalizeLead(p.full_name))
       if (!p.bonus_model) {
         return {
-          profile: p,
-          revenue: 0,
-          bonus: 0,
-          breakdown: null,
-          hasModel: false,
-          reachedTier: false,
+          profile: p, hasModel: false, ledger: new Map(), month: EMPTY_MONTH,
+          allEvents: mine, noDateEvents: [], progress: actualForecastProgress(0, 0, []),
+          sortRevenue: 0, sortBonus: 0, reachedTier: false,
         }
       }
-      const revenue = getBillingRevenue(grouped, p.full_name ?? '', periodMonth, periodYear)
-      const bd = bonusBreakdown(revenue, p.bonus_model.tiers ?? [])
+      const ledger = buildBonusLedger(mine, tiers, todayKey)
+      const month = ledger.get(selectedKey) ?? EMPTY_MONTH
+      const progress = actualForecastProgress(month.actualRevenue, month.forecastRevenue, tiers)
+      const noDateEvents = mine.filter((e) => e.monthKey == null)
       return {
         profile: p,
-        revenue,
-        bonus: bd.bonus,
-        breakdown: bd,
         hasModel: true,
-        reachedTier: bd.tierIndex >= 0 && bd.bonus > 0,
+        ledger,
+        month,
+        allEvents: mine,
+        noDateEvents,
+        progress,
+        sortRevenue: isPastPeriod ? month.actualRevenue : month.forecastRevenue,
+        sortBonus: isPastPeriod ? month.actualBonus : month.forecastBonus,
+        reachedTier: month.actualBonus > 0,
       }
     })
-  }, [profiles, grouped, periodMonth, periodYear])
+  }, [profiles, events, todayKey, selectedKey, isPastPeriod])
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    let arr = q
+    const arr = q
       ? rows.filter((r) => (r.profile.full_name ?? '').toLowerCase().includes(q))
       : [...rows]
     arr.sort((a, b) => {
@@ -140,17 +200,21 @@ export default function Bonuses() {
         case 'name':
           return (a.profile.full_name ?? '').localeCompare(b.profile.full_name ?? '', 'he')
         case 'revenue':
-          return b.revenue - a.revenue
+          return b.sortRevenue - a.sortRevenue
         case 'bonus':
         default:
-          return b.bonus - a.bonus
+          return b.sortBonus - a.sortBonus
       }
     })
     return arr
   }, [rows, search, sortBy])
 
-  const totalBonus = filteredRows.reduce((s, r) => s + r.bonus, 0)
+  const totalActualBonus = filteredRows.reduce((s, r) => s + r.month.actualBonus, 0)
+  const totalForecastBonus = filteredRows.reduce((s, r) => s + r.month.forecastBonus, 0)
   const reachedCount = filteredRows.filter((r) => r.reachedTier).length
+
+  const isLoading = profilesLoading || eventsLoading
+  const isError = profilesError || eventsError
 
   return (
     <div dir="rtl" className="p-6 space-y-4">
@@ -159,7 +223,6 @@ export default function Bonuses() {
         <h1 className="text-2xl font-bold text-purple-900">בונוסים</h1>
       </div>
 
-      {/* Filter bar (spec C2.1) */}
       <Card className="p-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div className="space-y-1 md:col-span-2">
@@ -222,8 +285,14 @@ export default function Bonuses() {
         </div>
       </Card>
 
-      {/* Cards */}
-      {filteredRows.length === 0 ? (
+      {isLoading ? (
+        <Card className="p-8 text-center text-muted-foreground">טוען נתוני בונוסים...</Card>
+      ) : isError ? (
+        <Card className="p-8 text-center space-y-2">
+          <p className="text-sm text-destructive">שגיאה בטעינת נתוני הבונוסים.</p>
+          <Button variant="outline" size="sm" onClick={() => void refetchEvents()}>נסה שנית</Button>
+        </Card>
+      ) : filteredRows.length === 0 ? (
         <Card className="p-8 text-center text-muted-foreground">
           {search ? 'לא נמצאו עובדים שתואמים לחיפוש.' : 'אין עובדים במערכת.'}
         </Card>
@@ -235,26 +304,37 @@ export default function Bonuses() {
               row={row}
               periodMonth={periodMonth}
               periodYear={periodYear}
-              grouped={grouped}
+              selectedKey={selectedKey}
+              isPastPeriod={isPastPeriod}
               onEditModel={() => navigate(`/team?edit=${row.profile.id}`)}
+              onOpenTransaction={openTransaction}
+              loadingTxnId={loadingTxnId}
             />
           ))}
         </div>
       )}
 
-      {/* Aggregate footer (spec C2.4) */}
-      {filteredRows.length > 0 && (
+      {!isLoading && !isError && filteredRows.length > 0 && (
         <Card className="p-4 bg-purple-50 border-purple-200">
-          <div className="flex items-center justify-between text-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 text-sm">
             <span className="text-purple-700">
               {filteredRows.length} עובדים · {reachedCount} הגיעו למדרגה
             </span>
             <span className="text-base font-semibold text-purple-900">
-              סה"כ בונוסים: {ILS.format(totalBonus)}
+              סה&quot;כ בונוסים בפועל: {ILS.format(totalActualBonus)}
+              <span className="text-xs font-normal text-purple-500 mr-2">
+                סה&quot;כ תחזית: {ILS.format(totalForecastBonus)}
+              </span>
             </span>
           </div>
         </Card>
       )}
+
+      <TransactionDialog
+        open={txnDialogOpen}
+        onOpenChange={setTxnDialogOpen}
+        editing={editingTxn}
+      />
     </div>
   )
 }
@@ -263,21 +343,32 @@ function EmployeeCard({
   row,
   periodMonth,
   periodYear,
-  grouped,
+  selectedKey,
+  isPastPeriod,
   onEditModel,
+  onOpenTransaction,
+  loadingTxnId,
 }: {
   row: {
     profile: Profile
-    revenue: number
-    bonus: number
-    breakdown: ReturnType<typeof bonusBreakdown> | null
     hasModel: boolean
+    ledger: Map<string, LedgerMonth>
+    month: LedgerMonth
+    noDateEvents: BonusEvent[]
+    progress: ReturnType<typeof actualForecastProgress>
   }
   periodMonth: number
   periodYear: number
-  grouped: Map<string, Map<string, number>>
+  selectedKey: string
+  isPastPeriod: boolean
   onEditModel: () => void
+  onOpenTransaction: (id: string) => void
+  loadingTxnId: string | null
 }) {
+  const [dealsSort, setDealsSort] = useState<SortState | null>(null)
+  const [noDateOpen, setNoDateOpen] = useState(false)
+  const toggleDealsSort = (key: string) => setDealsSort((prev) => toggleSortKey(prev ?? { key, dir: 'desc' }, key))
+
   const initial = (row.profile.full_name || '?').charAt(0)
 
   if (!row.hasModel) {
@@ -302,12 +393,7 @@ function EmployeeCard({
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">מודל בונוס לא הוגדר</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onEditModel}
-            className="text-purple-700 border-purple-300"
-          >
+          <Button variant="outline" size="sm" onClick={onEditModel} className="text-purple-700 border-purple-300">
             הגדר מודל <ChevronLeft className="w-3 h-3 ml-1" />
           </Button>
         </CardContent>
@@ -315,30 +401,79 @@ function EmployeeCard({
     )
   }
 
+  const { month, progress, ledger } = row
   const tiers = row.profile.bonus_model?.tiers ?? []
-  const breakdown = row.breakdown!
 
-  // YTD: sum of monthly bonuses for completed months in this calendar year.
-  const ytdBonus = (() => {
-    let total = 0
+  // בונוסים מצטברים (עד התקופה): actual Jan->selected month; if the selected
+  // month is current/future, also show the same sum with the final month's
+  // actual swapped for its forecast (§3.2.6).
+  const { ytdActual, ytdWithForecast } = useMemo(() => {
+    let actualSum = 0
     for (let m = 1; m <= periodMonth; m++) {
-      const rev = getBillingRevenue(grouped, row.profile.full_name ?? '', m, periodYear)
-      total += calculateBonus(rev, tiers)
+      actualSum += ledger.get(monthKeyOf(periodYear, m))?.actualBonus ?? 0
     }
-    return total
-  })()
+    if (isPastPeriod) return { ytdActual: actualSum, ytdWithForecast: null as number | null }
+    let withForecast = 0
+    for (let m = 1; m < periodMonth; m++) {
+      withForecast += ledger.get(monthKeyOf(periodYear, m))?.actualBonus ?? 0
+    }
+    withForecast += ledger.get(selectedKey)?.forecastBonus ?? 0
+    return { ytdActual: actualSum, ytdWithForecast: withForecast }
+  }, [ledger, periodMonth, periodYear, isPastPeriod, selectedKey])
 
-  const trendData = (() => {
-    const arr: { month: string; bonus: number; future: boolean }[] = []
-    const todayM = new Date().getMonth() + 1
-    const todayY = new Date().getFullYear()
-    for (let m = 1; m <= 12; m++) {
-      const rev = getBillingRevenue(grouped, row.profile.full_name ?? '', m, periodYear)
-      const future = periodYear > todayY || (periodYear === todayY && m > todayM)
-      arr.push({ month: HEBREW_MONTHS[m - 1].slice(0, 3), bonus: calculateBonus(rev, tiers), future })
+  // Does the forecast reach a higher tier than the actual one this month?
+  const forecastTier = useMemo(() => {
+    const sorted = [...tiers].sort((a, b) => a.min - b.min)
+    let idx = -1
+    for (let i = 0; i < sorted.length; i++) {
+      if (month.forecastRevenue >= sorted[i].min) idx = i
+      else break
     }
-    return arr
-  })()
+    const curMin = progress.currentTier?.min
+    return idx >= 0 && sorted[idx].min !== curMin ? sorted[idx] : null
+  }, [tiers, month.forecastRevenue, progress.currentTier])
+
+  // 12 months of the selected year — stacked actual/forecast chart.
+  const chartData = useMemo(() => {
+    return Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1
+      const key = monthKeyOf(periodYear, m)
+      const entry = ledger.get(key)
+      const actualBonus = entry?.actualBonus ?? 0
+      const forecastBonus = entry?.forecastBonus ?? actualBonus
+      return {
+        month: HEBREW_MONTHS_SHORT[i],
+        key,
+        actualBonus,
+        forecastDelta: Math.max(0, forecastBonus - actualBonus),
+        forecastBonus,
+      }
+    })
+  }, [ledger, periodYear])
+
+  const dealsRows = useMemo(() => {
+    const withDate = month.events.map((e) => ({ ...e, _date: eventDisplayDate(e) }))
+    if (!dealsSort) {
+      // Default grouping: paid (actual) first, then expected — each by date desc.
+      return withDate.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'actual' ? -1 : 1
+        return (b._date ?? '').localeCompare(a._date ?? '')
+      })
+    }
+    const getValue = (e: typeof withDate[number], key: string): unknown => {
+      switch (key) {
+        case 'client_name': return e.client_name
+        case 'position': return [e.position_name, e.candidate_name].filter(Boolean).join(' / ')
+        case 'description': return e.description
+        case 'net': return e.net
+        case 'status': return e.status
+        case 'date': return e._date
+        case 'kind': return e.kind === 'actual' ? 'א' : 'ת'
+        default: return null
+      }
+    }
+    return [...withDate].sort((a, b) => compareBySort(a, b, dealsSort, getValue))
+  }, [month.events, dealsSort])
 
   return (
     <Card>
@@ -357,84 +492,185 @@ function EmployeeCard({
               </Badge>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onEditModel}
-            className="text-purple-700 border-purple-300"
-          >
+          <Button variant="outline" size="sm" onClick={onEditModel} className="text-purple-700 border-purple-300">
             ערוך מודל <ChevronLeft className="w-3 h-3 ml-1" />
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <Stat label="הכנסה בתקופה" value={ILS.format(row.revenue)} />
-          <Stat
-            label="מדרגה נוכחית"
-            value={breakdown.currentTier ? ILS.format(breakdown.currentTier.min) : '—'}
-          />
-          <Stat label="בונוס" value={ILS.format(row.bonus)} highlight />
+        {/* 1. Stat row — actual vs forecast, mandatory distinction (§2.3) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <Stat label="הכנסה בפועל" value={ILS.format(month.actualRevenue)} />
+          <Stat label="בונוס בפועל" value={ILS.format(month.actualBonus)} highlight />
+          {isPastPeriod ? (
+            <>
+              <Stat label="הכנסה צפויה (תחזית)" value="—" note="חודש סגור" />
+              <Stat label="בונוס צפוי (תחזית)" value="—" note="חודש סגור" />
+            </>
+          ) : (
+            <>
+              <Stat label="הכנסה צפויה (תחזית)" value={ILS.format(month.forecastRevenue)} forecast />
+              <Stat label="בונוס צפוי (תחזית)" value={ILS.format(month.forecastBonus)} forecast />
+            </>
+          )}
         </div>
-        {breakdown.nextTier ? (
+
+        {/* 2. Two-layer progress bar: solid = actual, light = forecast */}
+        {progress.nextTier ? (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>{ILS.format(breakdown.currentTier?.min ?? 0)}</span>
-              <span>{ILS.format(breakdown.nextTier.min)}</span>
+              <span>{ILS.format(progress.currentTier?.min ?? 0)}</span>
+              <span>{ILS.format(progress.nextTier.min)}</span>
             </div>
-            <div className="h-2 bg-muted rounded overflow-hidden">
-              <div
-                className="h-full bg-purple-600"
-                style={{ width: `${breakdown.progressPct}%` }}
-              />
+            <div className="h-2 bg-muted rounded overflow-hidden relative">
+              <div className="h-full bg-purple-200" style={{ width: `${progress.forecastPct}%` }} />
+              <div className="h-full bg-purple-600 absolute inset-y-0 right-0" style={{ width: `${progress.actualPct}%` }} />
             </div>
             <p className="text-xs text-muted-foreground">
-              עוד {ILS.format(breakdown.amountToNext)} למדרגת {ILS.format(breakdown.nextTier.bonus)}
+              עוד {ILS.format(progress.amountToNext)} למדרגת {ILS.format(progress.nextTier.bonus)}
+              {forecastTier && (
+                <span className="text-purple-500"> · בתחזית: מדרגת {ILS.format(forecastTier.bonus)}</span>
+              )}
             </p>
           </div>
-        ) : breakdown.currentTier ? (
+        ) : progress.currentTier ? (
           <p className="text-xs text-muted-foreground">מדרגה מקסימלית</p>
         ) : (
           <p className="text-xs text-muted-foreground">לא הגעת למדרגה הראשונה</p>
         )}
-        <div className="rounded-md border overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-right text-xs">מינימום (₪)</TableHead>
-                <TableHead className="text-right text-xs">בונוס (₪)</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tiers
-                .slice()
-                .sort((a, b) => a.min - b.min)
-                .map((t, i) => (
-                  <TableRow key={i} className={breakdown.currentTier?.min === t.min ? 'bg-purple-50' : ''}>
-                    <TableCell className="text-xs">{ILS.format(t.min)}</TableCell>
-                    <TableCell className="text-xs font-medium">{ILS.format(t.bonus)}</TableCell>
+
+        {/* 4. Deals table — replaces the old tier table */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-purple-700">עסקאות בתקופה</p>
+          {dealsRows.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-3 text-center border rounded-md">אין עסקאות בחודש זה</p>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortableHead col="client_name" label="לקוח" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="position" label="משרה / מועמד" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="description" label="תיאור" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="net" label="סכום נטו" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="status" label="סטטוס" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="date" label="תאריך" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="kind" label="סוג" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                   </TableRow>
-                ))}
-            </TableBody>
-          </Table>
+                </TableHeader>
+                <TableBody>
+                  {dealsRows.map((e) => (
+                    <TableRow
+                      key={e.id}
+                      className={`cursor-pointer hover:bg-purple-50/60 ${loadingTxnId === e.transaction_id ? 'opacity-50' : ''}`}
+                      onClick={() => onOpenTransaction(e.transaction_id)}
+                    >
+                      <TableCell className="text-xs">{e.client_name ?? '—'}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {[e.position_name, e.candidate_name].filter(Boolean).join(' / ') || '—'}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-32 truncate">{e.description ?? '—'}</TableCell>
+                      <TableCell className="text-xs font-medium">{ILS.format(e.net)}</TableCell>
+                      <TableCell className="text-xs">
+                        <Badge variant="outline" className={`${STATUS_BADGE[e.status] ?? ''} text-[10px]`}>
+                          {STATUS_LABEL[e.status] ?? e.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-xs"><DateCell value={e._date} /></TableCell>
+                      <TableCell className="text-xs">
+                        <div className="flex gap-1 items-center">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${e.kind === 'actual' ? 'bg-purple-600 text-white border-purple-600' : 'bg-purple-100 text-purple-700 border-purple-300'}`}
+                          >
+                            {e.kind === 'actual' ? 'בפועל' : 'תחזית'}
+                          </Badge>
+                          {e.overdue && (
+                            <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-300">
+                              באיחור
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-purple-50/50">
+                    <TableCell colSpan={3} className="text-xs font-semibold text-purple-800">סה&quot;כ</TableCell>
+                    <TableCell colSpan={4} className="text-xs font-semibold text-purple-800">
+                      בפועל: {ILS.format(month.actualRevenue)} · צפוי: {ILS.format(month.expectedRevenue)}
+                    </TableCell>
+                  </TableRow>
+                </TableFooter>
+              </Table>
+            </div>
+          )}
+          {row.noDateEvents.length > 0 && (
+            <div className="rounded-md border">
+              <button
+                type="button"
+                onClick={() => setNoDateOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/40"
+              >
+                <span>ללא תאריך ({row.noDateEvents.length})</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${noDateOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {noDateOpen && (
+                <div className="divide-y border-t">
+                  {row.noDateEvents.map((e) => (
+                    <div
+                      key={e.id}
+                      className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-purple-50/60"
+                      onClick={() => onOpenTransaction(e.transaction_id)}
+                    >
+                      <span className="truncate">{e.client_name ?? '—'} · {[e.position_name, e.candidate_name].filter(Boolean).join(' / ')}</span>
+                      <span className="font-medium shrink-0">{ILS.format(e.net)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* 6. YTD line */}
         <div>
           <p className="text-xs text-muted-foreground mb-1">
-            בונוסים מצטברים (עד התקופה): <span className="font-semibold text-foreground">{ILS.format(ytdBonus)}</span>
+            בונוסים מצטברים (עד התקופה): <span className="font-semibold text-foreground">{ILS.format(ytdActual)}</span>
+            {ytdWithForecast != null && (
+              <span className="text-purple-500"> · כולל תחזית: {ILS.format(ytdWithForecast)}</span>
+            )}
           </p>
+
+          {/* 5. 12-month stacked chart: actual (solid) + forecast delta (light) */}
+          <div className="flex items-center gap-3 text-[10px] text-muted-foreground mb-1">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-600 inline-block" /> בפועל</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-purple-200 inline-block" /> תחזית</span>
+          </div>
           <div className="h-32">
             <ResponsiveContainer>
-              <BarChart data={trendData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <BarChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} width={40} />
-                <Tooltip formatter={(v) => ILS.format(Number(v) || 0)} />
-                <Bar dataKey="bonus" radius={[2, 2, 0, 0]} fill="#7c3aed"
-                  shape={(props: any) => {
-                    const fill = props.future ? '#c4b5fd' : '#7c3aed'
-                    return <rect x={props.x} y={props.y} width={props.width} height={props.height} fill={fill} rx={2} />
+                <Tooltip
+                  formatter={(v, name) => [ILS.format(Number(v) || 0), name === 'actualBonus' ? 'בפועל' : 'תחזית']}
+                  labelFormatter={(label, payload) => {
+                    const p = payload?.[0]?.payload as { forecastBonus?: number } | undefined
+                    return p ? `${label} · סה"כ תחזית ${ILS.format(p.forecastBonus ?? 0)}` : label
                   }}
                 />
+                <Bar dataKey="actualBonus" stackId="b" radius={[0, 0, 0, 0]}>
+                  {chartData.map((d) => (
+                    <Cell key={d.key} fill="#7c3aed" stroke={d.key === selectedKey ? '#4c1d95' : undefined} strokeWidth={d.key === selectedKey ? 2 : 0} />
+                  ))}
+                </Bar>
+                <Bar dataKey="forecastDelta" stackId="b" radius={[2, 2, 0, 0]}>
+                  {chartData.map((d) => (
+                    <Cell key={d.key} fill="#c4b5fd" stroke={d.key === selectedKey ? '#4c1d95' : undefined} strokeWidth={d.key === selectedKey ? 2 : 0} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -444,16 +680,14 @@ function EmployeeCard({
   )
 }
 
-function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function Stat({ label, value, highlight, forecast, note }: { label: string; value: string; highlight?: boolean; forecast?: boolean; note?: string }) {
   return (
     <div className="space-y-0.5">
       <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={`text-sm ${highlight ? 'text-purple-700 font-semibold' : 'font-medium'}`}>{value}</p>
+      <p className={`text-sm ${highlight ? 'text-purple-700 font-semibold' : forecast ? 'text-purple-400 font-medium' : 'font-medium'}`}>
+        {value}
+      </p>
+      {note && <p className="text-[10px] text-muted-foreground">{note}</p>}
     </div>
   )
 }
-
-// Keep computeMonthlyBonusRows in scope so callers (e.g. BonusWidget) can
-// import it elsewhere; this module-level use prevents the bundler from
-// tree-shaking it when only this page imports the lib.
-void computeMonthlyBonusRows
