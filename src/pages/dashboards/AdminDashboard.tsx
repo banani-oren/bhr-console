@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth'
 import { usePendingApprovals } from '@/hooks/usePendingApprovals'
 import type { Transaction } from '@/lib/types'
 import TransactionDialog from '@/components/TransactionDialog'
+import BonusWidget from '@/components/BonusWidget'
 import {
   Card,
   CardContent,
@@ -656,6 +657,12 @@ export default function AdminDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Repair 16: BonusWidget existed but was never mounted anywhere in the
+          app — wired in here, next to the per-employee revenue breakdown it
+          complements, since the repair's own QA checklist treated it as an
+          existing dashboard surface. */}
+      <BonusWidget />
 
       <Card>
         <CardHeader>
