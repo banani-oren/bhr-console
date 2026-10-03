@@ -20,7 +20,9 @@ import {
 } from '@/lib/serviceTypes'
 import {
   addDays,
+  buildBillingEventPatch,
   calculateTaxInvoiceDate,
+  computeEventStatus,
   generateHadrachaBillingEvent,
   generateServiceBillingEvents,
   generateTimePeriodBillingEvent,
@@ -28,6 +30,7 @@ import {
   reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
+  type EditableBillingField,
   type BillingEventDraft,
 } from '@/lib/billingEvents'
 import { DateCell } from '@/components/ui/date-cell'
@@ -1324,6 +1327,7 @@ function BillingEventsPanel({
               key={e.id}
               event={e}
               paymentTermsDays={paymentTermsDays}
+              transactionApproved={approved}
               onSaved={onChange}
               onDeleted={onChange}
             />
@@ -1335,6 +1339,7 @@ function BillingEventsPanel({
           <AddBillingEventButton
             transactionId={transaction.id}
             nextEventIndex={nextEventIndex}
+            transactionApproved={approved}
             onAdded={onChange}
           />
         </div>
@@ -1346,10 +1351,12 @@ function BillingEventsPanel({
 function AddBillingEventButton({
   transactionId,
   nextEventIndex,
+  transactionApproved,
   onAdded,
 }: {
   transactionId: string
   nextEventIndex: number
+  transactionApproved: boolean
   onAdded: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -1391,7 +1398,7 @@ function AddBillingEventButton({
           amount: amountNum,
           billing_date: billingDate,
           description: description.trim() || 'תשלום ידני',
-          status: 'pending',
+          status: computeEventStatus({ status: 'pending', billing_date: billingDate, invoice_number: null, receipt_number: null }, transactionApproved),
           invoice_number: null,
           payment_date: null,
           receipt_number: null,
@@ -1570,19 +1577,23 @@ const STATUS_LABEL: Record<BillingEvent['status'], string> = {
 function BillingEventRow({
   event,
   paymentTermsDays,
+  transactionApproved,
   onSaved,
   onDeleted,
 }: {
   event: BillingEvent
   paymentTermsDays: number
+  transactionApproved: boolean
   onSaved: () => void
   onDeleted: () => void
 }) {
   const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
+  const [invoiceDateInput, setInvoiceDateInput] = useState(event.invoice_date ?? '')
   const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
-  const calculatedTaxDate = event.billing_date
-    ? calculateTaxInvoiceDate(event.billing_date, paymentTermsDays)
-    : null
+  // D2: תאריך פירעון is derived from the real invoice date, falling back to
+  // the planned date while no invoice exists yet.
+  const taxDateBasis = event.invoice_date ?? event.billing_date
+  const calculatedTaxDate = taxDateBasis ? calculateTaxInvoiceDate(taxDateBasis, paymentTermsDays) : null
   const [dueDateInput, setDueDateInput] = useState(event.due_date ?? calculatedTaxDate ?? '')
   const [paymentDateActual, setPaymentDateActual] = useState(event.payment_date ?? '')
   const [amountOverride, setAmountOverride] = useState(String(event.amount))
@@ -1613,42 +1624,27 @@ function BillingEventRow({
 
   useEffect(() => {
     setInvoiceNumber(event.invoice_number ?? '')
+    setInvoiceDateInput(event.invoice_date ?? '')
     setReceiptNumber(event.receipt_number ?? '')
     setDueDateInput(event.due_date ?? calculatedTaxDate ?? '')
     setPaymentDateActual(event.payment_date ?? '')
     setAmountOverride(String(event.amount))
     setBillingDateOverride(event.billing_date ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event.id, event.invoice_number, event.receipt_number, event.due_date, event.payment_date, event.amount, event.billing_date])
+  }, [event.id, event.invoice_number, event.invoice_date, event.receipt_number, event.due_date, event.payment_date, event.amount, event.billing_date])
 
+  // Repair 17: the ONLY status-computation + document-pairing logic lives in
+  // buildBillingEventPatch (src/lib/billingEvents.ts) — never set status or
+  // the paired date/number inline here again.
   const saveField = async (
-    field: 'invoice_number' | 'payment_date' | 'receipt_number' | 'amount' | 'billing_date' | 'due_date' | 'due_date_is_manual',
+    field: EditableBillingField,
     value: string | number | boolean,
     extra?: Record<string, unknown>,
   ) => {
     setSavingField(field)
     setRowError(null)
-    const patch: Record<string, unknown> = { [field]: value === '' ? null : value, ...extra }
-
-    if (field === 'invoice_number') {
-      if (value && event.status !== 'billed' && event.status !== 'paid') {
-        patch.status = 'billed'
-      } else if (!value && event.status === 'billed') {
-        patch.status = 'to_bill'
-      }
-    }
-    if (field === 'receipt_number') {
-      if (value) {
-        patch.status = 'paid'
-        // A receipt number means money arrived now — default the actual
-        // payment date to today (still editable via "תאריך תשלום בפועל").
-        if (!event.payment_date) {
-          patch.payment_date = new Date().toISOString().slice(0, 10)
-        }
-      } else if (event.status === 'paid') {
-        patch.status = event.invoice_number ? 'billed' : 'to_bill'
-      }
-    }
+    const patch = buildBillingEventPatch(event, field, value, transactionApproved)
+    Object.assign(patch, extra)
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
@@ -1737,20 +1733,6 @@ function BillingEventRow({
           </h4>
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">תאריך חשבון</Label>
-              <Input
-                type="date"
-                className="h-7 text-sm"
-                value={billingDateOverride}
-                onChange={(e) => setBillingDateOverride(e.target.value)}
-                onBlur={() => {
-                  if (billingDateOverride && billingDateOverride !== (event.billing_date ?? '')) {
-                    void saveField('billing_date', billingDateOverride)
-                  }
-                }}
-              />
-            </div>
-            <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">מספר חשבון עסקה</Label>
               <Input
                 className="h-7 text-sm"
@@ -1764,6 +1746,35 @@ function BillingEventRow({
                 placeholder={savingField === 'invoice_number' ? 'שומר...' : 'מספר חשבון'}
               />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">תאריך חיוב</Label>
+              <Input
+                type="date"
+                className="h-7 text-sm"
+                value={invoiceDateInput}
+                onChange={(e) => setInvoiceDateInput(e.target.value)}
+                onBlur={() => {
+                  if (invoiceDateInput !== (event.invoice_date ?? '')) {
+                    void saveField('invoice_date', invoiceDateInput)
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="space-y-1 pt-1 border-t border-blue-100">
+            <Label className="text-[11px] text-muted-foreground">תאריך חיוב מתוכנן</Label>
+            <Input
+              type="date"
+              className="h-7 text-sm"
+              value={billingDateOverride}
+              onChange={(e) => setBillingDateOverride(e.target.value)}
+              onBlur={() => {
+                if (billingDateOverride && billingDateOverride !== (event.billing_date ?? '')) {
+                  void saveField('billing_date', billingDateOverride)
+                }
+              }}
+              title="התאריך המתוכנן שהמערכת חישבה — לא תאריך החשבון בפועל"
+            />
           </div>
         </div>
 
@@ -1836,6 +1847,8 @@ function BillingEventRow({
                     void saveField('payment_date', paymentDateActual)
                   }
                 }}
+                disabled={!event.receipt_number}
+                title={!event.receipt_number ? 'יש להזין מספר חשבונית מס קבלה תחילה' : undefined}
               />
             </div>
           </div>

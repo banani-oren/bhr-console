@@ -45,11 +45,13 @@ export function endOfMonth(iso: string): string {
  * Calendar arithmetic is done in UTC to avoid local-vs-UTC drift when the input
  * "YYYY-MM-DD" is parsed as UTC midnight by the Date constructor.
  *
- * The Postgres function `bhr_calc_due_date` (migration 20260913_due_date.sql) is
- * the authoritative, DB-persisted implementation of this same formula — it is
- * what actually populates `billing_events.due_date`. This client-side copy is
- * only a live preview shown in TransactionDialog before a row is saved. Keep
- * the two in lockstep if the formula ever changes.
+ * The Postgres function `bhr_calc_due_date` (migration 20260913_due_date.sql,
+ * fed `COALESCE(invoice_date, billing_date)` since 20261003_collection_model.sql
+ * — Repair 17, D2) is the authoritative, DB-persisted implementation of this
+ * same formula — it is what actually populates `billing_events.due_date`.
+ * This client-side copy is only a live preview shown in TransactionDialog
+ * before a row is saved — callers must pass `invoice_date ?? billing_date`
+ * as `invoiceDate` to match. Keep the two in lockstep if the formula ever changes.
  */
 export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(invoiceDate)
@@ -62,6 +64,19 @@ export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: n
   return eom.toISOString().slice(0, 10)
 }
 
+/**
+ * The ONLY place billing_events.status is computed — Repair 17 (2026-10-03).
+ * Every save path (TransactionDialog's BillingEventRow, BillingReports'
+ * BillingEventDashRow) must route status changes through this function (via
+ * buildBillingEventPatch below), never set `status` by hand inline — that
+ * drift is exactly what let the two screens' status logic disagree before.
+ *
+ *   cancelled  — set manually; nothing here overrides it (מבוטל)
+ *   paid       — receipt_number present (שולם)
+ *   billed     — invoice_number present, no receipt (ממתין לתשלום)
+ *   to_bill    — no invoice, transaction approved, billing_date <= today (טרם חויב — לחיוב עכשיו)
+ *   pending    — no invoice, and (not approved OR billing_date > today) (טרם חויב)
+ */
 export function computeEventStatus(
   event: Pick<BillingEvent, 'status' | 'billing_date' | 'invoice_number' | 'receipt_number'>,
   transactionApproved: boolean,
@@ -77,10 +92,89 @@ export function computeEventStatus(
   return 'pending'
 }
 
+/** The four stored statuses collapse into these UI buckets for filters/reports. */
+export type CollectionBucket = 'not_billed' | 'awaiting_payment' | 'paid' | 'cancelled'
+
+export function collectionBucket(status: BillingEvent['status']): CollectionBucket {
+  switch (status) {
+    case 'cancelled': return 'cancelled'
+    case 'paid': return 'paid'
+    case 'billed': return 'awaiting_payment'
+    case 'pending':
+    case 'to_bill':
+    default:
+      return 'not_billed'
+  }
+}
+
+/** The client is late paying an issued invoice — תאריך פירעון renders red. */
+export function isOverduePayment(
+  e: Pick<BillingEvent, 'status' | 'due_date'>,
+  today: string,
+): boolean {
+  return e.status === 'billed' && !!e.due_date && e.due_date < today
+}
+
+/** We are late issuing the invoice — תאריך חיוב מתוכנן renders red. */
+export function isDueToInvoice(
+  e: Pick<BillingEvent, 'status' | 'billing_date'>,
+  today: string,
+): boolean {
+  void today // status already encodes "billing_date <= today" — kept for signature symmetry with isOverduePayment
+  return e.status === 'to_bill'
+}
+
+export type EditableBillingField =
+  | 'invoice_number' | 'invoice_date'
+  | 'receipt_number' | 'payment_date'
+  | 'amount' | 'billing_date' | 'due_date' | 'due_date_is_manual'
+
+/**
+ * Builds the full patch for a single-field edit on an existing billing_event
+ * row: applies the §3.3 document-pairing rules (a document's number and date
+ * are set and cleared together) and then recomputes `status` via
+ * computeEventStatus — the only two places the UI is allowed to touch either.
+ * Shared by TransactionDialog's BillingEventRow and BillingReports'
+ * BillingEventDashRow so their status/pairing logic can never diverge again.
+ */
+export function buildBillingEventPatch(
+  event: Pick<BillingEvent, 'status' | 'billing_date' | 'invoice_number' | 'invoice_date' | 'receipt_number' | 'payment_date'>,
+  field: EditableBillingField,
+  value: string | number | boolean,
+  transactionApproved: boolean,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = { [field]: value === '' ? null : value }
+
+  if (field === 'invoice_number') {
+    if (value && !event.invoice_date) patch.invoice_date = new Date().toISOString().slice(0, 10)
+    else if (!value) patch.invoice_date = null
+  }
+  if (field === 'receipt_number') {
+    if (value && !event.payment_date) patch.payment_date = new Date().toISOString().slice(0, 10)
+    else if (!value) patch.payment_date = null
+  }
+
+  // computeEventStatus's `event.status === 'billed'` branch is a deliberate
+  // one-way lock for its OTHER caller (regeneration, which must never
+  // downgrade an already-billed/paid row it doesn't have fresh data for) —
+  // but that same stickiness would silently block demotion here: clearing
+  // invoice_number on a billed row would compute 'billed' forever, since the
+  // OLD status rides along in nextEvent. Reset to a neutral baseline (never
+  // 'billed'/'paid' themselves, since those are only ever reached via a
+  // present invoice/receipt number below) so status is derived fresh from
+  // the patched fields — except 'cancelled', which must stay sticky exactly
+  // as computeEventStatus's own first check intends.
+  const neutralStatus = event.status === 'cancelled' ? 'cancelled' : 'pending'
+  const nextEvent = { ...event, ...patch, status: neutralStatus } as Pick<BillingEvent, 'status' | 'billing_date' | 'invoice_number' | 'receipt_number'>
+  patch.status = computeEventStatus(nextEvent, transactionApproved)
+  return patch
+}
+
 // due_date / due_date_is_manual are intentionally omitted: they are computed
 // and persisted by the DB trigger `trg_billing_events_due_date` on insert,
-// never set by draft-generation code.
-export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at' | 'due_date' | 'due_date_is_manual'>
+// never set by draft-generation code. invoice_date is omitted for the same
+// reason as it: a document date entered by hand, never by a generator.
+export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at' | 'due_date' | 'due_date_is_manual' | 'invoice_date'>
 
 export function generateServiceBillingEvents(params: {
   transactionId: string

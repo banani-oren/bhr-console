@@ -86,6 +86,7 @@ export type BillingEvent = {
   amount: number
   description: string | null
   billing_date: string | null
+  invoice_date: string | null
   status: BillingEventStatus
   invoice_number: string | null
   payment_date: string | null
@@ -123,12 +124,8 @@ export type Transaction = {
   payment_status: string
   is_billable: boolean
   invoice_number: string | null
-  invoice_number_transaction: string | null
-  invoice_number_receipt: string | null
   work_start_date: string | null
   warranty_end_date: string | null
-  invoice_sent_date: string | null
-  payment_due_date: string | null
   period_start: string | null
   period_end: string | null
   hours_total: number | null

@@ -308,6 +308,7 @@ type ScheduleRow = {
   amount: number
   description: string | null
   dueDate: string | null
+  invoiceDate: string | null
   clientName: string | null
 }
 
@@ -345,7 +346,7 @@ function ExpectedPaymentSchedule() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
-        .select('id, amount, description, due_date, transactions!inner(client_name)')
+        .select('id, amount, description, due_date, invoice_date, transactions!inner(client_name)')
         .eq('status', 'billed')
         .order('due_date', { ascending: true, nullsFirst: false })
       if (error) throw error
@@ -354,6 +355,7 @@ function ExpectedPaymentSchedule() {
         amount: number | string | null
         description: string | null
         due_date: string | null
+        invoice_date: string | null
         transactions: { client_name: string | null } | null
       }[]
       return list.map((r) => ({
@@ -361,6 +363,7 @@ function ExpectedPaymentSchedule() {
         amount: Number(r.amount) || 0,
         description: r.description,
         dueDate: r.due_date,
+        invoiceDate: r.invoice_date,
         clientName: r.transactions?.client_name ?? null,
       }))
     },
@@ -394,9 +397,10 @@ function ExpectedPaymentSchedule() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-right px-4">לקוח</TableHead>
+                  <TableHead className="text-right px-4">תאריך חיוב</TableHead>
                   <TableHead className="text-right px-4">תיאור</TableHead>
                   <TableHead className="text-right px-4">סכום</TableHead>
-                  <TableHead className="text-right px-4">תאריך תשלום צפוי</TableHead>
+                  <TableHead className="text-right px-4">תאריך פירעון</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -405,13 +409,14 @@ function ExpectedPaymentSchedule() {
                     {g.rows.map((r) => (
                       <TableRow key={r.id}>
                         <TableCell className="px-4 font-medium">{r.clientName ?? '—'}</TableCell>
+                        <TableCell className="px-4"><DateCell value={r.invoiceDate} /></TableCell>
                         <TableCell className="px-4 text-xs text-muted-foreground">{r.description ?? '—'}</TableCell>
                         <TableCell className="px-4 font-medium">{ILS.format(r.amount)}</TableCell>
                         <TableCell className="px-4"><DateCell value={r.dueDate} /></TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-muted/40 hover:bg-muted/40">
-                      <TableCell colSpan={2} className="px-4 text-xs text-muted-foreground">סה"כ {g.label}</TableCell>
+                      <TableCell colSpan={3} className="px-4 text-xs text-muted-foreground">סה"כ {g.label}</TableCell>
                       <TableCell className="px-4 text-xs font-semibold text-amber-700">{ILS.format(g.subtotal)}</TableCell>
                       <TableCell className="px-4" />
                     </TableRow>
@@ -465,28 +470,32 @@ export default function AdminDashboard() {
     const curYear = now.getFullYear()
     const curMonth = now.getMonth() + 1
 
-    let toBillCount = 0
-    let toBillSum = 0
-    let pendingPaymentSum = 0
-    let pendingPaymentCount = 0
+    // Repair 17: vocabulary aligned with the collection model / דוח צפי גבייה —
+    // טרם חויב = pending + to_bill (not yet invoiced); ממתין לתשלום = billed
+    // only (invoiced, awaiting payment). This deliberately reverses the
+    // Repair 11 choice (billed + to_bill under "לגבייה") per Oren, so the
+    // dashboard and the report never disagree.
+    let notBilledCount = 0
+    let notBilledSum = 0
+    let awaitingPaymentSum = 0
+    let awaitingPaymentCount = 0
     let collectedThisMonth = 0
     let collectedYTD = 0
 
     for (const ev of billingEvents) {
-      if (ev.status === 'to_bill') {
-        toBillCount += 1
-        toBillSum += ev.amount
+      if (ev.status === 'pending' || ev.status === 'to_bill') {
+        notBilledCount += 1
+        notBilledSum += ev.amount
       }
-      // Money invoiced or ready to invoice but not yet received (to-collect).
-      if (ev.status === 'billed' || ev.status === 'to_bill') {
-        pendingPaymentSum += ev.amount
-        pendingPaymentCount += 1
+      if (ev.status === 'billed') {
+        awaitingPaymentSum += ev.amount
+        awaitingPaymentCount += 1
       }
       // Income = money actually received = paid events only, by payment_date
       // (the actual receipt date — unchanged by the due_date feature). A
       // billed event has an expected due_date but hasn't been paid yet, so
-      // it must NOT count as a receipt. due_date (תאריך תשלום צפוי) only
-      // feeds the cash-flow forecast widget above, never these KPIs.
+      // it must NOT count as a receipt. due_date (תאריך פירעון) only feeds
+      // the cash-flow forecast widget above, never these KPIs.
       if (ev.status === 'paid' && ev.payment_date) {
         const pd = new Date(ev.payment_date)
         if (!isNaN(pd.getTime())) {
@@ -495,7 +504,7 @@ export default function AdminDashboard() {
         }
       }
     }
-    return { toBillCount, toBillSum, pendingPaymentSum, pendingPaymentCount, collectedThisMonth, collectedYTD }
+    return { notBilledCount, notBilledSum, awaitingPaymentSum, awaitingPaymentCount, collectedThisMonth, collectedYTD }
   }, [billingEvents])
 
   const monthlyRevenue = useMemo(() => buildMonthlyRevenue(billingEvents), [billingEvents])
@@ -517,18 +526,21 @@ export default function AdminDashboard() {
 
   const kpiCards = [
     {
-      title: 'לחיוב',
-      value: NUM.format(stats.toBillCount),
+      title: 'טרם חויב',
+      value: NUM.format(stats.notBilledCount),
       icon: <FileText size={20} className="text-amber-600" />,
       iconBg: 'bg-amber-50',
-      sub: ILS.format(stats.toBillSum),
+      sub: ILS.format(stats.notBilledSum),
     },
     {
-      title: 'לגבייה',
-      value: ILS.format(stats.pendingPaymentSum),
+      title: 'ממתין לתשלום',
+      value: ILS.format(stats.awaitingPaymentSum),
       icon: <Clock size={20} className="text-purple-600" />,
       iconBg: 'bg-purple-50',
-      sub: `${NUM.format(stats.pendingPaymentCount)} חיובים`,
+      sub: `${NUM.format(stats.awaitingPaymentCount)} חיובים`,
+      // No money disappears from view: the still-unbilled figure stays
+      // visible as a smaller line under this card (Repair 17, §3.6).
+      sub2: `טרם חויב: ${ILS.format(stats.notBilledSum)}`,
     },
     {
       title: 'תקבולים החודש',
@@ -572,6 +584,9 @@ export default function AdminDashboard() {
             <CardContent>
               <p className="text-2xl font-bold text-foreground leading-none">{card.value}</p>
               <p className="mt-1 text-xs text-muted-foreground">{card.sub}</p>
+              {'sub2' in card && card.sub2 && (
+                <p className="mt-0.5 text-[11px] text-muted-foreground/80">{card.sub2}</p>
+              )}
             </CardContent>
           </Card>
         ))}
