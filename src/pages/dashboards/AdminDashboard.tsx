@@ -24,7 +24,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DateCell } from '@/components/ui/date-cell'
+import { DateCell, DueDateCell } from '@/components/ui/date-cell'
 import {
   BarChart,
   Bar,
@@ -308,13 +308,18 @@ type ScheduleRow = {
   amount: number
   description: string | null
   dueDate: string | null
+  dueDateIsManual: boolean
   invoiceDate: string | null
   clientName: string | null
 }
 
 // Groups schedule rows (already sorted ascending by due date, nulls last) into
 // contiguous per-month buckets for the cash-flow subtotal display. Rows with
-// no due_date (no billing_date at all yet) fall into a trailing "ללא תאריך" group.
+// no due_date — a client with missing/unparseable payment terms (Repair 18;
+// every row here is `billed`, so it always has an invoice_date basis — a
+// NULL due_date here always means terms are missing, never "no basis yet")
+// — fall into a trailing "ללא תאריך פירעון" group, so the money stays
+// visible rather than silently dropping out of the cash-flow view.
 function groupByDueMonth(rows: ScheduleRow[]) {
   const groups: { key: string; label: string; rows: ScheduleRow[]; subtotal: number }[] = []
   for (const r of rows) {
@@ -323,7 +328,7 @@ function groupByDueMonth(rows: ScheduleRow[]) {
     if (!group) {
       const label = r.dueDate
         ? format(new Date(`${r.dueDate}T00:00:00`), 'MMMM yyyy', { locale: he })
-        : 'ללא תאריך'
+        : 'ללא תאריך פירעון'
       group = { key, label, rows: [], subtotal: 0 }
       groups.push(group)
     }
@@ -346,7 +351,7 @@ function ExpectedPaymentSchedule() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
-        .select('id, amount, description, due_date, invoice_date, transactions!inner(client_name)')
+        .select('id, amount, description, due_date, due_date_is_manual, invoice_date, transactions!inner(client_name)')
         .eq('status', 'billed')
         .order('due_date', { ascending: true, nullsFirst: false })
       if (error) throw error
@@ -355,6 +360,7 @@ function ExpectedPaymentSchedule() {
         amount: number | string | null
         description: string | null
         due_date: string | null
+        due_date_is_manual: boolean
         invoice_date: string | null
         transactions: { client_name: string | null } | null
       }[]
@@ -363,6 +369,7 @@ function ExpectedPaymentSchedule() {
         amount: Number(r.amount) || 0,
         description: r.description,
         dueDate: r.due_date,
+        dueDateIsManual: r.due_date_is_manual,
         invoiceDate: r.invoice_date,
         clientName: r.transactions?.client_name ?? null,
       }))
@@ -412,7 +419,7 @@ function ExpectedPaymentSchedule() {
                         <TableCell className="px-4"><DateCell value={r.invoiceDate} /></TableCell>
                         <TableCell className="px-4 text-xs text-muted-foreground">{r.description ?? '—'}</TableCell>
                         <TableCell className="px-4 font-medium">{ILS.format(r.amount)}</TableCell>
-                        <TableCell className="px-4"><DateCell value={r.dueDate} /></TableCell>
+                        <TableCell className="px-4"><DueDateCell dueDate={r.dueDate} isManual={r.dueDateIsManual} hasBasis={!!r.invoiceDate} /></TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-muted/40 hover:bg-muted/40">

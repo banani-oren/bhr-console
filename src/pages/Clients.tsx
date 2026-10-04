@@ -2,6 +2,7 @@ import { useState, useRef, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
+import { parsePaymentTermDays } from '@/lib/billingEvents'
 import type { Client, PaymentSplit } from '@/lib/types'
 import {
   Dialog,
@@ -815,7 +816,20 @@ export default function Clients() {
               ) : (
                 sorted.map((client) => (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-purple-50/50" onClick={() => openEdit(client)}>
-                    <TableCell className="font-medium">{client.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <span>{client.name}</span>
+                        {parsePaymentTermDays(client.payment_terms) == null && (
+                          <Badge
+                            variant="outline"
+                            className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] whitespace-nowrap"
+                            title="לא ניתן לחשב תאריך פירעון עבור חיובי לקוח זה — יש להגדיר תנאי תשלום תקינים"
+                          >
+                            תנאי תשלום חסרים
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>{client.contact_name ?? '—'}</TableCell>
                     <TableCell dir="ltr" className="text-right">{client.phone ?? '—'}</TableCell>
                     <TableCell dir="ltr" className="text-right">

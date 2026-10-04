@@ -108,10 +108,20 @@ export function actualForecastProgress(
 // FORECAST (תחזית): forecast revenue for month M = actual paid revenue in M
 // + expected revenue in M, where expected = net of every OPEN event
 // (status IN pending/to_bill/billed, approved transactions only) whose
-// due_date (falling back to billing_date) falls in M. An open event dated
-// before the first day of the current month is rolled forward into the
-// CURRENT month (flagged overdue) rather than left stranded in a closed
-// past month. Past months are closed: forecast = actual there.
+// due_date falls in M. An open event dated before the first day of the
+// current month is rolled forward into the CURRENT month (flagged overdue)
+// rather than left stranded in a closed past month. Past months are
+// closed: forecast = actual there.
+//
+// Repair 18 (2026-10-04): an open event with NO due_date (the client's
+// payment terms are missing/unparseable — see billingEvents.ts's
+// parsePaymentTermDays) is EXCLUDED from every month's forecast —
+// `monthKey` stays null and buildBonusLedger already skips null-monthKey
+// events — rather than falling back to billing_date (the system's PLAN,
+// not a real due date). That fallback used to exist here and silently
+// forecast money against a date nobody actually committed to. Excluded
+// events are still returned (`excludedFromForecast: true`) so callers can
+// report the total instead of letting it vanish — see the Bonuses page note.
 //
 // Month keys are always derived from the 'YYYY-MM-DD' date STRING
 // (`.slice(0, 7)`), never `new Date(...).getMonth()`, to avoid timezone
@@ -139,6 +149,11 @@ export type BonusEvent = {
   monthKey: string | null // 'YYYY-MM', per the rules above
   kind: 'actual' | 'expected'
   overdue: boolean
+  // true only for an 'expected' event with a billing_date but no due_date —
+  // i.e. excluded from the forecast specifically because the client's
+  // payment terms are missing/unparseable (Repair 18), as opposed to a
+  // genuinely dateless row (no billing_date either, very rare).
+  excludedFromForecast: boolean
 }
 
 /** Today's 'YYYY-MM' in Asia/Jerusalem, independent of the browser's local timezone. */
@@ -203,20 +218,23 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
   }
 
   if (status === 'paid') {
-    // §2.1 fallback chain for legacy rows with no payment_date.
+    // §2.1 fallback chain for legacy rows with no payment_date. Unaffected
+    // by Repair 18 — actual bonus is keyed off payment_date, not terms.
     const dateStr = row.payment_date ?? row.due_date ?? row.billing_date
-    return { ...base, monthKey: dateStr ? dateStr.slice(0, 7) : null, kind: 'actual', overdue: false }
+    return { ...base, monthKey: dateStr ? dateStr.slice(0, 7) : null, kind: 'actual', overdue: false, excludedFromForecast: false }
   }
 
-  // Open event: expected revenue, placed by due_date -> billing_date.
-  const dateStr = row.due_date ?? row.billing_date
+  // Open event: expected revenue, placed by due_date ONLY (Repair 18 — no
+  // billing_date fallback; that's the system's plan, not a real due date).
+  const dateStr = row.due_date
   let monthKey = dateStr ? dateStr.slice(0, 7) : null
   let overdue = false
   if (monthKey && monthKey < todayMonthKey) {
     overdue = true
     monthKey = todayMonthKey
   }
-  return { ...base, monthKey, kind: 'expected', overdue }
+  const excludedFromForecast = !row.due_date && !!row.billing_date
+  return { ...base, monthKey, kind: 'expected', overdue, excludedFromForecast }
 }
 
 /**

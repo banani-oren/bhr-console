@@ -1327,6 +1327,7 @@ function BillingEventsPanel({
               key={e.id}
               event={e}
               paymentTermsDays={paymentTermsDays}
+              clientName={selectedClient?.name ?? transaction.client_name}
               transactionApproved={approved}
               onSaved={onChange}
               onDeleted={onChange}
@@ -1577,12 +1578,14 @@ const STATUS_LABEL: Record<BillingEvent['status'], string> = {
 function BillingEventRow({
   event,
   paymentTermsDays,
+  clientName,
   transactionApproved,
   onSaved,
   onDeleted,
 }: {
   event: BillingEvent
-  paymentTermsDays: number
+  paymentTermsDays: number | null
+  clientName: string
   transactionApproved: boolean
   onSaved: () => void
   onDeleted: () => void
@@ -1594,6 +1597,10 @@ function BillingEventRow({
   // the planned date while no invoice exists yet.
   const taxDateBasis = event.invoice_date ?? event.billing_date
   const calculatedTaxDate = taxDateBasis ? calculateTaxInvoiceDate(taxDateBasis, paymentTermsDays) : null
+  // Repair 18: a date basis exists (so a due_date COULD be computed) but
+  // isn't, and nobody manually overrode it — the client's payment terms are
+  // missing or unparseable. Never shown as "—" (that means not applicable).
+  const termsMissing = !!taxDateBasis && calculatedTaxDate == null && !event.due_date_is_manual
   const [dueDateInput, setDueDateInput] = useState(event.due_date ?? calculatedTaxDate ?? '')
   const [paymentDateActual, setPaymentDateActual] = useState(event.payment_date ?? '')
   const [amountOverride, setAmountOverride] = useState(String(event.amount))
@@ -1787,11 +1794,14 @@ function BillingEventRow({
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">
                 תאריך פירעון
-                {!event.due_date_is_manual && (
-                  <span className="text-purple-600 mr-1">(מחושב)</span>
-                )}
                 {event.due_date_is_manual && (
                   <span className="text-amber-600 mr-1">(ידני)</span>
+                )}
+                {!event.due_date_is_manual && !termsMissing && (
+                  <span className="text-purple-600 mr-1">(מחושב)</span>
+                )}
+                {!event.due_date_is_manual && termsMissing && (
+                  <span className="text-amber-600 mr-1">(תנאי תשלום חסרים)</span>
                 )}
               </Label>
               <div className="flex gap-1 items-center">
@@ -1820,6 +1830,11 @@ function BillingEventRow({
                   </button>
                 )}
               </div>
+              {termsMissing && (
+                <p className="text-[11px] text-amber-600">
+                  תנאי תשלום לא מוגדרים ל{clientName} — ניתן להזין תאריך פירעון ידנית, או להגדיר תנאי תשלום בכרטיס הלקוח
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">מספר חשבונית מס קבלה</Label>

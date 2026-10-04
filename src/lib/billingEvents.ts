@@ -2,18 +2,30 @@ import { supabase } from '@/lib/supabase'
 import type { BillingEvent, PaymentSplit } from '@/lib/types'
 
 /**
- * Parses "שוטף+30", "שוטף +30", "שוטף+0", "30", etc. into just the number of days.
- * "שוטף" alone = 0 additional days.
- * Returns 30 as a safe default if nothing can be parsed.
+ * Parses "שוטף+30", "שוטף +30", "שוטף+0", "30", etc. into just the number of
+ * days. "שוטף" alone = 0 additional days.
+ *
+ * Returns `null` when the terms are NOT usable — missing, empty/whitespace,
+ * or a non-empty string this parser doesn't recognise. Repair 18
+ * (2026-10-04): this used to default to 30, which made "no terms
+ * configured", "terms I couldn't read" (an RLS leak — see
+ * bhr_billing_event_payment_terms), and "a terms string I can't parse" all
+ * produce an identical, confident-looking invented date nobody decided on.
+ * **Never reintroduce `?? 30` / `|| 30` on this function's result** — a
+ * missing due_date is a real signal the UI must show, not paper over.
+ *
+ * Matched pair with `bhr_payment_term_days_strict()` in
+ * `20261004_payment_terms_integrity.sql` — change both together or the
+ * client-side preview and the DB-persisted value will disagree.
  */
-export function parsePaymentTermDays(terms: string | null | undefined): number {
-  if (!terms) return 30
+export function parsePaymentTermDays(terms: string | null | undefined): number | null {
+  if (!terms || !String(terms).trim()) return null
   const s = String(terms).replace(/\s+/g, '')
   if (/^\d+$/.test(s)) return Number(s)
   if (s === 'שוטף') return 0
   const m = s.match(/שוטף\+(\d+)/)
   if (m) return Number(m[1])
-  return 30
+  return null
 }
 
 export function addDays(iso: string, days: number): string {
@@ -52,8 +64,12 @@ export function endOfMonth(iso: string): string {
  * This client-side copy is only a live preview shown in TransactionDialog
  * before a row is saved — callers must pass `invoice_date ?? billing_date`
  * as `invoiceDate` to match. Keep the two in lockstep if the formula ever changes.
+ *
+ * Returns `null` when `paymentTermsDays` is `null` (Repair 18) — no usable
+ * terms means no תאריך פירעון, not a guessed one.
  */
-export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number): string {
+export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number | null): string | null {
+  if (paymentTermsDays == null) return null
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(invoiceDate)
   if (!m) return invoiceDate
   const year = Number(m[1])

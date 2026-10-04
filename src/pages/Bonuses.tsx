@@ -154,6 +154,7 @@ export default function Bonuses() {
     month: LedgerMonth
     allEvents: BonusEvent[]
     noDateEvents: BonusEvent[]
+    excludedForecastTotal: number
     progress: ReturnType<typeof actualForecastProgress>
     sortRevenue: number
     sortBonus: number
@@ -167,7 +168,7 @@ export default function Bonuses() {
       if (!p.bonus_model) {
         return {
           profile: p, hasModel: false, ledger: new Map(), month: EMPTY_MONTH,
-          allEvents: mine, noDateEvents: [], progress: actualForecastProgress(0, 0, []),
+          allEvents: mine, noDateEvents: [], excludedForecastTotal: 0, progress: actualForecastProgress(0, 0, []),
           sortRevenue: 0, sortBonus: 0, reachedTier: false,
         }
       }
@@ -175,6 +176,12 @@ export default function Bonuses() {
       const month = ledger.get(selectedKey) ?? EMPTY_MONTH
       const progress = actualForecastProgress(month.actualRevenue, month.forecastRevenue, tiers)
       const noDateEvents = mine.filter((e) => e.monthKey == null)
+      // Repair 18: open events excluded from every forecast because the
+      // client's payment terms are missing/unparseable — reported, not
+      // silently dropped (§3.5).
+      const excludedForecastTotal = mine
+        .filter((e) => e.excludedFromForecast)
+        .reduce((s, e) => s + e.net, 0)
       return {
         profile: p,
         hasModel: true,
@@ -182,6 +189,7 @@ export default function Bonuses() {
         month,
         allEvents: mine,
         noDateEvents,
+        excludedForecastTotal,
         progress,
         sortRevenue: isPastPeriod ? month.actualRevenue : month.forecastRevenue,
         sortBonus: isPastPeriod ? month.actualBonus : month.forecastBonus,
@@ -355,6 +363,7 @@ function EmployeeCard({
     ledger: Map<string, LedgerMonth>
     month: LedgerMonth
     noDateEvents: BonusEvent[]
+    excludedForecastTotal: number
     progress: ReturnType<typeof actualForecastProgress>
   }
   periodMonth: number
@@ -537,6 +546,14 @@ function EmployeeCard({
           <p className="text-xs text-muted-foreground">מדרגה מקסימלית</p>
         ) : (
           <p className="text-xs text-muted-foreground">לא הגעת למדרגה הראשונה</p>
+        )}
+
+        {/* Repair 18, §3.5: open events excluded from every forecast because
+            the client's payment terms are missing — reported, not dropped. */}
+        {row.excludedForecastTotal > 0 && (
+          <p className="text-xs text-amber-600">
+            לא נכלל בתחזית: {ILS.format(row.excludedForecastTotal)} — תנאי תשלום חסרים
+          </p>
         )}
 
         {/* 4. Deals table — replaces the old tier table */}

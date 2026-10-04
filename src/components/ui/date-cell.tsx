@@ -24,3 +24,32 @@ export function DateCell({
     </span>
   )
 }
+
+/**
+ * Repair 18 (2026-10-04): the one consistent treatment for a תאריך פירעון
+ * that's NULL because a client's payment terms are missing/unparseable —
+ * never a bare "—" (which means "not applicable") and never a guessed date.
+ * `hasBasis` = whether the row has a billing_date/invoice_date at all (so a
+ * due_date could in principle exist) — a row with no basis at all still
+ * renders the normal empty dash via DateCell.
+ */
+export function DueDateCell({
+  dueDate,
+  isManual,
+  hasBasis,
+  className,
+}: {
+  dueDate: string | Date | null | undefined
+  isManual: boolean
+  hasBasis: boolean
+  className?: string
+}) {
+  if ((dueDate == null || dueDate === '') && !isManual && hasBasis) {
+    return (
+      <span className={`text-amber-600 text-xs ${className ?? ''}`} title="יש להגדיר תנאי תשלום ללקוח">
+        תנאי תשלום לא מוגדרים
+      </span>
+    )
+  }
+  return <DateCell value={dueDate} className={className} />
+}

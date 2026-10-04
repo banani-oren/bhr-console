@@ -121,6 +121,13 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
     const section4Rows = rows.filter(
       (r) => collectionBucket(r.status) === 'not_billed' && r.billing_date && r.billing_date <= monthEnd,
     )
+    // Section 5 — לא ניתן לשייך לחודש: billed, awaiting payment, but no due_date at all
+    // (missing/unparseable payment terms — see Repair 18). These used to silently
+    // vanish from the report (matched neither section 2 nor section 3). They are
+    // deliberately excluded from the headline צפי figure.
+    const section5Rows = rows.filter(
+      (r) => collectionBucket(r.status) === 'awaiting_payment' && !r.due_date,
+    )
     // Section 6 — שולם בפועל בחודש: paid, payment_date inside the month.
     const section6Rows = monthHasStarted
       ? rows.filter((r) => r.status === 'paid' && r.payment_date && r.payment_date >= monthStart && r.payment_date <= monthEnd)
@@ -155,12 +162,14 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
     const section2Total = section2Rows.reduce((s, r) => s + r.amount, 0)
     const section3Total = section3Rows.reduce((s, r) => s + r.amount, 0)
     const section4Total = section4Rows.reduce((s, r) => s + r.amount, 0)
+    const section5Total = section5Rows.reduce((s, r) => s + r.amount, 0)
     const section6Total = section6Rows.reduce((s, r) => s + r.amount, 0)
 
     return {
       section2: { rows: section2Rows, byClient: groupByClient(section2Rows), total: section2Total },
       section3: { rows: section3Rows, byClient: groupByClient(section3Rows), total: section3Total, buckets, daysOverdue },
       section4: { rows: section4Rows, total: section4Total },
+      section5: { rows: section5Rows, byClient: groupByClient(section5Rows), total: section5Total },
       section6: { rows: section6Rows, total: section6Total },
       headline: section2Total + section3Total,
     }
@@ -238,6 +247,16 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
   <p class="section-total">סה"כ: ${escapeHtml(ILS.format(report.section3.total))}</p>
   `}
 
+  <h2>לא ניתן לשייך לחודש — תנאי תשלום חסרים</h2>
+  ${report.section5.rows.length === 0 ? '<p class="empty">כל החיובים הפעילים משויכים לחודש.</p>' : `
+  <p class="empty">החיובים הבאים חויבו אך לא ניתן לחשב להם תאריך פירעון (תנאי תשלום חסרים או שגויים אצל הלקוח) — אינם נכללים בצפי לעיל.</p>
+  <table>
+    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך חיוב</th><th>תאריך פירעון</th><th>סכום</th></tr></thead>
+    <tbody>${report.section5.byClient.map(clientRows).join('')}</tbody>
+  </table>
+  <p class="section-total">סה"כ: ${escapeHtml(ILS.format(report.section5.total))}</p>
+  `}
+
   <h2>טרם חויב — צפוי לחיוב</h2>
   ${report.section4.rows.length === 0 ? '<p class="empty">אין עסקאות הממתינות לחיוב.</p>' : `
   <table>
@@ -257,6 +276,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
     <div>צפי גבייה לחודש ${escapeHtml(monthLabel)}</div>
     <div class="headline">${escapeHtml(ILS.format(report.headline))}</div>
     <div class="sub">בנוסף, טרם חויב ועשוי להצטרף: ${escapeHtml(ILS.format(report.section4.total))}</div>
+    ${report.section5.total > 0 ? `<div class="sub">⚠ ${escapeHtml(ILS.format(report.section5.total))} נוספים אינם משוייכים לחודש בשל תנאי תשלום חסרים</div>` : ''}
   </div>
 
   ${monthHasStarted ? `
@@ -301,6 +321,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
       [
         { name: 'צפוי להיגבות', rows: rowsFor(report.section2.rows) },
         { name: 'באיחור', rows: rowsFor(report.section3.rows) },
+        { name: 'תנאי תשלום חסרים', rows: rowsFor(report.section5.rows) },
         { name: 'טרם חויב', rows: rowsFor(report.section4.rows) },
         { name: 'שולם בפועל', rows: rowsFor(report.section6.rows) },
       ],
@@ -343,6 +364,12 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
               <div className="flex justify-between"><span className="text-muted-foreground">באיחור:</span><strong className="text-red-700">{ILS.format(report.section3.total)}</strong></div>
               <div className="flex justify-between border-t pt-1"><span className="font-medium">צפי גבייה לחודש:</span><strong>{ILS.format(report.headline)}</strong></div>
               <div className="flex justify-between"><span className="text-muted-foreground">טרם חויב:</span><strong>{ILS.format(report.section4.total)}</strong></div>
+              {report.section5.total > 0 && (
+                <div className="flex justify-between text-amber-700">
+                  <span>תנאי תשלום חסרים:</span>
+                  <strong>{ILS.format(report.section5.total)}</strong>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -18,7 +18,7 @@ import type {
 import type { ServiceType } from '@/lib/serviceTypes'
 import ClientPicker from '@/components/ClientPicker'
 import CollectionForecastDialog from '@/components/CollectionForecastDialog'
-import { DateCell } from '@/components/ui/date-cell'
+import { DateCell, DueDateCell } from '@/components/ui/date-cell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -540,7 +540,11 @@ function BillingEventDashRow({
         />
       </TableCell>
       <TableCell className={dueRed ? 'text-red-600 font-medium' : ''}>
-        <DateCell value={event.due_date} />
+        <DueDateCell
+          dueDate={event.due_date}
+          isManual={event.due_date_is_manual}
+          hasBasis={!!(event.invoice_date ?? event.billing_date)}
+        />
       </TableCell>
       <TableCell>
         <Input
