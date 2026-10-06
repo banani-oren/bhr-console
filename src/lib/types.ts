@@ -134,7 +134,6 @@ export type Transaction = {
   notes: string | null
   supplier_id: string | null
   supplier_percent: number | null
-  billing_percent: number | null
   work_end_date: string | null
   created_by: string | null
   approved_by: string | null

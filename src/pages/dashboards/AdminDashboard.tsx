@@ -316,10 +316,12 @@ type ScheduleRow = {
 // Groups schedule rows (already sorted ascending by due date, nulls last) into
 // contiguous per-month buckets for the cash-flow subtotal display. Rows with
 // no due_date — a client with missing/unparseable payment terms (Repair 18;
-// every row here is `billed`, so it always has an invoice_date basis — a
-// NULL due_date here always means terms are missing, never "no basis yet")
-// — fall into a trailing "ללא תאריך פירעון" group, so the money stays
-// visible rather than silently dropping out of the cash-flow view.
+// every row here is `billed`, so it always has a real invoice_date — a NULL
+// due_date here always means terms are missing, never "not yet invoiced":
+// that state belongs to the טרם חויב KPI above, not this widget, which only
+// ever queries status='billed') — fall into a trailing "ללא תאריך תשלום
+// צפוי" group, so the money stays visible rather than silently dropping out
+// of the cash-flow view.
 function groupByDueMonth(rows: ScheduleRow[]) {
   const groups: { key: string; label: string; rows: ScheduleRow[]; subtotal: number }[] = []
   for (const r of rows) {
@@ -328,7 +330,7 @@ function groupByDueMonth(rows: ScheduleRow[]) {
     if (!group) {
       const label = r.dueDate
         ? format(new Date(`${r.dueDate}T00:00:00`), 'MMMM yyyy', { locale: he })
-        : 'ללא תאריך פירעון'
+        : 'ללא תאריך תשלום צפוי'
       group = { key, label, rows: [], subtotal: 0 }
       groups.push(group)
     }
@@ -404,10 +406,10 @@ function ExpectedPaymentSchedule() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-right px-4">לקוח</TableHead>
-                  <TableHead className="text-right px-4">תאריך חיוב</TableHead>
+                  <TableHead className="text-right px-4">תאריך הפקה</TableHead>
                   <TableHead className="text-right px-4">תיאור</TableHead>
                   <TableHead className="text-right px-4">סכום</TableHead>
-                  <TableHead className="text-right px-4">תאריך פירעון</TableHead>
+                  <TableHead className="text-right px-4">תאריך תשלום צפוי</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -696,7 +698,7 @@ export default function AdminDashboard() {
               <TableRow>
                 <TableHead className="text-right px-4">לקוח</TableHead>
                 <TableHead className="text-right px-4">תיאור</TableHead>
-                <TableHead className="text-right px-4">תאריך חיוב</TableHead>
+                <TableHead className="text-right px-4">תאריך חיוב מתוכנן</TableHead>
                 <TableHead className="text-right px-4">סכום</TableHead>
                 <TableHead className="text-right px-4">סטטוס</TableHead>
               </TableRow>

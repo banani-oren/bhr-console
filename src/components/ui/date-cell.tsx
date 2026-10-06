@@ -26,12 +26,16 @@ export function DateCell({
 }
 
 /**
- * Repair 18 (2026-10-04): the one consistent treatment for a תאריך פירעון
- * that's NULL because a client's payment terms are missing/unparseable —
- * never a bare "—" (which means "not applicable") and never a guessed date.
- * `hasBasis` = whether the row has a billing_date/invoice_date at all (so a
- * due_date could in principle exist) — a row with no basis at all still
- * renders the normal empty dash via DateCell.
+ * Repair 18 (2026-10-04): the one consistent treatment for a תאריך תשלום
+ * צפוי that's NULL because a client's payment terms are missing/unparseable
+ * — never a bare "—" (which means "not applicable") and never a guessed
+ * date. `hasBasis` = whether a חשבון עסקה has actually been issued
+ * (invoice_date is set) — Repair 19 (2026-10-06), Part B3.1: before that,
+ * there is no expected payment date at all, which is the NORMAL
+ * not-yet-invoiced state, not a terms problem, so it must render the plain
+ * "—" via DateCell, not this amber message. Never pass `!!(invoice_date ??
+ * billing_date)` here — billing_date is an internal planning field, not a
+ * basis for a real expected-payment claim.
  */
 export function DueDateCell({
   dueDate,

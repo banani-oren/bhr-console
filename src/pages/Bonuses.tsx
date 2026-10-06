@@ -154,7 +154,8 @@ export default function Bonuses() {
     month: LedgerMonth
     allEvents: BonusEvent[]
     noDateEvents: BonusEvent[]
-    excludedForecastTotal: number
+    excludedNotInvoicedTotal: number
+    excludedTermsMissingTotal: number
     progress: ReturnType<typeof actualForecastProgress>
     sortRevenue: number
     sortBonus: number
@@ -168,7 +169,8 @@ export default function Bonuses() {
       if (!p.bonus_model) {
         return {
           profile: p, hasModel: false, ledger: new Map(), month: EMPTY_MONTH,
-          allEvents: mine, noDateEvents: [], excludedForecastTotal: 0, progress: actualForecastProgress(0, 0, []),
+          allEvents: mine, noDateEvents: [], excludedNotInvoicedTotal: 0, excludedTermsMissingTotal: 0,
+          progress: actualForecastProgress(0, 0, []),
           sortRevenue: 0, sortBonus: 0, reachedTier: false,
         }
       }
@@ -176,11 +178,16 @@ export default function Bonuses() {
       const month = ledger.get(selectedKey) ?? EMPTY_MONTH
       const progress = actualForecastProgress(month.actualRevenue, month.forecastRevenue, tiers)
       const noDateEvents = mine.filter((e) => e.monthKey == null)
-      // Repair 18: open events excluded from every forecast because the
-      // client's payment terms are missing/unparseable — reported, not
+      // Repair 18/19: open events excluded from every forecast — either
+      // because no חשבון עסקה has been issued yet (the common, normal case
+      // since Repair 19's B3.1) or because the client's payment terms are
+      // missing/unparseable (Repair 18) — reported per-reason, never
       // silently dropped (§3.5).
-      const excludedForecastTotal = mine
-        .filter((e) => e.excludedFromForecast)
+      const excludedNotInvoicedTotal = mine
+        .filter((e) => e.excludedReason === 'not_invoiced')
+        .reduce((s, e) => s + e.net, 0)
+      const excludedTermsMissingTotal = mine
+        .filter((e) => e.excludedReason === 'terms_missing')
         .reduce((s, e) => s + e.net, 0)
       return {
         profile: p,
@@ -189,7 +196,8 @@ export default function Bonuses() {
         month,
         allEvents: mine,
         noDateEvents,
-        excludedForecastTotal,
+        excludedNotInvoicedTotal,
+        excludedTermsMissingTotal,
         progress,
         sortRevenue: isPastPeriod ? month.actualRevenue : month.forecastRevenue,
         sortBonus: isPastPeriod ? month.actualBonus : month.forecastBonus,
@@ -363,7 +371,8 @@ function EmployeeCard({
     ledger: Map<string, LedgerMonth>
     month: LedgerMonth
     noDateEvents: BonusEvent[]
-    excludedForecastTotal: number
+    excludedNotInvoicedTotal: number
+    excludedTermsMissingTotal: number
     progress: ReturnType<typeof actualForecastProgress>
   }
   periodMonth: number
@@ -548,11 +557,16 @@ function EmployeeCard({
           <p className="text-xs text-muted-foreground">לא הגעת למדרגה הראשונה</p>
         )}
 
-        {/* Repair 18, §3.5: open events excluded from every forecast because
-            the client's payment terms are missing — reported, not dropped. */}
-        {row.excludedForecastTotal > 0 && (
+        {/* Repair 18/19, §3.5/B3.4: open events excluded from every forecast
+            — reported per-reason, never silently dropped. */}
+        {row.excludedNotInvoicedTotal > 0 && (
+          <p className="text-xs text-muted-foreground">
+            טרם נכלל בתחזית: {ILS.format(row.excludedNotInvoicedTotal)} — טרם הופק חשבון עסקה
+          </p>
+        )}
+        {row.excludedTermsMissingTotal > 0 && (
           <p className="text-xs text-amber-600">
-            לא נכלל בתחזית: {ILS.format(row.excludedForecastTotal)} — תנאי תשלום חסרים
+            לא נכלל בתחזית: {ILS.format(row.excludedTermsMissingTotal)} — תנאי תשלום חסרים
           </p>
         )}
 

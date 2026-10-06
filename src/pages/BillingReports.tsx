@@ -83,9 +83,9 @@ const STATUS_FILTER_LABEL: Record<StatusFilterValue, string> = {
 type DateFilterColumn = 'billing_date' | 'invoice_date' | 'due_date' | 'payment_date'
 const DATE_FILTER_LABEL: Record<DateFilterColumn, string> = {
   billing_date: 'תאריך חיוב מתוכנן',
-  invoice_date: 'תאריך חיוב',
-  due_date: 'תאריך פירעון',
-  payment_date: 'תאריך תשלום בפועל',
+  invoice_date: 'תאריך הפקה',
+  due_date: 'תאריך תשלום צפוי',
+  payment_date: 'תאריך תשלום',
 }
 
 const formatCurrency = (n: number | null | undefined) => {
@@ -391,10 +391,10 @@ export default function BillingReports() {
                   <SortableHead col="status" label="סטטוס" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="billing_date" label="תאריך חיוב מתוכנן" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">מספר חשבון עסקה</TableHead>
-                  <SortableHead col="invoice_date" label="תאריך חיוב" sort={sort} onToggle={toggleSort} />
-                  <SortableHead col="due_date" label="תאריך פירעון" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="invoice_date" label="תאריך הפקה" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="due_date" label="תאריך תשלום צפוי" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800">מספר חשבונית מס קבלה</TableHead>
-                  <SortableHead col="payment_date" label="תאריך תשלום בפועל" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -543,7 +543,7 @@ function BillingEventDashRow({
         <DueDateCell
           dueDate={event.due_date}
           isManual={event.due_date_is_manual}
-          hasBasis={!!(event.invoice_date ?? event.billing_date)}
+          hasBasis={!!event.invoice_date}
         />
       </TableCell>
       <TableCell>

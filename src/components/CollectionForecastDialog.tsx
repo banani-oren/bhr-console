@@ -107,23 +107,27 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
   const monthHasStarted = monthStart <= generatedOn
 
   const report = useMemo(() => {
-    // Section 2 — צפוי להיגבות בחודש זה: billed, due_date inside the month.
+    // Section 2 — צפוי להיגבות בחודש זה: billed (so invoice_date is set —
+    // Part B3.2, Repair 19), due_date inside the month.
     const section2Rows = rows.filter(
-      (r) => collectionBucket(r.status) === 'awaiting_payment' && r.due_date && r.due_date >= monthStart && r.due_date <= monthEnd,
+      (r) => collectionBucket(r.status) === 'awaiting_payment' && !!r.invoice_date && r.due_date && r.due_date >= monthStart && r.due_date <= monthEnd,
     )
-    // Section 3 — חובות באיחור: billed, due_date before the month started.
-    // Aging is measured from the SELECTED month's first day (not "today"),
-    // so a report for a past month stays reproducible on re-generation.
+    // Section 3 — חובות באיחור (פיגור, Part B3.2): a חשבון עסקה was issued
+    // AND its תאריך תשלום צפוי is before the month started. Aging is
+    // measured from the SELECTED month's first day (not "today"), so a
+    // report for a past month stays reproducible on re-generation.
     const section3Rows = rows.filter(
-      (r) => collectionBucket(r.status) === 'awaiting_payment' && r.due_date && r.due_date < monthStart,
+      (r) => collectionBucket(r.status) === 'awaiting_payment' && !!r.invoice_date && r.due_date && r.due_date < monthStart,
     )
     // Section 4 — טרם חויב, צפוי לחיוב: open, planned billing_date in or before the month.
     const section4Rows = rows.filter(
       (r) => collectionBucket(r.status) === 'not_billed' && r.billing_date && r.billing_date <= monthEnd,
     )
-    // Section 5 — לא ניתן לשייך לחודש: billed, awaiting payment, but no due_date at all
-    // (missing/unparseable payment terms — see Repair 18). These used to silently
-    // vanish from the report (matched neither section 2 nor section 3). They are
+    // Section 5 — לא ניתן לשייך לחודש: billed (invoiced), awaiting payment,
+    // but no due_date (missing/unparseable payment terms — see Repair 18;
+    // a billed row always has invoice_date, so this never overlaps with
+    // "not yet invoiced" — that's section 4). These used to silently vanish
+    // from the report (matched neither section 2 nor section 3). They are
     // deliberately excluded from the headline צפי figure.
     const section5Rows = rows.filter(
       (r) => collectionBucket(r.status) === 'awaiting_payment' && !r.due_date,
@@ -226,7 +230,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
   <h2>צפוי להיגבות בחודש זה</h2>
   ${report.section2.rows.length === 0 ? '<p class="empty">אין חיובים צפויים לגבייה בחודש זה.</p>' : `
   <table>
-    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך חיוב</th><th>תאריך פירעון</th><th>סכום</th></tr></thead>
+    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך הפקה</th><th>תאריך תשלום צפוי</th><th>סכום</th></tr></thead>
     <tbody>${report.section2.byClient.map(clientRows).join('')}</tbody>
   </table>
   <p class="section-total">סה"כ: ${escapeHtml(ILS.format(report.section2.total))}</p>
@@ -241,7 +245,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
     <div>90+ יום: ${escapeHtml(ILS.format(report.section3.buckets.b90plus))}</div>
   </div>
   <table>
-    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך חיוב</th><th>תאריך פירעון</th><th>סכום</th></tr></thead>
+    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך הפקה</th><th>תאריך תשלום צפוי</th><th>סכום</th></tr></thead>
     <tbody>${report.section3.byClient.map(clientRows).join('')}</tbody>
   </table>
   <p class="section-total">סה"כ: ${escapeHtml(ILS.format(report.section3.total))}</p>
@@ -249,9 +253,9 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
 
   <h2>לא ניתן לשייך לחודש — תנאי תשלום חסרים</h2>
   ${report.section5.rows.length === 0 ? '<p class="empty">כל החיובים הפעילים משויכים לחודש.</p>' : `
-  <p class="empty">החיובים הבאים חויבו אך לא ניתן לחשב להם תאריך פירעון (תנאי תשלום חסרים או שגויים אצל הלקוח) — אינם נכללים בצפי לעיל.</p>
+  <p class="empty">החיובים הבאים חויבו אך לא ניתן לחשב להם תאריך תשלום צפוי (תנאי תשלום חסרים או שגויים אצל הלקוח) — אינם נכללים בצפי לעיל.</p>
   <table>
-    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך חיוב</th><th>תאריך פירעון</th><th>סכום</th></tr></thead>
+    <thead><tr><th>תיאור</th><th>מספר חשבון עסקה</th><th>תאריך הפקה</th><th>תאריך תשלום צפוי</th><th>סכום</th></tr></thead>
     <tbody>${report.section5.byClient.map(clientRows).join('')}</tbody>
   </table>
   <p class="section-total">סה"כ: ${escapeHtml(ILS.format(report.section5.total))}</p>
@@ -283,7 +287,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
   <h2>שולם בפועל בחודש</h2>
   ${report.section6.rows.length === 0 ? '<p class="empty">טרם התקבלו תשלומים בחודש זה.</p>' : `
   <table>
-    <thead><tr><th>לקוח</th><th>תיאור</th><th>תאריך תשלום בפועל</th><th>סכום</th></tr></thead>
+    <thead><tr><th>לקוח</th><th>תיאור</th><th>תאריך תשלום</th><th>סכום</th></tr></thead>
     <tbody>${report.section6.rows.map((r) => `
       <tr>
         <td>${escapeHtml(r.client_name ?? '—')}</td>
@@ -312,9 +316,9 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
         'לקוח': r.client_name ?? '',
         'תיאור': r.description ?? '',
         'מספר חשבון עסקה': r.invoice_number ?? '',
-        'תאריך חיוב': r.invoice_date ?? r.billing_date ?? '',
-        'תאריך פירעון': r.due_date ?? '',
-        'תאריך תשלום בפועל': r.payment_date ?? '',
+        'תאריך הפקה': r.invoice_date ?? r.billing_date ?? '',
+        'תאריך תשלום צפוי': r.due_date ?? '',
+        'תאריך תשלום': r.payment_date ?? '',
         'סכום': r.amount,
       }))
     exportSheetsToExcel(

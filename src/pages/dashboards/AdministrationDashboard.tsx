@@ -114,11 +114,13 @@ export default function AdministrationDashboard() {
       }
 
       // Collected = money actually received = paid events only, by payment_date
-      // (the actual receipt date). A billed event has an expected due_date but
-      // is not yet collected, so it falls through to the open/overdue branches
-      // below — which measure aging from billing_date (invoice date), not
-      // payment_date/due_date; that's what "חורג מתאריך חיוב" (exceeds billing
-      // date) means and is unchanged by the due_date feature.
+      // (the actual receipt date). A billed event has an expected payment date
+      // (תאריך תשלום צפוי) but is not yet collected, so it falls through to the
+      // open/overdue branches below — which measure aging from billing_date
+      // (the system's PLANNED billing date, not the real invoice date — see
+      // billing_events.invoice_date / Part B of Repair 19); that's what
+      // "חורג מתאריך חיוב" (exceeds billing date) means, and this page has no
+      // due_date-dependent widget at all (confirmed again, Repair 19).
       if (ev.status === 'paid' && paymentDate && !isNaN(paymentDate.getTime())) {
         if (paymentDate.getFullYear() === curYear && paymentDate.getMonth() + 1 === curMonth) {
           collectedThisMonth += ev.amount

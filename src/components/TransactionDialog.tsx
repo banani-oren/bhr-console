@@ -26,12 +26,13 @@ import {
   generateHadrachaBillingEvent,
   generateServiceBillingEvents,
   generateTimePeriodBillingEvent,
-  parsePaymentTermDays,
+  parsePaymentTermSpec,
   reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
   type EditableBillingField,
   type BillingEventDraft,
+  type PaymentTermSpec,
 } from '@/lib/billingEvents'
 import { DateCell } from '@/components/ui/date-cell'
 import ClientPicker from '@/components/ClientPicker'
@@ -485,7 +486,7 @@ export default function TransactionDialog({
         if (hrs > 0 && rate > 0) payload.net_invoice_amount = Math.round(hrs * rate * 100) / 100
       }
 
-      // For service kind: compute net_invoice_amount from salary × commission% (no billing_percent).
+      // For service kind: compute net_invoice_amount from salary × commission%.
       // For גיוס, final_salary (once set) is the more accurate figure and takes priority.
       if (state.kind === 'service') {
         const expectedSalary = Number(state.custom.salary) || 0
@@ -1301,7 +1302,7 @@ function BillingEventsPanel({
   // RLS policy is SELECT-only, so exposing the button to them would produce
   // a confusing failure.
   const canManageBillingEvents = profile?.role === 'admin' || profile?.role === 'administration'
-  const paymentTermsDays = parsePaymentTermDays(selectedClient?.payment_terms)
+  const paymentTermsSpec = parsePaymentTermSpec(selectedClient?.payment_terms)
   const nextEventIndex = events.reduce((m, e) => Math.max(m, e.event_index), 0) + 1
 
   return (
@@ -1326,7 +1327,7 @@ function BillingEventsPanel({
             <BillingEventRow
               key={e.id}
               event={e}
-              paymentTermsDays={paymentTermsDays}
+              paymentTermsSpec={paymentTermsSpec}
               clientName={selectedClient?.name ?? transaction.client_name}
               transactionApproved={approved}
               onSaved={onChange}
@@ -1577,14 +1578,14 @@ const STATUS_LABEL: Record<BillingEvent['status'], string> = {
 
 function BillingEventRow({
   event,
-  paymentTermsDays,
+  paymentTermsSpec,
   clientName,
   transactionApproved,
   onSaved,
   onDeleted,
 }: {
   event: BillingEvent
-  paymentTermsDays: number | null
+  paymentTermsSpec: PaymentTermSpec | null
   clientName: string
   transactionApproved: boolean
   onSaved: () => void
@@ -1593,18 +1594,22 @@ function BillingEventRow({
   const [invoiceNumber, setInvoiceNumber] = useState(event.invoice_number ?? '')
   const [invoiceDateInput, setInvoiceDateInput] = useState(event.invoice_date ?? '')
   const [receiptNumber, setReceiptNumber] = useState(event.receipt_number ?? '')
-  // D2: תאריך פירעון is derived from the real invoice date, falling back to
-  // the planned date while no invoice exists yet.
-  const taxDateBasis = event.invoice_date ?? event.billing_date
-  const calculatedTaxDate = taxDateBasis ? calculateTaxInvoiceDate(taxDateBasis, paymentTermsDays) : null
-  // Repair 18: a date basis exists (so a due_date COULD be computed) but
+  // Part B3.1 (Repair 19, 2026-10-06): תאריך תשלום צפוי exists ONLY once a
+  // חשבון עסקה has been issued — i.e. only when invoice_date is set. No more
+  // falling back to billing_date (the system's plan, never a commitment).
+  const hasInvoice = !!event.invoice_date
+  const calculatedTaxDate = hasInvoice ? calculateTaxInvoiceDate(event.invoice_date!, paymentTermsSpec) : null
+  // Repair 18: an invoice exists (so a due_date COULD be computed) but
   // isn't, and nobody manually overrode it — the client's payment terms are
   // missing or unparseable. Never shown as "—" (that means not applicable).
-  const termsMissing = !!taxDateBasis && calculatedTaxDate == null && !event.due_date_is_manual
+  const termsMissing = hasInvoice && calculatedTaxDate == null && !event.due_date_is_manual
+  // New state (Repair 19): no חשבון עסקה yet — this is the NORMAL, common
+  // lifecycle stage, not a data problem, and must read differently from
+  // termsMissing.
+  const notYetInvoiced = !hasInvoice && !event.due_date_is_manual
   const [dueDateInput, setDueDateInput] = useState(event.due_date ?? calculatedTaxDate ?? '')
   const [paymentDateActual, setPaymentDateActual] = useState(event.payment_date ?? '')
   const [amountOverride, setAmountOverride] = useState(String(event.amount))
-  const [billingDateOverride, setBillingDateOverride] = useState(event.billing_date ?? '')
   const [savingField, setSavingField] = useState<string | null>(null)
   const [rowError, setRowError] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState(false)
@@ -1636,9 +1641,8 @@ function BillingEventRow({
     setDueDateInput(event.due_date ?? calculatedTaxDate ?? '')
     setPaymentDateActual(event.payment_date ?? '')
     setAmountOverride(String(event.amount))
-    setBillingDateOverride(event.billing_date ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event.id, event.invoice_number, event.invoice_date, event.receipt_number, event.due_date, event.payment_date, event.amount, event.billing_date])
+  }, [event.id, event.invoice_number, event.invoice_date, event.receipt_number, event.due_date, event.payment_date, event.amount])
 
   // Repair 17: the ONLY status-computation + document-pairing logic lives in
   // buildBillingEventPatch (src/lib/billingEvents.ts) — never set status or
@@ -1754,7 +1758,7 @@ function BillingEventRow({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">תאריך חיוב</Label>
+              <Label className="text-xs text-muted-foreground">תאריך הפקה</Label>
               <Input
                 type="date"
                 className="h-7 text-sm"
@@ -1768,20 +1772,64 @@ function BillingEventRow({
               />
             </div>
           </div>
+          {/* Part B1 (Repair 19, 2026-10-06): תאריך תשלום צפוי moved here from
+              the receipt block — it's a property of the חשבון עסקה, computed
+              from תאריך ההפקה above. תאריך חיוב מתוכנן (billing_date) no
+              longer has a UI slot in this dialog — it's an internal
+              scheduling field only (still drives the pending→to_bill
+              worklist and the not-yet-invoiced sections elsewhere). */}
           <div className="space-y-1 pt-1 border-t border-blue-100">
-            <Label className="text-[11px] text-muted-foreground">תאריך חיוב מתוכנן</Label>
-            <Input
-              type="date"
-              className="h-7 text-sm"
-              value={billingDateOverride}
-              onChange={(e) => setBillingDateOverride(e.target.value)}
-              onBlur={() => {
-                if (billingDateOverride && billingDateOverride !== (event.billing_date ?? '')) {
-                  void saveField('billing_date', billingDateOverride)
-                }
-              }}
-              title="התאריך המתוכנן שהמערכת חישבה — לא תאריך החשבון בפועל"
-            />
+            <Label className="text-[11px] text-muted-foreground">
+              תאריך תשלום צפוי
+              {event.due_date_is_manual && (
+                <span className="text-amber-600 mr-1">(ידני)</span>
+              )}
+              {!event.due_date_is_manual && !termsMissing && !notYetInvoiced && (
+                <span className="text-purple-600 mr-1">(מחושב)</span>
+              )}
+              {!event.due_date_is_manual && termsMissing && (
+                <span className="text-amber-600 mr-1">(תנאי תשלום חסרים)</span>
+              )}
+              {!event.due_date_is_manual && notYetInvoiced && (
+                <span className="text-gray-500 mr-1">(טרם הופק חשבון עסקה)</span>
+              )}
+            </Label>
+            <div className="flex gap-1 items-center">
+              <Input
+                type="date"
+                className="h-7 text-sm"
+                value={dueDateInput}
+                onChange={(e) => setDueDateInput(e.target.value)}
+                onBlur={() => {
+                  if (dueDateInput !== (event.due_date ?? '')) {
+                    const isManual = dueDateInput !== (calculatedTaxDate ?? '')
+                    void saveField('due_date', dueDateInput, { due_date_is_manual: isManual })
+                  }
+                }}
+              />
+              {event.due_date_is_manual && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  title="אפס לתאריך מחושב"
+                  onClick={() => {
+                    void saveField('due_date_is_manual', false)
+                  }}
+                >
+                  ↩
+                </button>
+              )}
+            </div>
+            {termsMissing && (
+              <p className="text-[11px] text-amber-600">
+                תנאי תשלום לא מוגדרים ל{clientName} — ניתן להזין תאריך תשלום צפוי ידנית, או להגדיר תנאי תשלום בכרטיס הלקוח
+              </p>
+            )}
+            {notYetInvoiced && (
+              <p className="text-[11px] text-muted-foreground">
+                יחושב לאחר הפקת חשבון עסקה — ניתן גם להזין תאריך ידנית כבר עכשיו
+              </p>
+            )}
           </div>
         </div>
 
@@ -1791,51 +1839,6 @@ function BillingEventRow({
             חשבונית מס קבלה
           </h4>
           <div className="grid grid-cols-2 gap-2">
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">
-                תאריך פירעון
-                {event.due_date_is_manual && (
-                  <span className="text-amber-600 mr-1">(ידני)</span>
-                )}
-                {!event.due_date_is_manual && !termsMissing && (
-                  <span className="text-purple-600 mr-1">(מחושב)</span>
-                )}
-                {!event.due_date_is_manual && termsMissing && (
-                  <span className="text-amber-600 mr-1">(תנאי תשלום חסרים)</span>
-                )}
-              </Label>
-              <div className="flex gap-1 items-center">
-                <Input
-                  type="date"
-                  className="h-7 text-sm"
-                  value={dueDateInput}
-                  onChange={(e) => setDueDateInput(e.target.value)}
-                  onBlur={() => {
-                    if (dueDateInput !== (event.due_date ?? '')) {
-                      const isManual = dueDateInput !== (calculatedTaxDate ?? '')
-                      void saveField('due_date', dueDateInput, { due_date_is_manual: isManual })
-                    }
-                  }}
-                />
-                {event.due_date_is_manual && (
-                  <button
-                    type="button"
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                    title="אפס לתאריך מחושב"
-                    onClick={() => {
-                      void saveField('due_date_is_manual', false)
-                    }}
-                  >
-                    ↩
-                  </button>
-                )}
-              </div>
-              {termsMissing && (
-                <p className="text-[11px] text-amber-600">
-                  תנאי תשלום לא מוגדרים ל{clientName} — ניתן להזין תאריך פירעון ידנית, או להגדיר תנאי תשלום בכרטיס הלקוח
-                </p>
-              )}
-            </div>
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">מספר חשבונית מס קבלה</Label>
               <Input
@@ -1851,7 +1854,7 @@ function BillingEventRow({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">תאריך תשלום בפועל</Label>
+              <Label className="text-xs text-muted-foreground">תאריך תשלום</Label>
               <Input
                 type="date"
                 className="h-7 text-sm"

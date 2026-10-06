@@ -266,7 +266,7 @@ export default function RecruiterDashboard() {
               <TableRow>
                 <TableHead className="text-right px-4">לקוח</TableHead>
                 <TableHead className="text-right px-4">מועמד</TableHead>
-                <TableHead className="text-right px-4">תאריך חיוב</TableHead>
+                <TableHead className="text-right px-4">תאריך חיוב מתוכנן</TableHead>
                 <TableHead className="text-right px-4">סכום</TableHead>
                 <TableHead className="text-right px-4">סטטוס</TableHead>
               </TableRow>

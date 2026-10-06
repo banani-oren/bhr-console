@@ -514,12 +514,12 @@ export default function MyHoursView() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">תאריך חיוב:</span>
+                <span className="text-muted-foreground">תאריך חיוב מתוכנן:</span>
                 <span>{billingDate ? formatDate(billingDate) : '—'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">תאריך פירעון צפוי:</span>
-                <span className="text-xs text-muted-foreground">יחושב לפי תנאי התשלום של הלקוח לאחר השמירה</span>
+                <span className="text-muted-foreground">תאריך תשלום צפוי:</span>
+                <span className="text-xs text-muted-foreground">יחושב לאחר הפקת חשבון עסקה, לפי תנאי התשלום של הלקוח</span>
               </div>
               {hoursBillingMut.saveStatus === 'error' && (
                 <p className="text-destructive">{hoursBillingMut.errorMessage ?? 'שגיאה'}</p>

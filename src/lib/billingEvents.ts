@@ -2,35 +2,70 @@ import { supabase } from '@/lib/supabase'
 import type { BillingEvent, PaymentSplit } from '@/lib/types'
 
 /**
- * Parses "שוטף+30", "שוטף +30", "שוטף+0", "30", etc. into just the number of
- * days. "שוטף" alone = 0 additional days.
+ * A payment-terms string resolves to exactly one of two date shapes, never
+ * both (Repair 19, 2026-10-06):
  *
- * Returns `null` when the terms are NOT usable — missing, empty/whitespace,
- * or a non-empty string this parser doesn't recognise. Repair 18
- * (2026-10-04): this used to default to 30, which made "no terms
- * configured", "terms I couldn't read" (an RLS leak — see
- * bhr_billing_event_payment_terms), and "a terms string I can't parse" all
- * produce an identical, confident-looking invented date nobody decided on.
- * **Never reintroduce `?? 30` / `|| 30` on this function's result** — a
- * missing due_date is a real signal the UI must show, not paper over.
+ *   'eom'      — last day of the reference date's month, + N calendar days
+ *                (שוטף, שוטף+N, bare integer N) — unchanged since Repair 18.
+ *   'business' — the reference date + N business days, Sunday-Thursday
+ *                (מיידי = 5 business days — Oren, 2026-10-06: "לתשלום מיידי
+ *                אומר שהתשלום יתקבל בתוך 5 ימי עסקים"). Israeli public
+ *                holidays are NOT handled — a holiday inside the window
+ *                still counts as a business day. Known, dated limitation;
+ *                do not attempt a holiday calendar without a new decision.
  *
- * Matched pair with `bhr_payment_term_days_strict()` in
- * `20261004_payment_terms_integrity.sql` — change both together or the
- * client-side preview and the DB-persisted value will disagree.
+ * Matched pair with `bhr_payment_term_spec()` in
+ * `20261006_business_days_and_event_index.sql` — change both together or
+ * the client-side preview and the DB-persisted value will disagree.
  */
-export function parsePaymentTermDays(terms: string | null | undefined): number | null {
+export type PaymentTermShape = 'eom' | 'business'
+export type PaymentTermSpec = { shape: PaymentTermShape; days: number }
+
+const BUSINESS_TERM_VARIANTS = new Set(['מיידי', 'מידי', 'לתשלוםמיידי', 'תשלוםמיידי'])
+
+/**
+ * Parses a client's payment_terms string into a shape + day count. Returns
+ * `null` when the terms are NOT usable — missing, empty/whitespace, or a
+ * non-empty string this parser doesn't recognise. Repair 18 (2026-10-04):
+ * this used to default to 30, which made "no terms configured", "terms I
+ * couldn't read" (an RLS leak — see bhr_billing_event_payment_terms), and "a
+ * terms string I can't parse" all produce an identical, confident-looking
+ * invented date nobody decided on. **Never reintroduce `?? 30` / `|| 30` on
+ * this function's result** — a missing due_date is a real signal the UI
+ * must show, not paper over.
+ */
+export function parsePaymentTermSpec(terms: string | null | undefined): PaymentTermSpec | null {
   if (!terms || !String(terms).trim()) return null
   const s = String(terms).replace(/\s+/g, '')
-  if (/^\d+$/.test(s)) return Number(s)
-  if (s === 'שוטף') return 0
-  const m = s.match(/שוטף\+(\d+)/)
-  if (m) return Number(m[1])
+  if (BUSINESS_TERM_VARIANTS.has(s)) return { shape: 'business', days: 5 }
+  if (s === 'שוטף') return { shape: 'eom', days: 0 }
+  let m = s.match(/^שוטף\+?(\d+)(?:יום)?$/)
+  if (m) return { shape: 'eom', days: Number(m[1]) }
+  m = s.match(/^(\d+)(?:יום)?$/)
+  if (m) return { shape: 'eom', days: Number(m[1]) }
   return null
 }
 
 export function addDays(iso: string, days: number): string {
   const d = new Date(iso)
   d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * N business days (Sunday-Thursday) after an ISO "YYYY-MM-DD" date, computed
+ * in UTC to avoid local-vs-UTC drift. Matched pair with the SQL
+ * `bhr_add_business_days()` — same Sun-Thu week, same "holidays not
+ * handled" limitation.
+ */
+export function addBusinessDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`)
+  let remaining = days
+  while (remaining > 0) {
+    d.setUTCDate(d.getUTCDate() + 1)
+    const dow = d.getUTCDay() // 0=Sunday .. 6=Saturday
+    if (dow !== 5 && dow !== 6) remaining -= 1
+  }
   return d.toISOString().slice(0, 10)
 }
 
@@ -48,35 +83,42 @@ export function endOfMonth(iso: string): string {
 }
 
 /**
- * Calculates the expected חשבונית מס קבלה date using Israeli "שוטף+X" logic:
- * - Advance to the last day of the invoice month ("שוטף")
- * - Then add the specified number of additional days
+ * Calculates the expected payment date (תאריך תשלום צפוי) from the real
+ * invoice date (תאריך הפקה) and the client's parsed payment-term spec:
+ * - 'eom'      — advance to the last day of the invoice month, then add N days
+ * - 'business' — add N business days (Sunday-Thursday) directly
  *
- * Example: invoice 11 May 2026, days=30 → end of May (31 May) + 30 days = 30 June 2026
+ * Example ('eom'): invoice 11 May 2026, days=30 → end of May (31 May) + 30 = 30 June 2026
+ * Example ('business'): invoice Wed 7 Oct 2026, days=5 → 14 Oct 2026 (Oren's worked example, 2026-10-06)
  *
  * Calendar arithmetic is done in UTC to avoid local-vs-UTC drift when the input
  * "YYYY-MM-DD" is parsed as UTC midnight by the Date constructor.
  *
- * The Postgres function `bhr_calc_due_date` (migration 20260913_due_date.sql,
- * fed `COALESCE(invoice_date, billing_date)` since 20261003_collection_model.sql
- * — Repair 17, D2) is the authoritative, DB-persisted implementation of this
- * same formula — it is what actually populates `billing_events.due_date`.
+ * The Postgres function `bhr_calc_due_date` (migration 20260913_due_date.sql;
+ * two-shape since `20261006_business_days_and_event_index.sql` — Repair 19)
+ * is the authoritative, DB-persisted implementation of this same formula.
  * This client-side copy is only a live preview shown in TransactionDialog
- * before a row is saved — callers must pass `invoice_date ?? billing_date`
- * as `invoiceDate` to match. Keep the two in lockstep if the formula ever changes.
+ * before a row is saved.
  *
- * Returns `null` when `paymentTermsDays` is `null` (Repair 18) — no usable
- * terms means no תאריך פירעון, not a guessed one.
+ * **Part B3.1 (Repair 19, 2026-10-06): `invoiceDate` must be the real
+ * invoice_date ONLY — never `invoice_date ?? billing_date`.** Before a
+ * חשבון עסקה is issued there is no expected payment date, full stop; callers
+ * must not call this function at all when `invoice_date` is null (see
+ * TransactionDialog's `hasInvoice` gate).
+ *
+ * Returns `null` when `spec` is `null` (Repair 18) — no usable terms means
+ * no תאריך תשלום צפוי, not a guessed one.
  */
-export function calculateTaxInvoiceDate(invoiceDate: string, paymentTermsDays: number | null): string | null {
-  if (paymentTermsDays == null) return null
+export function calculateTaxInvoiceDate(invoiceDate: string, spec: PaymentTermSpec | null): string | null {
+  if (spec == null) return null
+  if (spec.shape === 'business') return addBusinessDays(invoiceDate, spec.days)
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(invoiceDate)
   if (!m) return invoiceDate
   const year = Number(m[1])
   const month = Number(m[2]) // 1-12
   // Last day of the invoice month, plus the additional days, all in UTC.
   const eom = new Date(Date.UTC(year, month, 0)) // month is 1-based here so day 0 of next month = last of this
-  eom.setUTCDate(eom.getUTCDate() + paymentTermsDays)
+  eom.setUTCDate(eom.getUTCDate() + spec.days)
   return eom.toISOString().slice(0, 10)
 }
 
@@ -123,15 +165,28 @@ export function collectionBucket(status: BillingEvent['status']): CollectionBuck
   }
 }
 
-/** The client is late paying an issued invoice — תאריך פירעון renders red. */
+/**
+ * The client is late paying an issued invoice — תאריך תשלום צפוי renders red.
+ * Part B3.2 (Repair 19, 2026-10-06): פיגור requires a חשבון עסקה to have
+ * actually been issued (invoice_date present) — explicit, not just inferred
+ * from status, so this stays correct even in the (currently nonexistent)
+ * edge case of a 'billed' row whose invoice_date was cleared independently
+ * of its invoice_number.
+ */
 export function isOverduePayment(
-  e: Pick<BillingEvent, 'status' | 'due_date'>,
+  e: Pick<BillingEvent, 'status' | 'invoice_date' | 'due_date'>,
   today: string,
 ): boolean {
-  return e.status === 'billed' && !!e.due_date && e.due_date < today
+  return e.status === 'billed' && !!e.invoice_date && !!e.due_date && e.due_date < today
 }
 
-/** We are late issuing the invoice — תאריך חיוב מתוכנן renders red. */
+/**
+ * We are late issuing the invoice — תאריך חיוב מתוכנן renders red. Evaluated
+ * and kept as-is in Repair 19 (Part B3.2): billing_date remains a real
+ * internal scheduling anchor (it still drives the pending→to_bill
+ * transition), so "we're late issuing per the system's own plan" is still a
+ * meaningful, correctly-driven signal — nothing to remove or fix here.
+ */
 export function isDueToInvoice(
   e: Pick<BillingEvent, 'status' | 'billing_date'>,
   today: string,

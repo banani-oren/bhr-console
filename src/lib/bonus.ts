@@ -115,13 +115,20 @@ export function actualForecastProgress(
 //
 // Repair 18 (2026-10-04): an open event with NO due_date (the client's
 // payment terms are missing/unparseable — see billingEvents.ts's
-// parsePaymentTermDays) is EXCLUDED from every month's forecast —
+// parsePaymentTermSpec) is EXCLUDED from every month's forecast —
 // `monthKey` stays null and buildBonusLedger already skips null-monthKey
 // events — rather than falling back to billing_date (the system's PLAN,
 // not a real due date). That fallback used to exist here and silently
 // forecast money against a date nobody actually committed to. Excluded
 // events are still returned (`excludedFromForecast: true`) so callers can
 // report the total instead of letting it vanish — see the Bonuses page note.
+//
+// Repair 19 (2026-10-06, Part B3.1/B3.4): due_date is now NULL for EVERY
+// not-yet-invoiced open event too, not just terms-missing ones (a חשבון
+// עסקה must be issued before there's an expected payment date at all) — so
+// `excludedFromForecast` now fires far more often, for a totally normal
+// reason. `excludedReason` distinguishes the two so callers never mislabel
+// "hasn't been invoiced yet" as a payment-terms problem.
 //
 // Month keys are always derived from the 'YYYY-MM-DD' date STRING
 // (`.slice(0, 7)`), never `new Date(...).getMonth()`, to avoid timezone
@@ -146,14 +153,19 @@ export type BonusEvent = {
   payment_date: string | null
   due_date: string | null
   billing_date: string | null
+  invoice_date: string | null
   monthKey: string | null // 'YYYY-MM', per the rules above
   kind: 'actual' | 'expected'
   overdue: boolean
   // true only for an 'expected' event with a billing_date but no due_date —
-  // i.e. excluded from the forecast specifically because the client's
-  // payment terms are missing/unparseable (Repair 18), as opposed to a
-  // genuinely dateless row (no billing_date either, very rare).
+  // i.e. excluded from the forecast, as opposed to a genuinely dateless row
+  // (no billing_date either, very rare). See excludedReason for WHY.
   excludedFromForecast: boolean
+  // Repair 19 (2026-10-06): 'not_invoiced' = the normal, common case (no
+  // חשבון עסקה yet — Part B3.1); 'terms_missing' = a חשבון עסקה exists but
+  // the client's payment terms are missing/unparseable (Repair 18). Only
+  // set when excludedFromForecast is true.
+  excludedReason?: 'not_invoiced' | 'terms_missing'
 }
 
 /** Today's 'YYYY-MM' in Asia/Jerusalem, independent of the browser's local timezone. */
@@ -186,6 +198,7 @@ type RawBillingEventRow = {
   payment_date: string | null
   due_date: string | null
   billing_date: string | null
+  invoice_date: string | null
   transactions: RawTxn | RawTxn[] | null
 }
 
@@ -215,11 +228,12 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
     payment_date: row.payment_date,
     due_date: row.due_date,
     billing_date: row.billing_date,
+    invoice_date: row.invoice_date,
   }
 
   if (status === 'paid') {
     // §2.1 fallback chain for legacy rows with no payment_date. Unaffected
-    // by Repair 18 — actual bonus is keyed off payment_date, not terms.
+    // by Repair 18/19 — actual bonus is keyed off payment_date, not terms.
     const dateStr = row.payment_date ?? row.due_date ?? row.billing_date
     return { ...base, monthKey: dateStr ? dateStr.slice(0, 7) : null, kind: 'actual', overdue: false, excludedFromForecast: false }
   }
@@ -234,7 +248,10 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
     monthKey = todayMonthKey
   }
   const excludedFromForecast = !row.due_date && !!row.billing_date
-  return { ...base, monthKey, kind: 'expected', overdue, excludedFromForecast }
+  const excludedReason = excludedFromForecast
+    ? (row.invoice_date ? 'terms_missing' as const : 'not_invoiced' as const)
+    : undefined
+  return { ...base, monthKey, kind: 'expected', overdue, excludedFromForecast, excludedReason }
 }
 
 /**
@@ -253,7 +270,7 @@ export async function fetchBonusEvents(
     .from('billing_events')
     .select(`
       id, transaction_id, amount, supplier_amount, status, description,
-      payment_date, due_date, billing_date,
+      payment_date, due_date, billing_date, invoice_date,
       transactions!inner (
         service_lead, client_name, position_name, candidate_name, service_type,
         needs_approval, approved_at
