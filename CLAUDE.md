@@ -168,7 +168,8 @@ App Dev/
 │   │   ├── Transactions.tsx            # Transaction table: filters, inline edit, export
 │   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration). V2: two-phase check-out with optional note (≤250); today's-log + report show check_in→check_out pairs (report = one TableRow per pair, name/date only on first); employee 'תיקון' edit-request form (insert into attendance_edit_requests); admin pencil direct-edit + 'בקשות תיקון ממתינות' approve/reject panel. Edit forms use toLocalInputValue() so datetime-local shows Israel local time. Repair 12: admin-only AdminDeleteButton (trash, two-step inline 'מחק? כן/ביטול') in the פעולות column deletes both pair entries; /attendance sidebar link now allows admin too (Layout.tsx).
 │   │   ├── BillingReports.tsx          # Monthly billing summary reports
-│   │   ├── Reports.tsx                 # Admin-only דוחות section — currently one report (דוח גיוסים): KPIs + לפי מוביל/לקוח/משרה breakdowns with drill-down + Excel export (Batch 8 Phase 4)
+│   │   ├── FinanceReport.tsx           # Repair 23: דוח כספי שנתי body (sections A/B/C + Excel export), rendered by Reports.tsx
+│   │   ├── Reports.tsx                 # Admin-only דוחות section — TWO reports behind a picker (דוח גיוסים default + דוח כספי שנתי, Repair 23; both stay mounted so each keeps its filters). דוח גיוסים: KPIs + לפי מוביל/לקוח/משרה breakdowns with drill-down + Excel export (Batch 8 Phase 4)
 │   │   ├── Bonuses.tsx                 # Per-employee card: actual vs. forecast stats, two-layer progress bar, sortable per-month deals table (click a row → TransactionDialog), stacked 12-month chart (Repair 16 — tier table removed, moved to Team only)
 │   │   ├── Team.tsx                    # Team member management
 │   │   ├── Services.tsx                # Dynamic service type builder (admin only)
@@ -746,6 +747,16 @@ Period = current calendar year in Asia/Jerusalem. Helpers in `finance.ts`: `year
 
 ---
 
+### דוח כספי שנתי (Repair 23, 2026-10-17)
+
+Year Select = every year with a paid event or a deal, plus the current year (default current, Asia/Jerusalem). Helpers in `finance.ts`: `paidByMonth`, `contractedByMonth`, `openGiyusInYear`, `clientMonthMatrix`, `availableYears`, `metricAgorot`.
+- **A — לפי חודש תשלום**: paid events by `payment_date` month → סכום חשבונית / עמלת ספק / הכנסה / עסקאות. Totals-row deal count = DISTINCT transactions over the year (not the sum of monthly counts).
+- **B — לפי חודש סגירת עסקה**: deals by `dealDate` month at transaction level. Open גיוס (no close_date) is excluded and shown under the footnote by `entry_date` (count + סכום חשבונית).
+- **C — הכנסות לפי לקוח וחודש**: paid events by `payment_date`; metric toggle הכנסה (default) / סכום חשבונית / עמלת ספק; rows grouped by `client_id` (else name text); sticky client column; grand total = A's total for the same metric.
+- Excel: `דוח-כספי-{year}.xlsx`, 3 sheets (numeric cells). Identities: A total (current year) = Repair 22 YTD KPIs; C grand = A total.
+
+---
+
 ## Bonus Engine — Business Logic (Repair 16, 2026-10-03)
 
 `src/lib/bonus.ts` is the **single source of truth** for every bonus number in
@@ -985,4 +996,5 @@ broken.
 | Repair 20: Transactions Totals Row | Dynamic סה"כ footer on עסקאות (count + סכום נטו + ממתין לאישור sub-line) from the visible set |
 | Repair 21: Amount Terminology & One Finance Engine | `finance.ts`; Transactions columns (−שירות −אישור, +עמלת ספק +הכנסה); סכום נטו → סכום חשבונית / הכנסה / תקבולים everywhere; AdminDashboard widgets on finance.ts |
 | Repair 22: Dashboard YTD Finance | Admin dashboard: מתחילת השנה KPI row (contracted סכום חשבוניות, עמלות ספקים, הכנסה, אחוז גבייה), הכנסה by service type (table + donut), deals per lead |
+| Repair 23: Annual Finance Report | /reports gains דוח כספי שנתי: by payment month, by deal-close month, client × month matrix + Excel export |
 
