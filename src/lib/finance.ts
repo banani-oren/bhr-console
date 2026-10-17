@@ -116,3 +116,78 @@ export function jerusalemYearMonth(now: Date = new Date()): { year: number; mont
   }).format(now) // YYYY-MM-DD
   return { year: Number(parts.slice(0, 4)), month: Number(parts.slice(5, 7)), today: parts }
 }
+
+// ── Year-to-date helpers (Repair 22) ────────────────────────────────────
+export const yearBounds = (year: number) => ({ from: `${year}-01-01`, to: `${year}-12-31` })
+
+export type CollectionEvent = FinanceEvent & {
+  invoice_date?: string | null
+  invoice_number?: string | null
+}
+
+/**
+ * אחוז גבייה — by AMOUNT. Denominator: סכום חשבונית of invoiced events
+ * (invoice_number set, not cancelled) with invoice_date in `year`; numerator:
+ * the paid subset. Uninvoiced money is never in the denominator. pct is null
+ * when the denominator is 0 (never NaN/Infinity).
+ */
+export function collectionRate(events: CollectionEvent[], year: number) {
+  const { from, to } = yearBounds(year)
+  let invoiced = 0
+  let paid = 0
+  for (const e of events) {
+    if (e.status === 'cancelled' || !e.invoice_number || !e.invoice_date) continue
+    const d = e.invoice_date.slice(0, 10)
+    if (d < from || d > to) continue
+    const a = eventInvoiceAgorot(e)
+    invoiced += a
+    if (e.status === 'paid') paid += a
+  }
+  return {
+    invoiced: fromAgorot(invoiced),
+    paid: fromAgorot(paid),
+    pct: invoiced > 0 ? (paid / invoiced) * 100 : null,
+  }
+}
+
+/** Contracted (deal-level) totals for deals whose dealDate falls in `year`. */
+export function contractedInYear<T extends FinanceTransaction>(
+  txs: T[],
+  year: number,
+  resolveName?: (t: T) => string | null | undefined,
+) {
+  const { from, to } = yearBounds(year)
+  let invoice = 0, supplier = 0, income = 0, count = 0
+  for (const t of txs) {
+    const d = dealDate(t, resolveName?.(t))
+    if (!d || d.slice(0, 10) < from || d.slice(0, 10) > to) continue
+    count += 1
+    invoice += txInvoiceAgorot(t)
+    supplier += txSupplierAgorot(t)
+    income += txIncomeAgorot(t)
+  }
+  return { count, invoice: fromAgorot(invoice), supplier: fromAgorot(supplier), income: fromAgorot(income) }
+}
+
+/**
+ * Group received (paid) events by a key. `deals` = distinct transaction_id with
+ * ≥1 paid event in the set. Sorted by income desc.
+ */
+export function groupPaidEvents<T extends FinanceEvent & { transaction_id?: string | null }>(
+  paid: T[],
+  keyOf: (e: T) => string,
+  labelOf: (e: T) => string = keyOf,
+) {
+  const m = new Map<string, { key: string; label: string; invoice: number; income: number; txs: Set<string> }>()
+  for (const e of paid) {
+    const k = keyOf(e)
+    let g = m.get(k)
+    if (!g) { g = { key: k, label: labelOf(e), invoice: 0, income: 0, txs: new Set() }; m.set(k, g) }
+    g.invoice += eventInvoiceAgorot(e)
+    g.income += eventIncomeAgorot(e)
+    if (e.transaction_id) g.txs.add(e.transaction_id)
+  }
+  return [...m.values()]
+    .map((g) => ({ key: g.key, label: g.label, deals: g.txs.size, invoice: fromAgorot(g.invoice), income: fromAgorot(g.income) }))
+    .sort((a, b) => b.income - a.income)
+}

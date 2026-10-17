@@ -25,7 +25,9 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DateCell, DueDateCell } from '@/components/ui/date-cell'
-import { jerusalemYearMonth, paidEventsInRange, sumEventIncome, sumEventInvoice, toAgorot } from '@/lib/finance'
+import { groupPaidEvents, jerusalemYearMonth, paidEventsInRange, sumEventIncome, sumEventInvoice, toAgorot, yearBounds } from '@/lib/finance'
+import { normalizeLead } from '@/lib/bonus'
+import { YtdKpiRow, ServiceTypeBreakdown } from './YtdFinance'
 import {
   BarChart,
   Bar,
@@ -59,6 +61,7 @@ const HE_MONTHS = [
 
 type EventRow = {
   id: string
+  transaction_id: string
   amount: number
   supplier_amount: number
   billing_date: string | null
@@ -74,6 +77,7 @@ type EventRow = {
 
 type RawEventRow = {
   id: string
+  transaction_id: string
   amount: number | string | null
   supplier_amount: number | string | null
   billing_date: string | null
@@ -122,17 +126,30 @@ function buildMonthlyRevenue(events: EventRow[]) {
 
 function buildLeadRevenue(events: EventRow[]) {
   // הכנסה by lead, current calendar year, all paid events by payment_date
-  // (approval is not a filter — money received is received).
+  // (approval is not a filter). Leads are matched with bonus.ts's
+  // normalizeLead(); `deals` = distinct transactions with ≥1 paid event.
   const { year } = jerusalemYearMonth()
-  const paid = paidEventsInRange(events, `${year}-01-01`, `${year}-12-31`)
-  const byLead: Record<string, EventRow[]> = {}
-  for (const ev of paid) {
-    const lead = ev.service_lead ?? 'לא ידוע'
-    ;(byLead[lead] ??= []).push(ev)
-  }
-  return Object.entries(byLead)
-    .map(([name, evs]) => ({ name, revenue: sumEventIncome(evs) }))
-    .sort((x, y) => y.revenue - x.revenue)
+  const { from, to } = yearBounds(year)
+  const paid = paidEventsInRange(events, from, to)
+  return groupPaidEvents(
+    paid,
+    (e) => normalizeLead(e.service_lead) || 'לא ידוע',
+    (e) => (e.service_lead ?? '').trim() || 'לא ידוע',
+  ).map((g) => ({ name: g.label, revenue: g.income, deals: g.deals, axisLabel: `${g.label} · ${g.deals} עסקאות` }))
+}
+
+function LeadTooltip({ active, payload }: {
+  active?: boolean
+  payload?: { payload: { name: string; revenue: number; deals: number } }[]
+}) {
+  if (!active || !payload?.length) return null
+  const p = payload[0].payload
+  return (
+    <div className="rounded-lg bg-popover px-3 py-2 text-sm shadow-md ring-1 ring-foreground/10">
+      <p className="font-medium text-foreground mb-1">{p.name}</p>
+      <p className="text-muted-foreground">{ILS.format(p.revenue)} · {p.deals} עסקאות</p>
+    </div>
+  )
 }
 
 function RevenueTooltip({ active, payload, label }: {
@@ -448,7 +465,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from('billing_events')
         .select(`
-          id, amount, supplier_amount, billing_date, payment_date, due_date, status, invoice_number, description,
+          id, transaction_id, amount, supplier_amount, billing_date, payment_date, due_date, status, invoice_number, description,
           transactions!inner ( client_name, service_lead, needs_approval, approved_at )
         `)
         .neq('status', 'cancelled')
@@ -456,6 +473,7 @@ export default function AdminDashboard() {
       const rows = (data ?? []) as unknown as RawEventRow[]
       return rows.map((row) => ({
         id: row.id,
+        transaction_id: row.transaction_id,
         amount: Number(row.amount) || 0,
         supplier_amount: Number(row.supplier_amount) || 0,
         billing_date: row.billing_date,
@@ -579,6 +597,8 @@ export default function AdminDashboard() {
         ))}
       </div>
 
+      <YtdKpiRow />
+
       <ExpectedPaymentSchedule />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -629,6 +649,8 @@ export default function AdminDashboard() {
         </Card>
       </div>
 
+      <ServiceTypeBreakdown />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base font-semibold">הכנסה לפי מוביל שירות – מתחילת השנה</CardTitle>
@@ -647,8 +669,8 @@ export default function AdminDashboard() {
                   tickLine={false}
                   axisLine={false}
                 />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} width={100} />
-                <Tooltip content={<RevenueTooltip />} />
+                <YAxis type="category" dataKey="axisLabel" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} width={150} />
+                <Tooltip content={<LeadTooltip />} />
                 <Bar dataKey="revenue" radius={[0, 4, 4, 0]} maxBarSize={32}>
                   {leadRevenue.map((_, i) => (
                     <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
