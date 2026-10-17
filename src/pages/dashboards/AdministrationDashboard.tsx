@@ -65,8 +65,8 @@ type RawEventRow = {
 }
 
 export default function AdministrationDashboard() {
-  const { data: billingEvents = [], isLoading } = useQuery<EventRow[]>({
-    queryKey: ['admin-dashboard-billing-events'],
+  const { data: billingEvents = [], isLoading, isError } = useQuery<EventRow[]>({
+    queryKey: ['collections-dashboard-billing-events'],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
@@ -128,6 +128,11 @@ export default function AdministrationDashboard() {
   return (
     <div className="p-6 space-y-6" dir="rtl">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">דשבורד גבייה</h1>
+      {isError && (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          שגיאה בטעינת הנתונים — המספרים להלן אינם מעודכנים. נסו לרענן את הדף.
+        </p>
+      )}
 
       <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
         <CardContent className="p-6 space-y-4">
