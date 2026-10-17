@@ -235,7 +235,7 @@ export default function RecruiterDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">הכנסות — 6 חודשים אחרונים</CardTitle>
+          <CardTitle className="text-base font-semibold">הכנסה — 6 חודשים אחרונים</CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={240}>

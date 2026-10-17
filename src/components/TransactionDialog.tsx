@@ -50,6 +50,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
+import { isGiyusName } from '@/lib/finance'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -410,7 +411,7 @@ export default function TransactionDialog({
     // Ask BEFORE starting the abort timer — window.confirm() blocks the thread,
     // and a slow decision here must not eat into the network request's timeout
     // budget (which would fire the moment the dialog closes).
-    const isGiyusNow = state.service_type_name === 'גיוס'
+    const isGiyusNow = isGiyusName(state.service_type_name)
     const finalSalaryNow = Number(state.custom.final_salary) || 0
     const finalSalaryChanged = isGiyusNow && finalSalaryNow !== originalFinalSalaryRef.current
     const hasExistingEvents = !!editing && txnBillingEvents.length > 0
@@ -491,7 +492,7 @@ export default function TransactionDialog({
       if (state.kind === 'service') {
         const expectedSalary = Number(state.custom.salary) || 0
         const finalSalaryVal = Number(state.custom.final_salary) || 0
-        const isGiyusNow = state.service_type_name === 'גיוס'
+        const isGiyusNow = isGiyusName(state.service_type_name)
         const effectiveSalaryForInvoice = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
         const commPct = Number(state.custom.commission_percent) || 0
         if (effectiveSalaryForInvoice > 0 && commPct > 0) {
@@ -738,7 +739,7 @@ export default function TransactionDialog({
     }
   }
 
-  const isGiyus = state.service_type_name === 'גיוס'
+  const isGiyus = isGiyusName(state.service_type_name)
   const isHadracha = state.service_type_name === 'הדרכה'
 
   // הדרכה pricing: מחיר (custom.price) × number of execution dates + travel.
@@ -1085,7 +1086,7 @@ export default function TransactionDialog({
                     <p>{fmt(state.hourly_rate_used)}</p>
                   </div>
                   <div>
-                    <Label className="text-xs">סכום נטו</Label>
+                    <Label className="text-xs">סכום חשבונית</Label>
                     <p>{fmt(state.net_invoice_amount)}</p>
                   </div>
                 </div>

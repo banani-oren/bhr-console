@@ -1,11 +1,12 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Search, X } from 'lucide-react'
+import { Plus, Pencil, Trash2, Search, X, Check } from 'lucide-react'
 import { DateCell } from '@/components/ui/date-cell'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTable, useDelete } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { toAgorot, txInvoiceAgorot, txSupplierAgorot, txIncomeAgorot, txSupplierAmount, txIncome } from '@/lib/finance'
 import type {
   BillingEvent,
   BillingEventStatus,
@@ -201,7 +202,10 @@ export default function Transactions() {
   }, [transactions, searchDebounced, filterClosingMonth, serviceNameById])
 
   const getSortValue = (t: Transaction, key: string): unknown =>
-    key === 'service_type' ? resolveServiceName(t) : (t as Record<string, unknown>)[key]
+    key === 'service_type' ? resolveServiceName(t)
+    : key === 'supplier_amount_calc' ? txSupplierAmount(t)
+    : key === 'income_calc' ? txIncome(t)
+    : (t as Record<string, unknown>)[key]
 
   const sorted = useMemo(() => {
     const arr = [...filtered]
@@ -213,25 +217,25 @@ export default function Transactions() {
   // Totals row — derived from `sorted` (the exact rows rendered) so the footer
   // always matches what is visible. Integer agorot to avoid float drift.
   const totals = useMemo(() => {
-    const toAgorot = (v: unknown) => {
-      if (v == null || v === '') return 0
-      const n = Number(v)
-      return Number.isFinite(n) ? Math.round(n * 100) : 0
-    }
-    let net = 0
+    let invoice = 0
+    let supplier = 0
+    let income = 0
     let pending = 0
     let pendingCount = 0
     for (const t of sorted) {
-      const a = toAgorot(t.net_invoice_amount)
-      net += a
+      invoice += txInvoiceAgorot(t)
+      supplier += txSupplierAgorot(t)
+      income += txIncomeAgorot(t)
       if (t.needs_approval && !t.approved_at) {
-        pending += a
+        pending += txInvoiceAgorot(t)
         pendingCount += 1
       }
     }
     return {
       count: sorted.length,
-      netTotal: net / 100,
+      invoiceTotal: invoice / 100,
+      supplierTotal: supplier / 100,
+      incomeTotal: income / 100,
       pendingApprovalTotal: pending / 100,
       pendingApprovalCount: pendingCount,
     }
@@ -248,6 +252,8 @@ export default function Transactions() {
   }
 
   const canApprove = profile?.role === 'admin' || profile?.role === 'administration'
+  // עמלת ספק is hidden from recruiters entirely (header + cell + footer).
+  const showSupplier = canApprove
 
   return (
     <div className="p-6 space-y-4" dir="rtl">
@@ -316,16 +322,18 @@ export default function Transactions() {
               <TableHeader>
                 <TableRow className="bg-purple-50">
                   <SortableHead col="client_name" label="לקוח" sort={sort} onToggle={toggleSort} />
-                  <SortableHead col="service_type" label="שירות" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800 font-semibold">משרה / מועמד</TableHead>
                   <SortableHead col="salary" label="שכר" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="commission_percent" label="% עמלה" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="service_lead" label="מוביל" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="close_date" label="תאריך סגירה" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="work_start_date" label="תחילת עבודה" sort={sort} onToggle={toggleSort} />
-                  <SortableHead col="net_invoice_amount" label="סכום נטו" sort={sort} onToggle={toggleSort} />
+                  <SortableHead col="net_invoice_amount" label="סכום חשבונית" sort={sort} onToggle={toggleSort} />
+                  {showSupplier && (
+                    <SortableHead col="supplier_amount_calc" label="עמלת ספק" sort={sort} onToggle={toggleSort} />
+                  )}
+                  <SortableHead col="income_calc" label="הכנסה" sort={sort} onToggle={toggleSort} />
                   <TableHead className="text-right text-purple-800 font-semibold">חיובים</TableHead>
-                  <TableHead className="text-right text-purple-800 font-semibold">אישור</TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">פעולות</TableHead>
                 </TableRow>
               </TableHeader>
@@ -343,8 +351,14 @@ export default function Transactions() {
                       )}
                       onClick={() => openEdit(t)}
                     >
-                      <TableCell className="text-right font-medium">{t.client_name}</TableCell>
-                      <TableCell className="text-right">{resolveServiceName(t) || '—'}</TableCell>
+                      <TableCell className="text-right font-medium">
+                        {t.client_name}
+                        {isUnapproved && (
+                          <Badge variant="outline" className="block w-fit mt-0.5 text-amber-600 border-amber-400 text-xs font-normal">
+                            ממתין לאישור
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right">
                         {t.kind === 'time_period' ? (
                           <span className="text-xs text-muted-foreground">
@@ -366,30 +380,27 @@ export default function Transactions() {
                         <DateCell value={t.work_start_date} />
                       </TableCell>
                       <TableCell className="text-right">{formatCurrency(t.net_invoice_amount)}</TableCell>
+                      {showSupplier && (
+                        <TableCell className="text-right">
+                          {toAgorot(t.supplier_percent) > 0 ? formatCurrency(txSupplierAmount(t)) : '—'}
+                        </TableCell>
+                      )}
+                      <TableCell className="text-right">{formatCurrency(txIncome(t))}</TableCell>
                       <TableCell className="text-right">
                         <BillingDots events={events} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {isUnapproved ? (
-                          <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
-                            ממתין לאישור
-                          </Badge>
-                        ) : t.approved_at ? (
-                          <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
-                            מאושר ✓
-                          </Badge>
-                        ) : null}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                           {canApprove && isUnapproved && (
                             <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-green-700 border-green-400 hover:bg-green-50 text-xs"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-green-700 hover:bg-green-50"
+                              title="אשר עסקה"
+                              aria-label="אשר עסקה"
                               onClick={() => approveMut.mutate(t.id)}
                             >
-                              אשר
+                              <Check className="w-4 h-4" />
                             </Button>
                           )}
                           <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:bg-purple-100" onClick={() => openEdit(t)}>
@@ -415,16 +426,18 @@ export default function Transactions() {
                   <TableCell className="text-right" />
                   <TableCell className="text-right" />
                   <TableCell className="text-right" />
-                  <TableCell className="text-right" />
                   <TableCell className="text-right">
-                    {formatCurrency(totals.netTotal)}
+                    {formatCurrency(totals.invoiceTotal)}
                     {totals.pendingApprovalCount > 0 && (
                       <span className="block text-xs text-amber-600 font-normal">
                         מתוכם ממתין לאישור: {formatCurrency(totals.pendingApprovalTotal)}
                       </span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right" />
+                  {showSupplier && (
+                    <TableCell className="text-right">{formatCurrency(totals.supplierTotal)}</TableCell>
+                  )}
+                  <TableCell className="text-right">{formatCurrency(totals.incomeTotal)}</TableCell>
                   <TableCell className="text-right" />
                   <TableCell className="text-right" />
                 </TableRow>

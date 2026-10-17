@@ -225,7 +225,7 @@ export default function Reports() {
       { מדד: 'נסגרו', ערך: kpi.closed },
       { מדד: 'יחס סגירה %', ערך: kpi.closeRatio ?? '—' },
       { מדד: 'ממוצע ימים לסגירה', ערך: kpi.avgDays ?? '—' },
-      { מדד: 'הכנסה שהתקבלה (₪)', ערך: kpi.incomeReceived },
+      { מדד: 'תקבולים (₪)', ערך: kpi.incomeReceived },
     ]
     const groupRowsFor = (groups: GroupRow[], labelKey: string) =>
       groups.map((g) => ({
@@ -234,8 +234,8 @@ export default function Reports() {
         נסגרו: g.closed,
         'יחס סגירה %': g.closeRatio ?? '—',
         'ממוצע ימים': g.avgDays ?? '—',
-        'סה"כ עמלות': g.totalCommission,
-        'הכנסה שהתקבלה': g.incomeReceived,
+        'סה"כ סכום חשבונית': g.totalCommission,
+        'תקבולים': g.incomeReceived,
       }))
     exportSheetsToExcel(
       [
@@ -333,7 +333,7 @@ export default function Reports() {
             <KpiCard title="נסגרו" value={String(kpi.closed)} />
             <KpiCard title="יחס סגירה %" value={kpi.closeRatio != null ? `${kpi.closeRatio}%` : '—'} />
             <KpiCard title="ממוצע ימים לסגירה" value={kpi.avgDays != null ? String(kpi.avgDays) : '—'} />
-            <KpiCard title="הכנסה שהתקבלה" value={ILS.format(kpi.incomeReceived)} />
+            <KpiCard title="תקבולים" value={ILS.format(kpi.incomeReceived)} />
           </div>
 
           <GroupBlock
@@ -417,8 +417,8 @@ function GroupBlock({
                 <SortableHead col="closed" label="נסגרו" sort={sort} onToggle={onToggleSort} />
                 <SortableHead col="closeRatio" label="יחס סגירה" sort={sort} onToggle={onToggleSort} />
                 <SortableHead col="avgDays" label="ממוצע ימים" sort={sort} onToggle={onToggleSort} />
-                <SortableHead col="totalCommission" label='סה"כ עמלות' sort={sort} onToggle={onToggleSort} />
-                <SortableHead col="incomeReceived" label="הכנסה שהתקבלה" sort={sort} onToggle={onToggleSort} />
+                <SortableHead col="totalCommission" label='סה"כ סכום חשבונית' sort={sort} onToggle={onToggleSort} />
+                <SortableHead col="incomeReceived" label="תקבולים" sort={sort} onToggle={onToggleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -476,7 +476,7 @@ function GroupRows({
                     <TableHead className="text-right text-purple-700 text-xs">תאריך פתיחה</TableHead>
                     <TableHead className="text-right text-purple-700 text-xs">תאריך סגירה</TableHead>
                     <TableHead className="text-right text-purple-700 text-xs">ימים</TableHead>
-                    <TableHead className="text-right text-purple-700 text-xs">סכום נטו</TableHead>
+                    <TableHead className="text-right text-purple-700 text-xs">סכום חשבונית</TableHead>
                     <TableHead className="text-right text-purple-700 text-xs">התקבל</TableHead>
                   </TableRow>
                 </TableHeader>

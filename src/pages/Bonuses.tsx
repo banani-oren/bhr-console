@@ -583,7 +583,7 @@ function EmployeeCard({
                     <SortableHead col="client_name" label="לקוח" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="position" label="משרה / מועמד" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="description" label="תיאור" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
-                    <SortableHead col="net" label="סכום נטו" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="net" label="הכנסה" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="status" label="סטטוס" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="date" label="תאריך" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="kind" label="סוג" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />

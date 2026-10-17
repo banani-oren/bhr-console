@@ -25,6 +25,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DateCell, DueDateCell } from '@/components/ui/date-cell'
+import { jerusalemYearMonth, paidEventsInRange, sumEventIncome, sumEventInvoice, toAgorot } from '@/lib/finance'
 import {
   BarChart,
   Bar,
@@ -102,40 +103,36 @@ const STATUS_BADGE: Record<string, string> = {
 }
 
 function buildMonthlyRevenue(events: EventRow[]) {
-  const now = new Date()
-  const months: { label: string; year: number; month: number }[] = []
+  // 12 calendar months ending at the current Jerusalem month. Month keys are
+  // 'YYYY-MM' strings (never new Date(payment_date) — timezone drift). The
+  // value is הכנסה (invoice − supplier) of PAID events by payment_date.
+  const { year: cy, month: cm } = jerusalemYearMonth()
+  const months: { label: string; key: string }[] = []
   for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-    months.push({
-      label: `${HE_MONTHS[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`,
-      year: d.getFullYear(),
-      month: d.getMonth() + 1,
-    })
+    const idx = cy * 12 + (cm - 1) - i
+    const y = Math.floor(idx / 12)
+    const m = (idx % 12) + 1
+    months.push({ label: `${HE_MONTHS[m - 1]} ${String(y).slice(2)}`, key: `${y}-${String(m).padStart(2, '0')}` })
   }
-  return months.map(({ label, year, month }) => {
-    const revenue = events.reduce((sum, ev) => {
-      // Only paid events count as income; use payment_date as the receipt month.
-      if (ev.status !== 'paid' || !ev.payment_date) return sum
-      const d = new Date(ev.payment_date)
-      if (isNaN(d.getTime())) return sum
-      if (d.getFullYear() === year && d.getMonth() + 1 === month) return sum + ev.amount
-      return sum
-    }, 0)
-    return { label, revenue }
+  return months.map(({ label, key }) => {
+    const inMonth = paidEventsInRange(events, `${key}-01`, `${key}-31`)
+    return { label, revenue: sumEventIncome(inMonth) }
   })
 }
 
 function buildLeadRevenue(events: EventRow[]) {
-  const totals: Record<string, number> = {}
-  for (const ev of events) {
-    // Only paid events count toward a lead's realized revenue.
-    if (!ev.approved || ev.status !== 'paid') continue
+  // הכנסה by lead, current calendar year, all paid events by payment_date
+  // (approval is not a filter — money received is received).
+  const { year } = jerusalemYearMonth()
+  const paid = paidEventsInRange(events, `${year}-01-01`, `${year}-12-31`)
+  const byLead: Record<string, EventRow[]> = {}
+  for (const ev of paid) {
     const lead = ev.service_lead ?? 'לא ידוע'
-    totals[lead] = (totals[lead] ?? 0) + (ev.amount - ev.supplier_amount)
+    ;(byLead[lead] ??= []).push(ev)
   }
-  return Object.entries(totals)
-    .map(([name, revenue]) => ({ name, revenue }))
-    .sort((a, b) => b.revenue - a.revenue)
+  return Object.entries(byLead)
+    .map(([name, evs]) => ({ name, revenue: sumEventIncome(evs) }))
+    .sort((x, y) => y.revenue - x.revenue)
 }
 
 function RevenueTooltip({ active, payload, label }: {
@@ -335,7 +332,7 @@ function groupByDueMonth(rows: ScheduleRow[]) {
       groups.push(group)
     }
     group.rows.push(r)
-    group.subtotal += r.amount
+    group.subtotal = (toAgorot(group.subtotal) + toAgorot(r.amount)) / 100
   }
   return groups
 }
@@ -388,7 +385,7 @@ function ExpectedPaymentSchedule() {
 
   if (rows.length === 0) return null
 
-  const total = rows.reduce((sum, r) => sum + r.amount, 0)
+  const total = rows.reduce((sum, r) => sum + toAgorot(r.amount), 0) / 100
   const groups = groupByDueMonth(rows)
 
   return (
@@ -475,44 +472,25 @@ export default function AdminDashboard() {
   })
 
   const stats = useMemo(() => {
-    const now = new Date()
-    const curYear = now.getFullYear()
-    const curMonth = now.getMonth() + 1
+    const { year: curYear, month: curMonth } = jerusalemYearMonth()
+    const curMonthKey = `${curYear}-${String(curMonth).padStart(2, '0')}`
 
     // Repair 17: vocabulary aligned with the collection model / דוח צפי גבייה —
     // טרם חויב = pending + to_bill (not yet invoiced); ממתין לתשלום = billed
     // only (invoiced, awaiting payment). This deliberately reverses the
     // Repair 11 choice (billed + to_bill under "לגבייה") per Oren, so the
     // dashboard and the report never disagree.
-    let notBilledCount = 0
-    let notBilledSum = 0
-    let awaitingPaymentSum = 0
-    let awaitingPaymentCount = 0
-    let collectedThisMonth = 0
-    let collectedYTD = 0
-
-    for (const ev of billingEvents) {
-      if (ev.status === 'pending' || ev.status === 'to_bill') {
-        notBilledCount += 1
-        notBilledSum += ev.amount
-      }
-      if (ev.status === 'billed') {
-        awaitingPaymentSum += ev.amount
-        awaitingPaymentCount += 1
-      }
-      // Income = money actually received = paid events only, by payment_date
-      // (the actual receipt date — unchanged by the due_date feature). A
-      // billed event has an expected due_date but hasn't been paid yet, so
-      // it must NOT count as a receipt. due_date (תאריך פירעון) only feeds
-      // the cash-flow forecast widget above, never these KPIs.
-      if (ev.status === 'paid' && ev.payment_date) {
-        const pd = new Date(ev.payment_date)
-        if (!isNaN(pd.getTime())) {
-          if (pd.getFullYear() === curYear) collectedYTD += ev.amount
-          if (pd.getFullYear() === curYear && pd.getMonth() + 1 === curMonth) collectedThisMonth += ev.amount
-        }
-      }
-    }
+    const notBilled = billingEvents.filter((ev) => ev.status === 'pending' || ev.status === 'to_bill')
+    const awaiting = billingEvents.filter((ev) => ev.status === 'billed')
+    const notBilledCount = notBilled.length
+    const notBilledSum = sumEventInvoice(notBilled)
+    const awaitingPaymentSum = sumEventInvoice(awaiting)
+    const awaitingPaymentCount = awaiting.length
+    // Receipts = money actually received = paid events only, by payment_date
+    // (never due_date — that only feeds the forecast widget above).
+    // תקבולים = סכום חשבונית of paid events by payment_date (via finance.ts).
+    const collectedYTD = sumEventInvoice(paidEventsInRange(billingEvents, `${curYear}-01-01`, `${curYear}-12-31`))
+    const collectedThisMonth = sumEventInvoice(paidEventsInRange(billingEvents, `${curMonthKey}-01`, `${curMonthKey}-31`))
     return { notBilledCount, notBilledSum, awaitingPaymentSum, awaitingPaymentCount, collectedThisMonth, collectedYTD }
   }, [billingEvents])
 
@@ -606,7 +584,7 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base font-semibold">הכנסות חודשיות – 12 חודשים אחרונים</CardTitle>
+            <CardTitle className="text-base font-semibold">הכנסה חודשית – 12 חודשים אחרונים</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={260}>
@@ -653,7 +631,7 @@ export default function AdminDashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base font-semibold">הכנסות נטו לפי מוביל שירות</CardTitle>
+          <CardTitle className="text-base font-semibold">הכנסה לפי מוביל שירות – מתחילת השנה</CardTitle>
         </CardHeader>
         <CardContent>
           {leadRevenue.length === 0 ? (
