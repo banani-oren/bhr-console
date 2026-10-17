@@ -29,6 +29,7 @@ import {
   type SortState,
 } from '@/components/SortableHead'
 import { exportSheetsToExcel } from '@/lib/excelExport'
+import FinanceReport from '@/pages/FinanceReport'
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 const NONE_LABEL = '— ללא —'
@@ -109,8 +110,55 @@ function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+type ReportKind = 'giyus' | 'finance'
+const REPORT_LABEL: Record<ReportKind, string> = { giyus: 'דוח גיוסים', finance: 'דוח כספי שנתי' }
+
+function ReportPicker({ value, onChange }: { value: ReportKind; onChange: (k: ReportKind) => void }) {
+  return (
+    <div className="w-56">
+      <Select value={value} onValueChange={(v) => onChange(((v as ReportKind) ?? 'giyus'))}>
+        <SelectTrigger>
+          <span className="text-sm">{REPORT_LABEL[value]}</span>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="giyus">דוח גיוסים</SelectItem>
+          <SelectItem value="finance">דוח כספי שנתי</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  )
+}
+
 export default function Reports() {
-  const [reportKind, setReportKind] = useState<'giyus'>('giyus')
+  const [reportKind, setReportKind] = useState<ReportKind>('giyus')
+  // Both reports stay mounted once visited (hidden, not unmounted) so each
+  // keeps its own filters when switching; the finance report only loads on
+  // first selection.
+  const [financeVisited, setFinanceVisited] = useState(false)
+  const pick = (k: ReportKind) => {
+    if (k === 'finance') setFinanceVisited(true)
+    setReportKind(k)
+  }
+  return (
+    <>
+      <div className={reportKind === 'giyus' ? '' : 'hidden'}>
+        <GiyusReport onKind={pick} />
+      </div>
+      {financeVisited && (
+        <div dir="rtl" className={`p-6 space-y-4 ${reportKind === 'finance' ? '' : 'hidden'}`}>
+          <div className="flex items-center gap-2">
+            <BarChart3 className="w-6 h-6 text-purple-600" />
+            <h1 className="text-2xl font-bold text-purple-900">דוחות</h1>
+          </div>
+          <ReportPicker value={reportKind} onChange={pick} />
+          <FinanceReport />
+        </div>
+      )}
+    </>
+  )
+}
+
+function GiyusReport({ onKind }: { onKind: (k: ReportKind) => void }) {
   const [dateFrom, setDateFrom] = useState(defaultDateFrom())
   const [dateTo, setDateTo] = useState(today())
   const [leadFilter, setLeadFilter] = useState<string>('all')
@@ -261,16 +309,7 @@ export default function Reports() {
         </Button>
       </div>
 
-      <div className="w-56">
-        <Select value={reportKind} onValueChange={(v) => setReportKind((v as 'giyus') ?? 'giyus')}>
-          <SelectTrigger>
-            <span className="text-sm">דוח גיוסים</span>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="giyus">דוח גיוסים</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      <ReportPicker value="giyus" onChange={onKind} />
 
       <Card className="p-4">
         <div className="flex items-center gap-2 flex-wrap">

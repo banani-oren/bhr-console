@@ -191,3 +191,119 @@ export function groupPaidEvents<T extends FinanceEvent & { transaction_id?: stri
     .map((g) => ({ key: g.key, label: g.label, deals: g.txs.size, invoice: fromAgorot(g.invoice), income: fromAgorot(g.income) }))
     .sort((a, b) => b.income - a.income)
 }
+
+// ── Annual finance report helpers (Repair 23) ───────────────────────────
+export type Metric = 'income' | 'invoice' | 'supplier'
+export const metricAgorot = (e: FinanceEvent, m: Metric) =>
+  m === 'income' ? eventIncomeAgorot(e) : m === 'invoice' ? eventInvoiceAgorot(e) : eventSupplierAgorot(e)
+
+/** 'YYYY-MM-DD' → month 1..12 for a given year, or 0 when outside the year. */
+const monthInYear = (iso: string | null | undefined, year: number): number => {
+  if (!iso || Number(iso.slice(0, 4)) !== year) return 0
+  return Number(iso.slice(5, 7))
+}
+
+/** Section A — paid events by payment_date month. `deals` = distinct transactions. */
+export function paidByMonth<T extends FinanceEvent & { transaction_id?: string | null }>(events: T[], year: number) {
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1, invoice: 0, supplier: 0, income: 0, txs: new Set<string>(),
+  }))
+  const all = new Set<string>()
+  for (const e of events) {
+    if (e.status !== 'paid') continue
+    const m = monthInYear(e.payment_date, year)
+    if (!m) continue
+    const r = rows[m - 1]
+    r.invoice += eventInvoiceAgorot(e)
+    r.supplier += eventSupplierAgorot(e)
+    r.income += eventIncomeAgorot(e)
+    if (e.transaction_id) { r.txs.add(e.transaction_id); all.add(e.transaction_id) }
+  }
+  const out = rows.map((r) => ({
+    month: r.month, invoice: fromAgorot(r.invoice), supplier: fromAgorot(r.supplier),
+    income: fromAgorot(r.income), deals: r.txs.size,
+  }))
+  const sum = (k: 'invoice' | 'supplier' | 'income') => fromAgorot(rows.reduce((s, r) => s + r[k], 0))
+  return { rows: out, total: { invoice: sum('invoice'), supplier: sum('supplier'), income: sum('income'), deals: all.size } }
+}
+
+/** Section B — deals by dealDate month, valued at transaction level. */
+export function contractedByMonth<T extends FinanceTransaction>(
+  txs: T[], year: number, resolveName?: (t: T) => string | null | undefined,
+) {
+  const rows = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, deals: 0, invoice: 0, supplier: 0, income: 0 }))
+  for (const t of txs) {
+    const m = monthInYear(dealDate(t, resolveName?.(t)), year)
+    if (!m) continue
+    const r = rows[m - 1]
+    r.deals += 1
+    r.invoice += txInvoiceAgorot(t)
+    r.supplier += txSupplierAgorot(t)
+    r.income += txIncomeAgorot(t)
+  }
+  const out = rows.map((r) => ({
+    month: r.month, deals: r.deals, invoice: fromAgorot(r.invoice),
+    supplier: fromAgorot(r.supplier), income: fromAgorot(r.income),
+  }))
+  const sum = (k: 'invoice' | 'supplier' | 'income') => fromAgorot(rows.reduce((s, r) => s + r[k], 0))
+  return {
+    rows: out,
+    total: { deals: rows.reduce((s, r) => s + r.deals, 0), invoice: sum('invoice'), supplier: sum('supplier'), income: sum('income') },
+  }
+}
+
+/** Open גיוס placements (no close_date) opened in `year` — excluded from Section B. */
+export function openGiyusInYear<T extends FinanceTransaction>(
+  txs: T[], year: number, resolveName?: (t: T) => string | null | undefined,
+) {
+  let count = 0, invoice = 0
+  for (const t of txs) {
+    if (!isGiyus(t, resolveName?.(t)) || t.close_date) continue
+    if (!monthInYear(t.entry_date, year)) continue
+    count += 1
+    invoice += txInvoiceAgorot(t)
+  }
+  return { count, invoice: fromAgorot(invoice) }
+}
+
+/** Section C — client × month matrix of paid events by payment_date. */
+export function clientMonthMatrix<T extends FinanceEvent>(
+  events: T[], year: number, metric: Metric,
+  keyOf: (e: T) => string, labelOf: (e: T) => string = keyOf,
+) {
+  const m = new Map<string, { key: string; label: string; months: number[] }>()
+  for (const e of events) {
+    if (e.status !== 'paid') continue
+    const mo = monthInYear(e.payment_date, year)
+    if (!mo) continue
+    const k = keyOf(e)
+    let r = m.get(k)
+    if (!r) { r = { key: k, label: labelOf(e), months: Array(12).fill(0) }; m.set(k, r) }
+    r.months[mo - 1] += metricAgorot(e, metric)
+  }
+  const rows = [...m.values()].map((r) => ({ ...r, total: r.months.reduce((s, v) => s + v, 0) }))
+    .sort((a, b) => b.total - a.total)
+  const colTotals = Array.from({ length: 12 }, (_, i) => rows.reduce((s, r) => s + r.months[i], 0))
+  const grand = colTotals.reduce((s, v) => s + v, 0)
+  return {
+    rows: rows.map((r) => ({
+      key: r.key, label: r.label, months: r.months.map(fromAgorot), total: fromAgorot(r.total),
+      pct: grand > 0 ? (r.total / grand) * 100 : 0,
+    })),
+    colTotals: colTotals.map(fromAgorot),
+    grand: fromAgorot(grand),
+  }
+}
+
+/** Years that have any paid event or any deal, plus the current year; descending. */
+export function availableYears<T extends FinanceTransaction>(
+  events: FinanceEvent[], txs: T[], currentYear: number, resolveName?: (t: T) => string | null | undefined,
+): number[] {
+  const ys = new Set<number>([currentYear])
+  for (const e of events) if (e.status === 'paid' && e.payment_date) ys.add(Number(e.payment_date.slice(0, 4)))
+  for (const t of txs) {
+    const d = dealDate(t, resolveName?.(t))
+    if (d) ys.add(Number(d.slice(0, 4)))
+  }
+  return [...ys].filter((y) => Number.isFinite(y) && y > 1990).sort((a, b) => b - a)
+}
