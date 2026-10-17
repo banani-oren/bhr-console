@@ -94,7 +94,7 @@ Recruiters therefore see 11 columns. Service type is no longer a column but stay
 
 Footer: totals row (Repair 20, extended Repair 21) — count in col 1; סכום חשבונית total (+ "מתוכם ממתין לאישור" sub-line) under col 8; עמלת ספק total (admin/administration) and הכנסה total — all derived from the visible (`sorted`) set via `finance.ts`. No footer in loading/empty states.
 
-⚠️ Known limitation (verified 2026-10-17): the חודש סגירה filter matches `closing_month` (1–12) **without a year**. Once 2027 data exists, "אוגוסט" will merge Aug 2026 and Aug 2027 — and so will the totals row. Filter intentionally unchanged; needs a separate decision. (Also: 11 of 52 transactions have no `closing_month` and appear only under כל החודשים.)
+Filters: **שנה** (כל השנים + every distinct `closing_year`, descending) and **חודש סגירה** (כל החודשים + 12 months), plus search — all three combine; the totals row follows them. Defaults: כל השנים + כל החודשים. *(The old "month filter has no year" limitation was resolved by Repair 25, 2026-10-17.)*
 
 ---|---|---|
 | 1 | לקוח | `t.client_name` |
@@ -136,6 +136,7 @@ App Dev/
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents()/buildBonusLedger(): actual by payment_date, forecast = actual + open-by-due_date w/ overdue roll-forward. See "Bonus Engine" section above.
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
+│   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
 │   │   ├── dates.ts                    # Date/timezone utilities — Israeli locale helpers
 │   │   ├── pdf.ts                      # PDF export helpers (jsPDF)
 │   │   ├── serviceTypes.ts             # ServiceType/ServiceField types + evalDerived() formula evaluator
@@ -230,7 +231,9 @@ App Dev/
 │       ├── 20261004_payment_terms_integrity.sql      # Repair 18: due_date never invented — SECURITY DEFINER fix + strict terms parser (NULL, never a 30-day default)
 │       ├── 20261006_business_days_and_event_index.sql # Repair 19: two-shape payment terms (eom/business — מיידי = 5 business days Sun-Thu), invoice_date-only due_date basis, event_index unique constraint
 │       ├── 20261006_2_drop_billing_percent.sql       # Repair 19: drops the dead transactions.billing_percent column
-│       └── 20261017_audit_log.sql                    # Repair 24: audit_log table + bhr_audit_row triggers (transactions/billing_events/clients) + get_audit_log()
+│       ├── 20261017_audit_log.sql                    # Repair 24: audit_log table + bhr_audit_row triggers (transactions/billing_events/clients) + get_audit_log()
+│       ├── 20261017_hr_service_hours.sql             # Repair 25: seeds service_types 'שירות משאבי אנוש' (no dynamic fields)
+│       └── 20261017_2_hours_deals_backfill.sql       # Repair 25: fill-only, idempotent backfill of hours deals (service type, kind, period, rate, net, close date, closing month/year); excludes recruitment-signal rows and probable duplicates of a paid deal
 │
 ├── scripts/
 │   └── generate-icons.mjs              # PWA icon generation
@@ -768,6 +771,17 @@ Year Select = every year with a paid event or a deal, plus the current year (def
 
 ---
 
+### Hours deals = שירות משאבי אנוש (Repair 25, 2026-10-17)
+
+Oren: hourly billing happens ONLY for this service. **Every hours deal is `שירות משאבי אנוש` (kind='time_period') and every שירות משאבי אנוש deal is an hours deal.** The text 'שעות עבודה' as a service-type name is retired (the billing-event description `שעות עבודה · …` and mobile headings are unrelated wording and stay).
+- **תאריך סגירה** = last day of the month of `period_end` (falls back to period_start); `closing_month/year` follow it. Same date as the event's `billing_date`.
+- **סכום חשבונית** = `hours_total × hourly_rate_used`, else the sum of the deal's non-cancelled billing events — never NULL when events exist.
+- The constant + helpers live in `src/lib/hoursService.ts`; `service_types` has a real row (seeded, no dynamic fields). TransactionDialog pairs service ⇔ kind: picking שירות משאבי אנוש makes it time_period (and vice versa); a legacy hours deal shows the HR service when opened.
+- Open גיוס and הדרכה deals legitimately have no close date → NULL closing month (by design).
+- `save_transaction_with_events` already carried every needed column (close_date, closing_month/year, service_type_id, net_invoice_amount, period_*, hours_*, hourly_rate_used) in both INSERT and UPDATE lists (verified 2026-10-17) — no RPC change.
+
+---
+
 ## Bonus Engine — Business Logic (Repair 16, 2026-10-03)
 
 `src/lib/bonus.ts` is the **single source of truth** for every bonus number in
@@ -1018,4 +1032,5 @@ broken.
 | Repair 22: Dashboard YTD Finance | Admin dashboard: מתחילת השנה KPI row (contracted סכום חשבוניות, עמלות ספקים, הכנסה, אחוז גבייה), הכנסה by service type (table + donut), deals per lead |
 | Repair 23: Annual Finance Report | /reports gains דוח כספי שנתי: by payment month, by deal-close month, client × month matrix + Excel export |
 | Repair 24: Audit Log (יומן שינויים) | audit_log + triggers on transactions/billing_events/clients, admin-only /audit-log page, read-side collapse of RPC noise |
+| Repair 25: Hours Deals Integrity + Year Filter | שירות משאבי אנוש seeded + one constant; hours deals get service type, end-of-month close date, net amount (forward + backfill of 18); Transactions gains שנה filter |
 
