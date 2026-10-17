@@ -177,7 +177,8 @@ App Dev/
 │   │   ├── Profile.tsx                 # Current user's own profile
 │   │   │
 │   │   ├── dashboards/
-│   │   │   ├── AdminDashboard.tsx
+│   │   │   ├── AdminDashboard.tsx          # Admin-only. Section order: PendingApprovalsCard · 4 KPI cards · YtdKpiRow (מתחילת השנה) · לוח תשלומים צפוי · monthly הכנסה chart + חיובים קרובים · ServiceTypeBreakdown · lead card (הכנסה + deals per lead) · BonusWidget · חיובים אחרונים
+│   │   │   ├── YtdFinance.tsx              # Repair 22: YtdKpiRow + ServiceTypeBreakdown (own queries, per-section loading/error states)
 │   │   │   ├── AdministrationDashboard.tsx
 │   │   │   └── RecruiterDashboard.tsx
 │   │   │
@@ -734,6 +735,17 @@ The bonus engine's base (`amount − supplier_amount`) is הכנסה; its number
 
 ---
 
+### Admin dashboard KPIs — "מתחילת השנה" (Repair 22, 2026-10-17)
+
+Period = current calendar year in Asia/Jerusalem. Helpers in `finance.ts`: `yearBounds`, `collectionRate`, `contractedInYear`, `groupPaidEvents`.
+- **סכום חשבוניות בחוזים** = Σ `txInvoiceAmount` of deals whose `dealDate` is in the year (sub: deal count).
+- **עמלות ספקים** = Σ `eventSupplierAmount` of paid events by `payment_date` YTD (sub: contracted Σ `txSupplierAmount`).
+- **הכנסה** = Σ `eventIncome` of paid events YTD (sub: contracted Σ `txIncome`). Identity: תקבולים YTD − עמלות ספקים = הכנסה.
+- **אחוז גבייה** = paid סכום חשבונית ÷ invoiced סכום חשבונית (invoiced = `invoice_number` set, not cancelled, `invoice_date` in year), by amount; `—` when the denominator is 0.
+- **הכנסה לפי סוג שירות**: paid events YTD grouped by service type name (`service_type_id`→name, else `service_type` text, else "ללא סוג שירות"); total equals the הכנסה KPI. Lead card shows distinct deals per lead (leads matched with `normalizeLead`).
+
+---
+
 ## Bonus Engine — Business Logic (Repair 16, 2026-10-03)
 
 `src/lib/bonus.ts` is the **single source of truth** for every bonus number in
@@ -972,4 +984,5 @@ broken.
 | Repair 19: מיידי Terms, event_index Integrity, Doc Truth Pass | Two-shape terms (eom/business, 5-business-day מיידי); due_date from invoice_date only (no billing_date fallback); event_index unique constraint; `billing_percent` dropped; this file split out of `CLAUDE.md` |
 | Repair 20: Transactions Totals Row | Dynamic סה"כ footer on עסקאות (count + סכום נטו + ממתין לאישור sub-line) from the visible set |
 | Repair 21: Amount Terminology & One Finance Engine | `finance.ts`; Transactions columns (−שירות −אישור, +עמלת ספק +הכנסה); סכום נטו → סכום חשבונית / הכנסה / תקבולים everywhere; AdminDashboard widgets on finance.ts |
+| Repair 22: Dashboard YTD Finance | Admin dashboard: מתחילת השנה KPI row (contracted סכום חשבוניות, עמלות ספקים, הכנסה, אחוז גבייה), הכנסה by service type (table + donut), deals per lead |
 
