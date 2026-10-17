@@ -132,6 +132,7 @@ App Dev/
 │   │   ├── utils.ts                    # cn() helper (clsx + tailwind-merge)
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
 │   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth. See "Money terminology".
+│   │   ├── auditLabels.ts              # Repair 24: Hebrew field-label map + value formatting + Jerusalem timestamp/boundary helpers for the audit log
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents()/buildBonusLedger(): actual by payment_date, forecast = actual + open-by-due_date w/ overdue roll-forward. See "Bonus Engine" section above.
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
@@ -166,6 +167,7 @@ App Dev/
 │   │   ├── Dashboard.tsx               # Role-aware: loads correct dashboard per role
 │   │   ├── Clients.tsx                 # Client list + ClientDialog (create/edit)
 │   │   ├── Transactions.tsx            # Transaction table: filters, inline edit, export
+│   │   ├── AuditLog.tsx                # Repair 24: /audit-log (admin) — filters (date/user/entity/search), 50-row pages, Hebrew field diffs via get_audit_log()
 │   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration). V2: two-phase check-out with optional note (≤250); today's-log + report show check_in→check_out pairs (report = one TableRow per pair, name/date only on first); employee 'תיקון' edit-request form (insert into attendance_edit_requests); admin pencil direct-edit + 'בקשות תיקון ממתינות' approve/reject panel. Edit forms use toLocalInputValue() so datetime-local shows Israel local time. Repair 12: admin-only AdminDeleteButton (trash, two-step inline 'מחק? כן/ביטול') in the פעולות column deletes both pair entries; /attendance sidebar link now allows admin too (Layout.tsx).
 │   │   ├── BillingReports.tsx          # Monthly billing summary reports
 │   │   ├── FinanceReport.tsx           # Repair 23: דוח כספי שנתי body (sections A/B/C + Excel export), rendered by Reports.tsx
@@ -227,7 +229,8 @@ App Dev/
 │       ├── 20261003_collection_model.sql             # Repair 17: billing_events.invoice_date (real חשבון עסקה date, distinct from the planned billing_date); due_date from COALESCE(invoice_date, billing_date) — superseded by Repair 19, invoice_date only; drops 4 dead transactions columns
 │       ├── 20261004_payment_terms_integrity.sql      # Repair 18: due_date never invented — SECURITY DEFINER fix + strict terms parser (NULL, never a 30-day default)
 │       ├── 20261006_business_days_and_event_index.sql # Repair 19: two-shape payment terms (eom/business — מיידי = 5 business days Sun-Thu), invoice_date-only due_date basis, event_index unique constraint
-│       └── 20261006_2_drop_billing_percent.sql       # Repair 19: drops the dead transactions.billing_percent column
+│       ├── 20261006_2_drop_billing_percent.sql       # Repair 19: drops the dead transactions.billing_percent column
+│       └── 20261017_audit_log.sql                    # Repair 24: audit_log table + bhr_audit_row triggers (transactions/billing_events/clients) + get_audit_log()
 │
 ├── scripts/
 │   └── generate-icons.mjs              # PWA icon generation
@@ -264,6 +267,7 @@ App Dev/
 | `/services` | Services | admin |
 | `/suppliers` | Suppliers | admin |
 | `/users` | Users | admin |
+| `/audit-log` | יומן שינויים (Audit log) | admin |
 | `/profile` | Profile | all |
 | `/login` | Login | public |
 | `/set-password` | Set Password | public |
@@ -457,6 +461,13 @@ suppliers
   email text
   mobile text
   created_at timestamptz
+
+audit_log                          -- Repair 24, append-only, admin SELECT only (RLS policy admin_audit_log_read; no insert/update/delete policies; service_role keeps table privileges for maintenance)
+  id bigserial PK, occurred_at, txid, actor_id uuid (auth.uid(); null = system), actor_name (snapshot)
+  table_name IN ('transactions','billing_events','clients'), row_id, parent_id, business_key, action IN ('insert','update','delete')
+  row_label text, changes jsonb       -- update: {col:{old,new}} changed cols only (custom_fields diffed one level deeper); insert/delete: full snapshot
+  -- Written ONLY by trigger bhr_audit_row() (SECURITY DEFINER, EXECUTE revoked from everyone; exception guard — a logging failure never rolls back a save).
+  -- Read ONLY via get_audit_log(p_from,p_to,p_actor,p_table,p_search,p_limit,p_offset) (SECURITY DEFINER, admin check inside), which collapses the save RPC's delete+reinsert of unchanged events (same txid + business_key; identical snapshots → dropped, differing → ONE update).
 
 billing_reports
   id uuid PK
@@ -963,6 +974,15 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 
 ---
 
+## Audit log (Repair 24, 2026-10-17)
+
+- **Standing rule: any new table that holds business data gets the `bhr_audit_row` trigger in the SAME migration** (and a label entry in `src/lib/auditLabels.ts`).
+- `save_transaction_with_events` was deliberately NOT modified (checksum `8c013f4f63988f491dc972e83877de9a` before and after); noise from its delete+reinsert is collapsed on the read side.
+- ⚠️ **Known limitation (dated 2026-10-17):** during "התחבר בתור" (impersonation) the session belongs to the impersonated user, so entries are attributed to that user. No workaround built.
+- Writes by the service role / Management API / migrations have no `auth.uid()` and show as "מערכת" — including bulk backfills (e.g. Repair 25's).
+
+---
+
 ## Phase History
 
 Full detail for every phase (diagnosis, QA evidence, commits) lives in
@@ -997,4 +1017,5 @@ broken.
 | Repair 21: Amount Terminology & One Finance Engine | `finance.ts`; Transactions columns (−שירות −אישור, +עמלת ספק +הכנסה); סכום נטו → סכום חשבונית / הכנסה / תקבולים everywhere; AdminDashboard widgets on finance.ts |
 | Repair 22: Dashboard YTD Finance | Admin dashboard: מתחילת השנה KPI row (contracted סכום חשבוניות, עמלות ספקים, הכנסה, אחוז גבייה), הכנסה by service type (table + donut), deals per lead |
 | Repair 23: Annual Finance Report | /reports gains דוח כספי שנתי: by payment month, by deal-close month, client × month matrix + Excel export |
+| Repair 24: Audit Log (יומן שינויים) | audit_log + triggers on transactions/billing_events/clients, admin-only /audit-log page, read-side collapse of RPC noise |
 
