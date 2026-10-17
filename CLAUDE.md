@@ -73,8 +73,30 @@ This rule applies to all files. There are no exceptions.
 
 ### Transactions.tsx — table columns (in order)
 
+Changed 2026-10-17 (Repair 21) — **authorized by Oren**: removed שירות + אישור, added עמלת ספק + הכנסה, relabelled סכום נטו → סכום חשבונית.
+
 | # | Header | Source |
 |---|---|---|
+| 1 | לקוח (+ amber "ממתין לאישור" badge under the name when unapproved) | `t.client_name` |
+| 2 | משרה / מועמד | `t.position_name` + `t.candidate_name` |
+| 3 | שכר | `t.salary` |
+| 4 | % עמלה | `t.commission_percent` |
+| 5 | מוביל | `t.service_lead` |
+| 6 | תאריך סגירה | `t.close_date` |
+| 7 | תחילת עבודה | `t.work_start_date` |
+| 8 | סכום חשבונית | `t.net_invoice_amount` |
+| 9 | עמלת ספק — **admin + administration only** (recruiters: header, cell and footer cell omitted) | `txSupplierAmount(t)` |
+| 10 | הכנסה | `txIncome(t)` |
+| 11 | חיובים | billing event status dots |
+| 12 | פעולות | approve icon (✓, `canApprove && isUnapproved`) / edit / delete |
+
+Recruiters therefore see 11 columns. Service type is no longer a column but stays searchable (`resolveServiceName` is in the search predicate).
+
+Footer: totals row (Repair 20, extended Repair 21) — count in col 1; סכום חשבונית total (+ "מתוכם ממתין לאישור" sub-line) under col 8; עמלת ספק total (admin/administration) and הכנסה total — all derived from the visible (`sorted`) set via `finance.ts`. No footer in loading/empty states.
+
+⚠️ Known limitation (verified 2026-10-17): the חודש סגירה filter matches `closing_month` (1–12) **without a year**. Once 2027 data exists, "אוגוסט" will merge Aug 2026 and Aug 2027 — and so will the totals row. Filter intentionally unchanged; needs a separate decision. (Also: 11 of 52 transactions have no `closing_month` and appear only under כל החודשים.)
+
+---|---|---|
 | 1 | לקוח | `t.client_name` |
 | 2 | שירות | `t.service_type` |
 | 3 | משרה / מועמד | `t.position_name` + `t.candidate_name` |
@@ -109,6 +131,7 @@ App Dev/
 │   │   ├── auth.tsx                    # AuthProvider + useAuth hook (user, profile, loading, recoveryMode)
 │   │   ├── utils.ts                    # cn() helper (clsx + tailwind-merge)
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
+│   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth. See "Money terminology".
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents()/buildBonusLedger(): actual by payment_date, forecast = actual + open-by-due_date w/ overdue roll-forward. See "Bonus Engine" section above.
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
@@ -696,6 +719,21 @@ column is added to either table.
 
 ---
 
+## Money terminology (Repair 21, 2026-10-17)
+
+Labels only — no column was renamed. **Every money number comes from `src/lib/finance.ts`** (integer-agorot arithmetic, one rounding point); never add a per-page reducer.
+
+| UI term | Meaning | Source |
+|---|---|---|
+| **סכום חשבונית** (never "סכום נטו") | billed to the client, before VAT | `transactions.net_invoice_amount`, `billing_events.amount` |
+| **עמלת ספק** | the sub-supplier's share | `transactions.supplier_percent`, `billing_events.supplier_amount` |
+| **הכנסה** | סכום חשבונית − עמלת ספק | computed (`txIncome` / `eventIncome`), no column |
+| **תקבולים** | money actually received = סכום חשבונית of paid events, by `payment_date` | `billing_events` where `status='paid'` |
+
+The bonus engine's base (`amount − supplier_amount`) is הכנסה; its numbers are unchanged, approved-only rule stays in `bonus.ts`. Client-facing documents (billing-report export, hours report, Performa PDF) must never show עמלת ספק or הכנסה. AdminDashboard: monthly chart = הכנסה of paid events (12 Jerusalem months, string month keys); lead widget = הכנסה by lead, current calendar year, all paid events; KPI תקבולים החודש/YTD = סכום חשבונית of paid events.
+
+---
+
 ## Bonus Engine — Business Logic (Repair 16, 2026-10-03)
 
 `src/lib/bonus.ts` is the **single source of truth** for every bonus number in
@@ -933,4 +971,5 @@ broken.
 | Repair 18: Payment Terms Integrity | `due_date` never invented — SECURITY DEFINER fix + strict terms parser, NULL not 30 |
 | Repair 19: מיידי Terms, event_index Integrity, Doc Truth Pass | Two-shape terms (eom/business, 5-business-day מיידי); due_date from invoice_date only (no billing_date fallback); event_index unique constraint; `billing_percent` dropped; this file split out of `CLAUDE.md` |
 | Repair 20: Transactions Totals Row | Dynamic סה"כ footer on עסקאות (count + סכום נטו + ממתין לאישור sub-line) from the visible set |
+| Repair 21: Amount Terminology & One Finance Engine | `finance.ts`; Transactions columns (−שירות −אישור, +עמלת ספק +הכנסה); סכום נטו → סכום חשבונית / הכנסה / תקבולים everywhere; AdminDashboard widgets on finance.ts |
 
