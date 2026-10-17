@@ -21,6 +21,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
@@ -209,6 +210,33 @@ export default function Transactions() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, sort, serviceNameById])
 
+  // Totals row — derived from `sorted` (the exact rows rendered) so the footer
+  // always matches what is visible. Integer agorot to avoid float drift.
+  const totals = useMemo(() => {
+    const toAgorot = (v: unknown) => {
+      if (v == null || v === '') return 0
+      const n = Number(v)
+      return Number.isFinite(n) ? Math.round(n * 100) : 0
+    }
+    let net = 0
+    let pending = 0
+    let pendingCount = 0
+    for (const t of sorted) {
+      const a = toAgorot(t.net_invoice_amount)
+      net += a
+      if (t.needs_approval && !t.approved_at) {
+        pending += a
+        pendingCount += 1
+      }
+    }
+    return {
+      count: sorted.length,
+      netTotal: net / 100,
+      pendingApprovalTotal: pending / 100,
+      pendingApprovalCount: pendingCount,
+    }
+  }, [sorted])
+
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editing, setEditing] = useState<Transaction | null>(null)
 
@@ -376,6 +404,31 @@ export default function Transactions() {
                   )
                 })}
               </TableBody>
+              <TableFooter>
+                <TableRow className="bg-purple-50 hover:bg-purple-50 border-t-2 border-purple-200 font-semibold text-purple-900">
+                  <TableCell className="text-right">
+                    {totals.count === 1 ? 'סה"כ · עסקה אחת' : `סה"כ · ${totals.count} עסקאות`}
+                  </TableCell>
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right">
+                    {formatCurrency(totals.netTotal)}
+                    {totals.pendingApprovalCount > 0 && (
+                      <span className="block text-xs text-amber-600 font-normal">
+                        מתוכם ממתין לאישור: {formatCurrency(totals.pendingApprovalTotal)}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                  <TableCell className="text-right" />
+                </TableRow>
+              </TableFooter>
             </Table>
           </div>
         )}
