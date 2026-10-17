@@ -88,6 +88,10 @@ This rule applies to all files. There are no exceptions.
 | 11 | אישור | approval button |
 | 12 | פעולות | edit / delete buttons |
 
+Footer: totals row (Repair 20) — count in col 1, סכום נטו total + ממתין לאישור sub-line in col 9, derived from the visible (`sorted`) set. No footer in loading/empty states.
+
+⚠️ Known limitation (verified 2026-10-17): the חודש סגירה filter matches `closing_month` (1–12) **without a year**. Once 2027 data exists, "אוגוסט" will merge Aug 2026 and Aug 2027 — and so will the totals row. Filter intentionally unchanged; needs a separate decision. (Also: 11 of 52 transactions have no `closing_month` and appear only under כל החודשים.)
+
 ---
 
 ## File Map
@@ -928,4 +932,5 @@ broken.
 | Repair 17: Collection Model | `invoice_date` (real) vs `billing_date` (plan) split; `computeEventStatus` the only status writer; `CollectionForecastDialog` |
 | Repair 18: Payment Terms Integrity | `due_date` never invented — SECURITY DEFINER fix + strict terms parser, NULL not 30 |
 | Repair 19: מיידי Terms, event_index Integrity, Doc Truth Pass | Two-shape terms (eom/business, 5-business-day מיידי); due_date from invoice_date only (no billing_date fallback); event_index unique constraint; `billing_percent` dropped; this file split out of `CLAUDE.md` |
+| Repair 20: Transactions Totals Row | Dynamic סה"כ footer on עסקאות (count + סכום נטו + ממתין לאישור sub-line) from the visible set |
 
