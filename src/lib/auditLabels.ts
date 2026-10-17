@@ -75,6 +75,9 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   time_log_enabled: 'יומן שעות פעיל',
   agreement_file: 'קובץ הסכם',
   agreement_storage_path: 'נתיב קובץ הסכם',
+  payment_status: 'סטטוס תשלום',
+  is_billable: 'ניתן לחיוב',
+  time_sheet_pdf_path: 'קובץ דוח שעות',
   id: 'מזהה',
 }
 
@@ -83,7 +86,7 @@ const MONEY_KEYS = new Set([
   'commission_amount', 'hourly_rate', 'hourly_rate_used', 'advance_amount',
 ])
 const PERCENT_KEYS = new Set(['commission_percent', 'supplier_percent'])
-const BOOL_KEYS = new Set(['needs_approval', 'due_date_is_manual', 'time_log_enabled'])
+const BOOL_KEYS = new Set(['needs_approval', 'is_billable', 'due_date_is_manual', 'time_log_enabled'])
 const HIDDEN_DETAIL_KEYS = new Set(['id', 'transaction_id', 'client_id', 'service_type_id', 'supplier_id', 'created_by', 'approved_by'])
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 })
