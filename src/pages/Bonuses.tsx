@@ -712,7 +712,7 @@ function EmployeeCard({
                     >
                       <span className="truncate">{d.client_name ?? '—'} · {[d.position_name, d.candidate_name].filter(Boolean).join(' / ')}</span>
                       <span className="shrink-0 text-muted-foreground">
-                        נגבה {ILS.format(d.collectedIncome)} · נותר {ILS.format(Math.round((d.dealIncome - d.collectedIncome) * 100) / 100)}
+                        נגבה {ILS.format(d.collectedIncome)} · {d.unknownReason === 'events_not_generated' ? 'יתרה טרם חויבה (אירועי חיוב טרם נוצרו)' : `נותר ${ILS.format(Math.round((d.dealIncome - d.collectedIncome) * 100) / 100)}`}
                       </span>
                     </div>
                   ))}

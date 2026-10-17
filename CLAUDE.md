@@ -133,7 +133,7 @@ App Dev/
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
 │   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth. See "Money terminology".
 │   │   ├── auditLabels.ts              # Repair 24: Hebrew field-label map + value formatting + Jerusalem timestamp/boundary helpers for the audit log
-│   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents()/buildBonusLedger(): actual by payment_date, forecast = actual + open-by-due_date w/ overdue roll-forward. See "Bonus Engine" section above.
+│   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents() → buildBonusDeals() → buildLedgerFromDeals(): a DEAL counts only when fully collected, at full value, in the month of its last payment (Repair 27); paymentIncomeByMonth() = per-payment INCOME (not bonus). See "Bonus Engine".
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
 │   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
@@ -174,7 +174,7 @@ App Dev/
 │   │   ├── BillingReports.tsx          # Monthly billing summary reports
 │   │   ├── FinanceReport.tsx           # Repair 23: דוח כספי שנתי body (sections A/B/C + Excel export), rendered by Reports.tsx
 │   │   ├── Reports.tsx                 # Admin-only דוחות section — TWO reports behind a picker (דוח גיוסים default + דוח כספי שנתי, Repair 23; both stay mounted so each keeps its filters). דוח גיוסים: KPIs + לפי מוביל/לקוח/משרה breakdowns with drill-down + Excel export (Batch 8 Phase 4)
-│   │   ├── Bonuses.tsx                 # Per-employee card: actual vs. forecast stats, two-layer progress bar, sortable per-month deals table (click a row → TransactionDialog), stacked 12-month chart (Repair 16 — tier table removed, moved to Team only)
+│   │   ├── Bonuses.tsx                 # Per-employee card: actual vs. forecast stats, two-layer progress bar, sortable per-month DEALS table (one row per deal, expandable payments; click a row → TransactionDialog; Repair 27) + partial-collection and ללא צפי השלמה sections, stacked 12-month chart (Repair 16 — tier table removed, moved to Team only)
 │   │   ├── Team.tsx                    # Team member management
 │   │   ├── Services.tsx                # Dynamic service type builder (admin only)
 │   │   ├── Suppliers.tsx               # Supplier management
@@ -793,47 +793,15 @@ bonus calculation anywhere. (Before this phase there were three independent,
 disagreeing engines — see the Repair 16 Phase History row for the full
 diagnosis.)
 
-**Actual (בפועל):** revenue = net (`amount − supplier_amount`) of
-`billing_events.status = 'paid'`, for approved transactions, where the
-employee is the מוביל (`transactions.service_lead`, matched via
-`normalizeLead()`). Month attribution = **`payment_date`** (falls back to
-`due_date`, then `billing_date`, for legacy rows with no `payment_date`).
-Oren, 2026-10-03: *"בונוס משולם לפי התאריך שבו התקבל הכסף בפועל ... אם
-התקבל תשלום ב-1/9, הסכום לבונוס ישולם כבר במשכורת ספטמבר"* — payroll cuts
-off at month-end, so 31/08 is an August bonus and 01/09 is September. This
-**reverses** the 2026-09-13 `due_date`-based rule (D5) — see the
-Architectural Decisions note above.
+**Rule since Repair 27 (Oren, 2026-10-17 — supersedes the per-payment attribution of Repair 16/2026-10-03):** *"עסקה נספרת רק כשהיא שולמה במלואה, בשווי המלא ובחודש התשלום האחרון."* The unit is the **deal (transaction)**, not the billing event. Code: `buildBonusDeals()` → `buildLedgerFromDeals()` (`buildBonusLedger` = both composed).
 
-**Forecast (תחזית):** forecast revenue for month M = actual paid revenue in
-M + expected revenue in M, where expected = net of every **open** event
-(`status IN ('pending','to_bill','billed')`, approved transactions only)
-whose `due_date` falls in M — **no `billing_date` fallback** (Repair 18,
-unchanged by Repair 19, though Repair 19's Part B3.1 change massively
-widened how often `due_date` is NULL — see below). An open event dated
-**before the first day of the current month** is rolled forward into the
-**current month** and flagged `overdue` — it can still only be paid now or
-later, so leaving it stranded in a closed past month would hide it.
-**Past months are closed:** forecast = actual there (no open event can ever
-land in a past month after the roll-forward). Month keys are always derived
-from the `'YYYY-MM-DD'` date **string** (`.slice(0, 7)`), never
-`new Date(...).getMonth()`, to avoid timezone drift miscategorizing a
-payment on the 1st.
+**Actual (בפועל):** a deal is *fully collected* when (1) every non-cancelled billing event is `paid` AND (2) Σ `event.amount` ≥ `net_invoice_amount` − ₪1 (skipped if net is null/0 — the guard stops a גיוס whose advance is paid but whose split events are not generated yet from looking "paid in full"). **Deal value** = Σ (`amount − supplier_amount`) over its non-cancelled events (`finance.ts` agorot). **Month** = month of the **latest** `payment_date` among its events (legacy paid rows with no `payment_date` fall back to `due_date`, then `billing_date`), taken from the date STRING (`.slice(0,7)`), never `new Date().getMonth()`; payroll cut-off unchanged (last day of month → that month, the 1st → next). A partially paid deal contributes **₪0** to every month. Gates unchanged: `service_lead` via `normalizeLead`, approved transactions only, cancelled events ignored.
 
-**Excluded-from-forecast events (Repair 18 + 19):** an open event with no
-`due_date` is excluded from every month's forecast (`monthKey` stays null)
-but still returned (`excludedFromForecast: true`), so `Bonuses.tsx` can
-report the total instead of letting it silently vanish. `excludedReason`
-distinguishes why: `'terms_missing'` (a חשבון עסקה was issued but the
-client's payment terms are missing/unparseable — Repair 18, the original,
-narrower case) vs. `'not_invoiced'` (no חשבון עסקה has been issued yet —
-Repair 19, Part B3.1; this is now the OVERWHELMINGLY common reason, since
-every ordinary open/not-yet-invoiced event has no `due_date` under the new
-field model, not just terms-missing ones). `Bonuses.tsx` renders these as
-two separate lines with different tones — a neutral "טרם נכלל בתחזית... טרם
-הופק חשבון עסקה" for the normal case, and the original amber "תנאי תשלום
-חסרים" line only for genuine terms problems. Never collapse these back into
-one undifferentiated line — mislabeling routine not-yet-invoiced pipeline
-as a payment-terms data problem is confusing and wrong.
+**Forecast (תחזית):** same unit. A not-yet-collected deal is expected to complete in the latest of: `payment_date` of paid events, `due_date` of open events; a month before the current one rolls forward to the current month and the deal is flagged **באיחור**. **Unknown completion — never invented:** any open event with no `due_date` (reason `not_invoiced` / `terms_missing`, Repair 18/19 semantics), a deal failing the coverage guard (`events_not_generated`), or a fully-paid deal with no date at all (`no_payment_date`) is listed under **"ללא צפי השלמה"** with the Hebrew reason and excluded from every month's forecast. Forecast revenue of month M = actual (deals completed in M) + deals expected in M, each at FULL value; past months: forecast = actual.
+
+**UI (Bonuses.tsx):** one row per deal (לקוח · מס משרה · משרה/מועמד · שווי עסקה (נטו) · נגבה עד כה · סטטוס הושלמה/בגבייה חלקית · תאריך השלמה · סוג בפועל/תחזית + באיחור), each expandable to its payments; current month also shows **"בגבייה חלקית — לא נספר לבונוס"** (partially paid deals not forecast this month) and **"ללא צפי השלמה"**; stat labels "עסקאות שנגבו במלואן" / "צפוי להיגבות במלואו (תחזית)". The old "ללא תאריך" collapsible is subsumed by "ללא צפי השלמה". **Income is NOT bonus:** RecruiterDashboard's "הכנסה החודש" KPI and 6-month chart use `paymentIncomeByMonth()` (per payment, by `payment_date`) and are unchanged; only its bonus hero follows the deal rule (note: "בונוס נספר על עסקאות שנגבו במלואן").
+
+*Historical (Repair 16, superseded 2026-10-17):* "revenue = net of paid events attributed per payment to its payment_date month". Repair 18/19's due_date rules still decide WHEN an open deal can complete.
 
 Tier math (`calculateBonus`/`bonusBreakdown`, unchanged) is non-cumulative —
 the bonus for a month is the highest tier whose `min ≤ revenue`; below the
@@ -986,7 +954,8 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 - **Any trigger function that reads a second table must be `SECURITY DEFINER` or it will silently see less than the data owner does (Repair 18, 2026-10-04)** — general architecture trap, not specific to one function. RLS doesn't error when it filters a row out of a join; it just returns fewer rows. A trigger runs under the CALLING role unless the function is `SECURITY DEFINER`, so a trigger-context join to a table the caller doesn't have full RLS visibility into can silently return NULL/fewer rows for a perfectly valid, fully-populated row — with no error anywhere, only quietly wrong data. This is exactly what happened to `bhr_billing_event_payment_terms` (the `due_date` trigger's lookup of a transaction's client's terms): a recruiter's own trigger context couldn't see the client row, so terms that definitely existed looked NULL. Fixed by marking it `SECURITY DEFINER SET search_path = public`. When marking any function `SECURITY DEFINER`, also do an EXPLICIT `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role` before re-granting only the roles that should call it — Supabase's schema-level default privileges can hand a function a *direct* grant to `anon`/`authenticated` at creation time, which a bare `REVOKE ALL FROM PUBLIC` does not strip.
 - **`bhr_parse_payment_term_days` is DEPRECATED (Repair 18, 2026-10-04)** — kept only as a `COALESCE(bhr_payment_term_days_strict(terms), 30)` wrapper for callers not yet migrated off it. `bhr_payment_term_days_strict` itself (Repair 19, 2026-10-06) is now a derived, days-only view of `bhr_payment_term_spec` — fine for `IS NULL` audits, wrong for date math (drops the shape). Do not call either from new code that computes a date; use `bhr_payment_term_spec` (SQL) / `parsePaymentTermSpec` (TS) directly.
 - **`(transaction_id, event_index)` is a DB-enforced unique constraint (Repair 19, 2026-10-06)** — `billing_events_transaction_event_index_unique`. Added after the 2026-10-04 full-database sweep found exactly one legitimate collision (אלדר השקעות's 30/70 split, never incremented past index 1) and confirmed it was the only one. `upsertBillingEvents`'s delete-then-insert already avoided writing into occupied indices defensively; this constraint makes a duplicate impossible to insert at all, from any path, rather than merely unlikely.
-- **Bonus month attribution reversed back to `payment_date` (Repair 16, 2026-10-03)** — the 2026-09-13 `due_date`-based rule (D5, row above) was wrong per Oren: a bonus is paid with the salary for the month the money actually arrived, cut off at month-end (payment on 31/08 → August bonus; 01/09 → September). `due_date` is used ONLY for the forecast (expected revenue of still-open events) — see Repair 16's Phase History row and the "One Bonus Engine" note in the Billing Events section below.
+- **Bonus unit = the fully-collected DEAL (Repair 27, 2026-10-17)** — supersedes the per-payment attribution below; month = latest payment_date of the deal.
+- **Bonus month attribution reversed back to `payment_date` (Repair 16, 2026-10-03)** *(per-payment unit superseded by Repair 27)* — the 2026-09-13 `due_date`-based rule (D5, row above) was wrong per Oren: a bonus is paid with the salary for the month the money actually arrived, cut off at month-end (payment on 31/08 → August bonus; 01/09 → September). `due_date` is used ONLY for the forecast (expected revenue of still-open events) — see Repair 16's Phase History row and the "One Bonus Engine" note in the Billing Events section below.
 
 ---
 
@@ -1046,4 +1015,5 @@ broken.
 | Repair 24: Audit Log (יומן שינויים) | audit_log + triggers on transactions/billing_events/clients, admin-only /audit-log page, read-side collapse of RPC noise |
 | Repair 25: Hours Deals Integrity + Year Filter | שירות משאבי אנוש seeded + one constant; hours deals get service type, end-of-month close date, net amount (forward + backfill of 18); Transactions gains שנה filter |
 | Repair 26: Deal Delete, Transactions Filters, QA Width Rule | Root-caused + fixed silent delete failure (hours_log FK): delete_transaction RPC + dialog (release/move hours, billed/paid warning); hours_log audited; Transactions filters (מוביל, סוג שירות, מועד תשלום, חיובים buckets) in the URL; QA widths = desktop 1440/1024, 375 only for /m |
+| Repair 27: Bonus = Fully Collected Deals | Bonus engine unit changes from billing event to deal: counts only when every event is paid and covers the contract, at full value, in the last payment month; Bonuses deals table + partial/unknown sections; income figures untouched |
 
