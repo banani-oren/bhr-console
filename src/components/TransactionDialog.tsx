@@ -50,7 +50,8 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
-import { isGiyusName } from '@/lib/finance'
+import { isGiyusName, sumEventInvoice } from '@/lib/finance'
+import { HOURS_SERVICE_NAME, hoursCloseFields, isHoursServiceName } from '@/lib/hoursService'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -296,7 +297,9 @@ export default function TransactionDialog({
         client_name: editing.client_name ?? '',
         service_lead: editing.service_lead ?? profile?.full_name ?? '',
         entry_date: editing.entry_date ?? today(),
-        close_date: legacySignDate,
+        close_date:
+          legacySignDate ??
+          (editing.kind === 'time_period' ? hoursCloseFields(editing.period_end, editing.period_start).close_date : null),
         notes: editing.notes,
         custom,
         work_start_date: editing.work_start_date,
@@ -325,6 +328,7 @@ export default function TransactionDialog({
         s.period_end = initial.period_end ?? null
         s.hours_total = initial.hours_total ?? null
         s.hourly_rate_used = initial.hourly_rate_used ?? null
+        if (s.kind === 'time_period') s.close_date = hoursCloseFields(s.period_end, s.period_start).close_date
         if (initial.custom) s.custom = { ...s.custom, ...initial.custom }
       }
       setState(s)
@@ -383,11 +387,24 @@ export default function TransactionDialog({
     setState((s) => ({ ...s, custom: { ...s.custom, [key]: val } }))
   }
 
+  // An hours (time_period) deal always carries the hours service type: a legacy
+  // deal with no service type / the retired 'שעות עבודה' text shows (and, on
+  // save, writes) שירות משאבי אנוש. Local state only — nothing is saved here.
+  useEffect(() => {
+    if (!open || state.kind !== 'time_period') return
+    const hr = serviceTypes.find((s) => s.name === HOURS_SERVICE_NAME)
+    if (!hr) return
+    if (state.service_type_id === hr.id && state.service_type_name === HOURS_SERVICE_NAME) return
+    setState((s) => ({ ...s, service_type_id: hr.id, service_type_name: HOURS_SERVICE_NAME }))
+  }, [open, state.kind, state.service_type_id, state.service_type_name, serviceTypes])
+
   const handleServiceTypePick = (serviceTypeId: string) => {
     const st = serviceTypes.find((s) => s.id === serviceTypeId)
     setState((s) => ({
       ...s,
-      kind: 'service',
+      // hours service ⇔ time_period: picking שירות משאבי אנוש makes it an
+      // hours deal; picking anything else makes it a regular service deal.
+      kind: isHoursServiceName(st?.name) ? 'time_period' : 'service',
       service_type_id: serviceTypeId,
       service_type_name: st?.name ?? '',
     }))
@@ -450,6 +467,12 @@ export default function TransactionDialog({
             approved_at: nowIso,
           }
 
+      // Hours deals: תאריך סגירה defaults to the last day of the covered month
+      // (user may still edit it); other deals keep exactly what was entered.
+      const effectiveCloseDate =
+        state.close_date ||
+        (state.kind === 'time_period' ? hoursCloseFields(state.period_end, state.period_start).close_date : null)
+
       const payload: Record<string, unknown> = {
         kind: state.kind,
         client_id: state.client_id,
@@ -460,9 +483,9 @@ export default function TransactionDialog({
         entry_date: state.entry_date,
         billing_month: monthOf(state.entry_date) ?? 1,
         billing_year: yearOf(state.entry_date) ?? new Date().getFullYear(),
-        close_date: state.close_date,
-        closing_month: monthOf(state.close_date),
-        closing_year: yearOf(state.close_date),
+        close_date: effectiveCloseDate,
+        closing_month: monthOf(effectiveCloseDate),
+        closing_year: yearOf(effectiveCloseDate),
         work_start_date: state.work_start_date,
         work_end_date: state.work_end_date,
         warranty_end_date: state.warranty_end_date,
@@ -484,7 +507,14 @@ export default function TransactionDialog({
         payload.hourly_rate_used = state.hourly_rate_used
         const hrs = Number(state.hours_total) || 0
         const rate = Number(state.hourly_rate_used) || 0
-        if (hrs > 0 && rate > 0) payload.net_invoice_amount = Math.round(hrs * rate * 100) / 100
+        if (hrs > 0 && rate > 0) {
+          payload.net_invoice_amount = Math.round(hrs * rate * 100) / 100
+        } else if (editing) {
+          // No hours × rate to derive from → the sum of the deal's non-cancelled
+          // billing events (never leave an invoiced hours deal at NULL).
+          const live = txnBillingEvents.filter((e) => e.status !== 'cancelled')
+          if (live.length > 0) payload.net_invoice_amount = sumEventInvoice(live)
+        }
       }
 
       // For service kind: compute net_invoice_amount from salary × commission%.
@@ -957,12 +987,12 @@ export default function TransactionDialog({
                 <Select
                   value={state.service_type_id ?? ''}
                   onValueChange={(v) => v && handleServiceTypePick(v)}
-                  disabled={isTimePeriod}
+                  disabled={isTimePeriod && !!(state.period_start || state.hours_total)}
                 >
                   <SelectTrigger>
                     <span className="truncate text-sm">
                       {isTimePeriod
-                        ? 'דיווח שעות'
+                        ? HOURS_SERVICE_NAME
                         : state.service_type_name || 'בחר סוג שירות'}
                     </span>
                   </SelectTrigger>
@@ -1072,6 +1102,9 @@ export default function TransactionDialog({
             {isTimePeriod && (
               <Card className="p-3 mt-4 bg-amber-50/50">
                 <h4 className="text-xs font-semibold text-amber-800 mb-2">דיווח שעות</h4>
+                {!state.period_end && (
+                  <p className="text-xs text-muted-foreground mb-2">חיוב שעות מופק מיומן שעות (הפק חיוב שעות) או מדוח שעות.</p>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
                   <div>
                     <Label className="text-xs">תקופה</Label>

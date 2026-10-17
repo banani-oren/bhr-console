@@ -4,6 +4,7 @@ import { Printer, Plus } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Client, HoursLog, Profile } from '@/lib/types'
 import type { ServiceType } from '@/lib/serviceTypes'
+import { HOURS_SERVICE_NAME, findHoursServiceTypeId } from '@/lib/hoursService'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -50,7 +51,7 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
   }, [open, presetClientId, monthStart, today])
 
   // Shares the ['service_types'] cache entry with TransactionDialog (same
-  // query shape) so looking up a שעות עבודה row here never duplicates it.
+  // query shape) so looking up the hours service-type row here never duplicates it.
   const { data: serviceTypes = [] } = useQuery<ServiceType[]>({
     queryKey: ['service_types'],
     queryFn: async () => {
@@ -207,14 +208,12 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
 
   const handleCreateTransaction = () => {
     if (!selectedClient) return
-    // No service_types row is seeded for שעות עבודה (time_period transactions
-    // don't use the dynamic-fields system — see the 20260422 purge of the old
-    // דיווח שעות row) — this lookup only picks one up if Oren adds one by hand.
-    const hoursServiceType = serviceTypes.find((st) => st.name === 'שעות עבודה')
+    // The hours service type is seeded (Repair 25) — one shared constant + lookup.
+    const hoursServiceTypeId = findHoursServiceTypeId(serviceTypes)
     setTxnInitial({
       kind: 'time_period',
-      service_type: 'שעות עבודה',
-      service_type_id: hoursServiceType?.id ?? null,
+      service_type: HOURS_SERVICE_NAME,
+      service_type_id: hoursServiceTypeId,
       client_id: selectedClient.id,
       client_name: selectedClient.name,
       period_start: periodStart,

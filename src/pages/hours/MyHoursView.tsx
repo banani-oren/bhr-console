@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import type { Client, HoursLog } from '@/lib/types'
 import { generateTimePeriodBillingEvent } from '@/lib/billingEvents'
+import { HOURS_SERVICE_NAME, hoursCloseFields, resolveHoursServiceTypeId } from '@/lib/hoursService'
 import { formatDate } from '@/lib/dates'
 import { useSafeMutation } from '@/hooks/useSafeMutation'
 import { Badge } from '@/components/ui/badge'
@@ -214,11 +215,15 @@ export default function MyHoursView() {
         periodEnd,
       })
 
+      const hoursServiceTypeId = await resolveHoursServiceTypeId(signal)
       const payload = {
         kind: 'time_period',
         client_id: clientId,
         client_name: selectedClient.name,
-        service_type: 'שעות עבודה',
+        service_type: HOURS_SERVICE_NAME,
+        service_type_id: hoursServiceTypeId,
+        // תאריך סגירה = last day of the covered month (Repair 25)
+        ...hoursCloseFields(periodEnd, periodStart),
         period_start: periodStart,
         period_end: periodEnd,
         hours_total: totalUnbilledHours,

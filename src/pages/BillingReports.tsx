@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { FileText, FileDown, Receipt, Search, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { generatePerformaPDF } from '@/lib/pdf'
+import { HOURS_SERVICE_NAME } from '@/lib/hoursService'
 import {
   buildBillingEventPatch,
   isDueToInvoice,
@@ -338,7 +339,12 @@ export default function BillingReports() {
             <SelectContent>
               <SelectItem value="all">הכל</SelectItem>
               {serviceTypes.map((st) => (<SelectItem key={st.id} value={st.name}>{st.name}</SelectItem>))}
-              <SelectItem value="שעות עבודה">שעות עבודה</SelectItem>
+              {/* The hours service is a real service_types row since Repair 25; this
+                  fallback only shows if it has not been seeded yet. The filter matches
+                  transactions.service_type by NAME, so the constant is the value. */}
+              {!serviceTypes.some((st) => st.name === HOURS_SERVICE_NAME) && (
+                <SelectItem value={HOURS_SERVICE_NAME}>{HOURS_SERVICE_NAME}</SelectItem>
+              )}
             </SelectContent>
           </Select>
         </div>

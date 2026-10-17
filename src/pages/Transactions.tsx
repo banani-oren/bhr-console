@@ -155,6 +155,7 @@ export default function Transactions() {
   const [searchInput, setSearchInput] = useState('')
   const [searchDebounced, setSearchDebounced] = useState('')
   const [filterClosingMonth, setFilterClosingMonth] = useState<string>('all')
+  const [filterClosingYear, setFilterClosingYear] = useState<string>('all')
   const [sort, setSort] = useState<SortState>({ key: 'close_date', dir: 'desc' })
   const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
@@ -195,11 +196,18 @@ export default function Transactions() {
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
       if (!searchMatches(t, searchDebounced)) return false
+      if (filterClosingYear !== 'all' && t.closing_year !== Number(filterClosingYear)) return false
       if (filterClosingMonth !== 'all' && t.closing_month !== Number(filterClosingMonth)) return false
       return true
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, searchDebounced, filterClosingMonth, serviceNameById])
+  }, [transactions, searchDebounced, filterClosingMonth, filterClosingYear, serviceNameById])
+
+  // שנה filter options = every distinct non-null closing_year present, descending.
+  const closingYears = useMemo(
+    () => Array.from(new Set(transactions.map((t) => t.closing_year).filter((y): y is number => y != null))).sort((a, b) => b - a),
+    [transactions],
+  )
 
   const getSortValue = (t: Transaction, key: string): unknown =>
     key === 'service_type' ? resolveServiceName(t)
@@ -292,7 +300,22 @@ export default function Transactions() {
             )}
           </div>
 
-          {/* Closing month — to the left of the search bar */}
+          {/* Closing year — between the search bar and the month filter */}
+          <Select value={filterClosingYear} onValueChange={(v) => setFilterClosingYear(v ?? 'all')}>
+            <SelectTrigger className="w-28 shrink-0 border-purple-200 focus:ring-purple-400">
+              <span className="text-sm truncate">
+                {filterClosingYear === 'all' ? 'שנה' : filterClosingYear}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">כל השנים</SelectItem>
+              {closingYears.map((y) => (
+                <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Closing month — to the left of the year filter */}
           <Select value={filterClosingMonth} onValueChange={(v) => setFilterClosingMonth(v ?? 'all')}>
             <SelectTrigger className="w-36 shrink-0 border-purple-200 focus:ring-purple-400">
               <span className="text-sm truncate">
