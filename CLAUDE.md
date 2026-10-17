@@ -131,7 +131,7 @@ App Dev/
 │   │   ├── auth.tsx                    # AuthProvider + useAuth hook (user, profile, loading, recoveryMode)
 │   │   ├── utils.ts                    # cn() helper (clsx + tailwind-merge)
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
-│   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth. See "Money terminology".
+│   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth, and (Repair 28) `collectionMonth()` + `paidLastMonths()` for the collections dashboard. See "Money terminology" and "Collections dashboard math (Repair 28)".
 │   │   ├── auditLabels.ts              # Repair 24: Hebrew field-label map + value formatting + Jerusalem timestamp/boundary helpers for the audit log
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents() → buildBonusDeals() → buildLedgerFromDeals(): a DEAL counts only when fully collected, at full value, in the month of its last payment (Repair 27); paymentIncomeByMonth() = per-payment INCOME (not bonus). See "Bonus Engine".
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
@@ -184,7 +184,7 @@ App Dev/
 │   │   ├── dashboards/
 │   │   │   ├── AdminDashboard.tsx          # Admin-only. Section order: PendingApprovalsCard · 4 KPI cards · YtdKpiRow (מתחילת השנה) · לוח תשלומים צפוי · monthly הכנסה chart + חיובים קרובים · ServiceTypeBreakdown · lead card (הכנסה + deals per lead) · BonusWidget · חיובים אחרונים
 │   │   │   ├── YtdFinance.tsx              # Repair 22: YtdKpiRow + ServiceTypeBreakdown (own queries, per-section loading/error states)
-│   │   │   ├── AdministrationDashboard.tsx
+│   │   │   ├── AdministrationDashboard.tsx # דשבורד גבייה (administration role + admin's גבייה tab). Repair 28: every number from finance.ts `collectionMonth()` on due_date / isOverduePayment (hero = C÷T, KPIs O · R_late · P · W, aging by days past due_date, top-10 late); selects invoice_date + due_date
 │   │   │   └── RecruiterDashboard.tsx
 │   │   │
 │   │   ├── hours/
@@ -978,6 +978,29 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 
 ---
 
+## Collections dashboard math (Repair 28, 2026-10-18)
+
+Trigger: the dashboard showed "גבייה החודש 100% — ₪62,198 מתוך ₪43,600" next to "חורג מתאריך חיוב ₪11,200" (numerator = all payments received in the month; denominator = events whose internal `billing_date` fell in the month; overdue by `billing_date`). Oren's rule: **while a due amount is unpaid, collection is not 100%.** Single helper: `collectionMonth(events, today)` in `finance.ts` (agorot; reuses `isOverduePayment`; `today` = Asia/Jerusalem string; month bounds are strings, never `new Date`). Cancelled events are ignored; "invoiced" = `invoice_number` and `invoice_date` both set; M = current month [mStart, mEnd].
+
+| Name | Definition |
+|---|---|
+| **T** יעד גבייה החודש | invoiced, `due_date ≤ mEnd`, not settled before the month: `billed`, or `paid` with `payment_date ≥ mStart` (includes overdue carry-over) |
+| **C** נגבה מתוך היעד | events in T that are paid with `payment_date` in M |
+| **R** נותר לגבייה | T − C |
+| ↳ R_late | R with `due_date < today` (= `isOverduePayment`) |
+| ↳ R_upcoming | R with `today ≤ due_date ≤ mEnd` |
+| **E** התקבל לפני המועד | paid in M, invoiced, `due_date > mEnd` |
+| **N** התקבל ללא תאריך צפוי | paid in M, not in T or E |
+| **P** נגבה החודש | all paid with `payment_date` in M = C + E + N |
+| **O** סכום לגבייה כעת | all `billed` events |
+| **W** ממתינים לחשבונית | `to_bill` events: amount + count |
+
+% = C ÷ T, integer, **never clamped**; T = 0 → "—". Aging (donut) = R_late only, by days past `due_date` (1–30/31–60/61–90/90+); unpaid billed events with null `due_date` are shown as a muted line, never dropped. KPI "חורג מתאריך חיוב" was renamed "באיחור תשלום"; top-10 column "תאריך חיוב" → "תאריך תשלום צפוי" (both authorized).
+
+**Identities (hold by construction, verified live 2026-10-18):** C + R = T · R = R_late + R_upcoming · P = C + E + N = AdminDashboard "תקבולים החודש" · R_late = aging total = top-list sum (≤10 rows) = Transactions filter "באיחור" · O = Σ billed.
+
+---
+
 ## Phase History
 
 Full detail for every phase (diagnosis, QA evidence, commits) lives in
@@ -1016,4 +1039,5 @@ broken.
 | Repair 25: Hours Deals Integrity + Year Filter | שירות משאבי אנוש seeded + one constant; hours deals get service type, end-of-month close date, net amount (forward + backfill of 18); Transactions gains שנה filter |
 | Repair 26: Deal Delete, Transactions Filters, QA Width Rule | Root-caused + fixed silent delete failure (hours_log FK): delete_transaction RPC + dialog (release/move hours, billed/paid warning); hours_log audited; Transactions filters (מוביל, סוג שירות, מועד תשלום, חיובים buckets) in the URL; QA widths = desktop 1440/1024, 375 only for /m |
 | Repair 27: Bonus = Fully Collected Deals | Bonus engine unit changes from billing event to deal: counts only when every event is paid and covers the contract, at full value, in the last payment month; Bonuses deals table + partial/unknown sections; income figures untouched |
+| Repair 28: Collections Dashboard Math | דשבורד גבייה: one helper `collectionMonth` — % = collected ÷ due-this-month (incl. overdue carry-over), never clamped; overdue by `due_date`/`isOverduePayment`, aging + top-10 follow it; W shows amount; no migration |
 

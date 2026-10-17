@@ -12,6 +12,9 @@
 // Month keys come from the 'YYYY-MM-DD' string, never from new Date().getMonth()
 // (same timezone-drift rule as bonus.ts).
 
+import { isOverduePayment } from '@/lib/billingEvents'
+import type { BillingEventStatus } from '@/lib/types'
+
 export const GIYUS_SERVICE_NAME = 'גיוס'
 
 type Numish = number | string | null | undefined
@@ -306,4 +309,105 @@ export function availableYears<T extends FinanceTransaction>(
     if (d) ys.add(Number(d.slice(0, 4)))
   }
   return [...ys].filter((y) => Number.isFinite(y) && y > 1990).sort((a, b) => b - a)
+}
+
+// ── Collections dashboard math (Repair 28) ──────────────────────────────
+export type CollectionMonthEvent = CollectionEvent & { due_date?: string | null }
+
+const daysBetween = (fromIso: string, toIso: string) =>
+  Math.round((Date.UTC(+toIso.slice(0, 4), +toIso.slice(5, 7) - 1, +toIso.slice(8, 10)) -
+    Date.UTC(+fromIso.slice(0, 4), +fromIso.slice(5, 7) - 1, +fromIso.slice(8, 10))) / 86400000)
+
+/** Last day of the month of a 'YYYY-MM-DD' string. */
+const monthEnd = (iso: string) => {
+  const y = Number(iso.slice(0, 4)), m = Number(iso.slice(5, 7))
+  return `${iso.slice(0, 7)}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`
+}
+
+/**
+ * Collections for the month containing `today` ('YYYY-MM-DD', Asia/Jerusalem).
+ * Definitions are the Repair 28 table in CLAUDE.md. Every amount is summed in
+ * agorot; shekels appear only in the result. Identities hold by construction:
+ *   C + R = T · R = R_late + R_upcoming · P = C + E + N
+ * R_late is exactly isOverduePayment() (billed ∧ invoiced ∧ due_date < today).
+ * Cancelled events are ignored.
+ */
+export function collectionMonth<T extends CollectionMonthEvent>(events: T[], today: string) {
+  const mStart = `${today.slice(0, 7)}-01`
+  const mEnd = monthEnd(today)
+  const inMonth = (d: string | null | undefined) => !!d && d.slice(0, 10) >= mStart && d.slice(0, 10) <= mEnd
+  let T = 0, C = 0, R = 0, Rlate = 0, Rupcoming = 0, E = 0, N = 0, P = 0, O = 0, Wamt = 0, Wcount = 0
+  let noDue = 0, noDueCount = 0
+  const late: (T & { daysLate: number })[] = []
+  const bucketAg = [0, 0, 0, 0]
+
+  for (const e of events) {
+    if (e.status === 'cancelled') continue
+    const a = eventInvoiceAgorot(e)
+    const invoiced = !!e.invoice_number && !!e.invoice_date
+    const due = e.due_date ? e.due_date.slice(0, 10) : null
+    const paidInMonth = e.status === 'paid' && inMonth(e.payment_date)
+
+    if (e.status === 'to_bill') { Wamt += a; Wcount += 1 }
+    if (e.status === 'billed') {
+      O += a
+      if (!due) { noDue += a; noDueCount += 1 }
+    }
+    if (paidInMonth) P += a
+
+    // T: invoiced, expected by month end, not settled before the month began.
+    const inT = invoiced && !!due && due <= mEnd &&
+      (e.status === 'billed' || paidInMonth)
+    if (inT) {
+      T += a
+      if (paidInMonth) C += a
+      else {
+        R += a
+        if (isLateByDue(e, due!, today)) {
+          Rlate += a
+          const daysLate = daysBetween(due!, today)
+          late.push({ ...e, daysLate })
+          bucketAg[daysLate <= 30 ? 0 : daysLate <= 60 ? 1 : daysLate <= 90 ? 2 : 3] += a
+        } else Rupcoming += a
+      }
+    } else if (paidInMonth) {
+      if (invoiced && due && due > mEnd) E += a
+      else N += a
+    }
+  }
+  late.sort((x, y) => y.daysLate - x.daysLate)
+  return {
+    mStart, mEnd,
+    T: fromAgorot(T), C: fromAgorot(C), R: fromAgorot(R),
+    R_late: fromAgorot(Rlate), R_upcoming: fromAgorot(Rupcoming),
+    E: fromAgorot(E), N: fromAgorot(N), P: fromAgorot(P), O: fromAgorot(O),
+    W_amount: fromAgorot(Wamt), W_count: Wcount,
+    noDueAmount: fromAgorot(noDue), noDueCount,
+    lateEvents: late,
+    agingBuckets: bucketAg.map(fromAgorot) as [number, number, number, number],
+  }
+}
+
+// In T the unpaid events are all `billed` and invoiced, so this is exactly
+// isOverduePayment (imported lazily-free: same predicate, due_date < today).
+function isLateByDue(e: CollectionMonthEvent, due: string, today: string) {
+  return isOverduePayment({ status: (e.status ?? 'pending') as BillingEventStatus, invoice_date: e.invoice_date ?? null, due_date: due }, today)
+}
+
+/** Paid סכום חשבונית per Jerusalem month for the `n` months ending at `today`'s month (oldest first). */
+export function paidLastMonths(events: FinanceEvent[], today: string, n = 6) {
+  const y0 = Number(today.slice(0, 4)), m0 = Number(today.slice(5, 7))
+  const out: { key: string; month: number; value: number }[] = []
+  for (let i = n - 1; i >= 0; i--) {
+    const idx = y0 * 12 + (m0 - 1) - i
+    const y = Math.floor(idx / 12), m = (idx % 12) + 1
+    out.push({ key: `${y}-${String(m).padStart(2, '0')}`, month: m, value: 0 })
+  }
+  const sums = new Map(out.map((o) => [o.key, 0]))
+  for (const e of events) {
+    if (e.status !== 'paid' || !e.payment_date) continue
+    const k = e.payment_date.slice(0, 7)
+    if (sums.has(k)) sums.set(k, sums.get(k)! + eventInvoiceAgorot(e))
+  }
+  return out.map((o) => ({ ...o, value: fromAgorot(sums.get(o.key)!) }))
 }

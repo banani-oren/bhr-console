@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { DateCell } from '@/components/ui/date-cell'
+import { collectionMonth, eventInvoiceAmount, jerusalemYearMonth, paidLastMonths } from '@/lib/finance'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -39,6 +40,8 @@ type EventRow = {
   supplier_amount: number
   billing_date: string | null
   payment_date: string | null
+  invoice_date: string | null
+  due_date: string | null
   status: string
   invoice_number: string | null
   description: string | null
@@ -53,6 +56,8 @@ type RawEventRow = {
   supplier_amount: number | string | null
   billing_date: string | null
   payment_date: string | null
+  invoice_date: string | null
+  due_date: string | null
   status: string
   invoice_number: string | null
   description: string | null
@@ -66,7 +71,7 @@ export default function AdministrationDashboard() {
       const { data, error } = await supabase
         .from('billing_events')
         .select(`
-          id, amount, supplier_amount, billing_date, payment_date, status, invoice_number, description,
+          id, amount, supplier_amount, billing_date, payment_date, invoice_date, due_date, status, invoice_number, description,
           transactions!inner ( client_name, service_lead, needs_approval, approved_at )
         `)
         .neq('status', 'cancelled')
@@ -78,6 +83,8 @@ export default function AdministrationDashboard() {
         supplier_amount: Number(row.supplier_amount) || 0,
         billing_date: row.billing_date,
         payment_date: row.payment_date,
+        invoice_date: row.invoice_date,
+        due_date: row.due_date,
         status: row.status,
         invoice_number: row.invoice_number,
         description: row.description,
@@ -88,127 +95,27 @@ export default function AdministrationDashboard() {
     },
   })
 
-  const stats = useMemo(() => {
-    const now = new Date()
-    const curYear = now.getFullYear()
-    const curMonth = now.getMonth() + 1
+  const today = jerusalemYearMonth().today
+  const col = useMemo(() => collectionMonth(billingEvents, today), [billingEvents, today])
 
-    let billedThisMonth = 0
-    let collectedThisMonth = 0
-    let openAmount = 0
-    let awaitingInvoice = 0
-    let overdueAmount = 0
-    const buckets = { b0_30: 0, b31_60: 0, b61_90: 0, b90plus: 0 }
-    const topOverdue: { id: string; clientName: string; description: string; amount: number; billingDate: Date; daysOverdue: number }[] = []
+  const collectionPct = col.T > 0 ? Math.round((col.C / col.T) * 100) : null
 
-    for (const ev of billingEvents) {
-      const billingDate = ev.billing_date ? new Date(ev.billing_date) : null
-      const paymentDate = ev.payment_date ? new Date(ev.payment_date) : null
+  const agingNames = ['1–30', '31–60', '61–90', '90+']
+  const agingData = agingNames
+    .map((name, i) => ({ name, value: col.agingBuckets[i] }))
+    .filter((d) => d.value > 0)
 
-      if (ev.status === 'to_bill') awaitingInvoice += 1
+  const lateClients = new Set(col.lateEvents.map((e) => e.client_name ?? '—')).size
+  const topOverdue = col.lateEvents.slice(0, 10)
 
-      if (billingDate && !isNaN(billingDate.getTime())) {
-        if (billingDate.getFullYear() === curYear && billingDate.getMonth() + 1 === curMonth) {
-          billedThisMonth += ev.amount
-        }
-      }
-
-      // Collected = money actually received = paid events only, by payment_date
-      // (the actual receipt date). A billed event has an expected payment date
-      // (תאריך תשלום צפוי) but is not yet collected, so it falls through to the
-      // open/overdue branches below — which measure aging from billing_date
-      // (the system's PLANNED billing date, not the real invoice date — see
-      // billing_events.invoice_date / Part B of Repair 19); that's what
-      // "חורג מתאריך חיוב" (exceeds billing date) means, and this page has no
-      // due_date-dependent widget at all (confirmed again, Repair 19).
-      if (ev.status === 'paid' && paymentDate && !isNaN(paymentDate.getTime())) {
-        if (paymentDate.getFullYear() === curYear && paymentDate.getMonth() + 1 === curMonth) {
-          collectedThisMonth += ev.amount
-        }
-      } else if (ev.status === 'billed') {
-        openAmount += ev.amount
-        if (billingDate && billingDate < now) {
-          const daysOverdue = Math.floor((now.getTime() - billingDate.getTime()) / 86400000)
-          overdueAmount += ev.amount
-          topOverdue.push({
-            id: ev.id,
-            clientName: ev.client_name ?? '—',
-            description: ev.description ?? '—',
-            amount: ev.amount,
-            billingDate,
-            daysOverdue,
-          })
-          if (daysOverdue <= 30) buckets.b0_30 += ev.amount
-          else if (daysOverdue <= 60) buckets.b31_60 += ev.amount
-          else if (daysOverdue <= 90) buckets.b61_90 += ev.amount
-          else buckets.b90plus += ev.amount
-        }
-      } else if (ev.status === 'to_bill' || ev.status === 'pending') {
-        // not billed yet — counts toward open if billed, else just future receivables
-        // (also treat to_bill with past billing_date as open + overdue display)
-        if (ev.status === 'to_bill' && billingDate && billingDate < now) {
-          const daysOverdue = Math.floor((now.getTime() - billingDate.getTime()) / 86400000)
-          overdueAmount += ev.amount
-          topOverdue.push({
-            id: ev.id,
-            clientName: ev.client_name ?? '—',
-            description: ev.description ?? '—',
-            amount: ev.amount,
-            billingDate,
-            daysOverdue,
-          })
-          if (daysOverdue <= 30) buckets.b0_30 += ev.amount
-          else if (daysOverdue <= 60) buckets.b31_60 += ev.amount
-          else if (daysOverdue <= 90) buckets.b61_90 += ev.amount
-          else buckets.b90plus += ev.amount
-        }
-      }
-    }
-
-    topOverdue.sort((a, b) => b.daysOverdue - a.daysOverdue)
-    return {
-      billedThisMonth,
-      collectedThisMonth,
-      openAmount,
-      overdueAmount,
-      awaitingInvoice,
-      buckets,
-      topOverdue: topOverdue.slice(0, 10),
-    }
-  }, [billingEvents])
-
-  const collectionPct = stats.billedThisMonth > 0
-    ? Math.min(100, Math.round((stats.collectedThisMonth / stats.billedThisMonth) * 100))
-    : 0
-
-  const agingData = [
-    { name: '0–30', value: stats.buckets.b0_30 },
-    { name: '31–60', value: stats.buckets.b31_60 },
-    { name: '61–90', value: stats.buckets.b61_90 },
-    { name: '90+', value: stats.buckets.b90plus },
-  ].filter((d) => d.value > 0)
-
-  // 6-month collections
-  const monthlyCollections = useMemo(() => {
-    const now = new Date()
-    const out: { label: string; value: number }[] = []
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      const year = d.getFullYear()
-      const month = d.getMonth() + 1
-      const label = `${HE_MONTHS[d.getMonth()]} ${String(year).slice(2)}`
-      const total = billingEvents
-        .filter((ev) => {
-          // Collections = paid events only, bucketed by the month money arrived.
-          if (ev.status !== 'paid' || !ev.payment_date) return false
-          const pd = new Date(ev.payment_date)
-          return !isNaN(pd.getTime()) && pd.getFullYear() === year && pd.getMonth() + 1 === month
-        })
-        .reduce((s, ev) => s + ev.amount, 0)
-      out.push({ label, value: total })
-    }
-    return out
-  }, [billingEvents])
+  // 6-month collections (paid, by payment_date month)
+  const monthlyCollections = useMemo(
+    () => paidLastMonths(billingEvents, today, 6).map((m) => ({
+      label: `${HE_MONTHS[m.month - 1]} ${m.key.slice(2, 4)}`,
+      value: m.value,
+    })),
+    [billingEvents, today],
+  )
 
   if (isLoading) {
     return (
@@ -217,8 +124,6 @@ export default function AdministrationDashboard() {
       </div>
     )
   }
-
-  const remaining = Math.max(0, stats.billedThisMonth - stats.collectedThisMonth)
 
   return (
     <div className="p-6 space-y-6" dir="rtl">
@@ -229,16 +134,36 @@ export default function AdministrationDashboard() {
           <div className="flex items-end justify-between">
             <div>
               <p className="text-sm text-purple-800/80">גבייה החודש</p>
-              <p className="text-4xl font-bold text-purple-900 mt-1">{collectionPct}%</p>
+              <p className="text-4xl font-bold text-purple-900 mt-1">{collectionPct === null ? '—' : `${collectionPct}%`}</p>
             </div>
             <p className="text-sm text-purple-900 font-medium">
-              {ILS.format(stats.collectedThisMonth)} נגבו מתוך {ILS.format(stats.billedThisMonth)}
+              {collectionPct === null
+                ? 'אין תשלומים שמועדם החודש'
+                : `${ILS.format(col.C)} נגבו מתוך ${ILS.format(col.T)} שמועד תשלומם עד סוף החודש`}
             </p>
           </div>
           <div className="h-3 w-full rounded-full bg-purple-200 overflow-hidden">
-            <div className="h-full bg-purple-600 transition-all" style={{ width: `${collectionPct}%` }} />
+            <div className="h-full bg-purple-600 transition-all" style={{ width: `${collectionPct ?? 0}%` }} />
           </div>
-          <p className="text-sm text-purple-900">עוד {ILS.format(remaining)} לגבייה</p>
+          {col.R > 0 && (
+            <p className="text-sm text-purple-900">
+              {[
+                `נותרו ${ILS.format(col.R)}:`,
+                [
+                  col.R_late > 0 ? `${ILS.format(col.R_late)} באיחור` : null,
+                  col.R_upcoming > 0 ? `${ILS.format(col.R_upcoming)} צפוי עד סוף החודש` : null,
+                ].filter(Boolean).join(' · '),
+              ].join(' ')}
+            </p>
+          )}
+          {col.E + col.N > 0 && (
+            <p className="text-xs text-purple-800/70">
+              {[
+                col.E > 0 ? `בנוסף התקבלו החודש ${ILS.format(col.E)} לפני מועדם` : null,
+                col.N > 0 ? `${ILS.format(col.N)} ללא תאריך תשלום צפוי` : null,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -253,20 +178,21 @@ export default function AdministrationDashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold leading-none">{ILS.format(stats.openAmount)}</p>
+            <p className="text-2xl font-bold leading-none">{ILS.format(col.O)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground">חורג מתאריך חיוב</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">באיחור תשלום</CardTitle>
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-50">
                 <AlertTriangle size={18} className="text-red-600" />
               </span>
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-red-700 leading-none">{ILS.format(stats.overdueAmount)}</p>
+            <p className="text-2xl font-bold text-red-700 leading-none">{ILS.format(col.R_late)}</p>
+            <p className="text-xs text-muted-foreground mt-1.5">{NUM.format(col.lateEvents.length)} חיובים · {NUM.format(lateClients)} לקוחות</p>
           </CardContent>
         </Card>
         <Card>
@@ -279,7 +205,7 @@ export default function AdministrationDashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-green-700 leading-none">{ILS.format(stats.collectedThisMonth)}</p>
+            <p className="text-2xl font-bold text-green-700 leading-none">{ILS.format(col.P)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -292,7 +218,8 @@ export default function AdministrationDashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold leading-none">{NUM.format(stats.awaitingInvoice)}</p>
+            <p className="text-2xl font-bold leading-none">{ILS.format(col.W_amount)}</p>
+            <p className="text-xs text-muted-foreground mt-1.5">{NUM.format(col.W_count)} חיובים · מועד החיוב חלף</p>
           </CardContent>
         </Card>
       </div>
@@ -338,6 +265,11 @@ export default function AdministrationDashboard() {
                 </div>
               </>
             )}
+            {col.noDueAmount > 0 && (
+              <p className="text-xs text-muted-foreground text-center">
+                {ILS.format(col.noDueAmount)} ממתינים לתשלום ללא תאריך תשלום צפוי (תנאי תשלום חסרים)
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -375,28 +307,28 @@ export default function AdministrationDashboard() {
               <TableRow>
                 <TableHead className="text-right px-4">לקוח</TableHead>
                 <TableHead className="text-right px-4">סכום</TableHead>
-                <TableHead className="text-right px-4">תאריך חיוב</TableHead>
+                <TableHead className="text-right px-4">תאריך תשלום צפוי</TableHead>
                 <TableHead className="text-right px-4">ימי איחור</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {stats.topOverdue.length === 0 ? (
+              {topOverdue.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                     אין חיובים חורגים
                   </TableCell>
                 </TableRow>
               ) : (
-                stats.topOverdue.map((row) => (
+                topOverdue.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="px-4 font-medium">{row.clientName}</TableCell>
-                    <TableCell className="px-4 font-medium">{ILS.format(row.amount)}</TableCell>
+                    <TableCell className="px-4 font-medium">{row.client_name ?? '—'}</TableCell>
+                    <TableCell className="px-4 font-medium">{ILS.format(eventInvoiceAmount(row))}</TableCell>
                     <TableCell className="px-4 text-muted-foreground" dir="ltr">
-                      <DateCell value={row.billingDate} />
+                      <DateCell value={row.due_date} />
                     </TableCell>
                     <TableCell className="px-4">
                       <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-red-100 text-red-700">
-                        {row.daysOverdue} ימים
+                        {row.daysLate} ימים
                       </span>
                     </TableCell>
                   </TableRow>
