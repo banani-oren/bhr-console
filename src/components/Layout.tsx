@@ -8,6 +8,7 @@ import {
   CalendarCheck,
   UserCog,
   Shield,
+  History,
   Briefcase,
   FileText,
   Trophy,
@@ -54,6 +55,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'שירותים',       to: '/services',     icon: <Briefcase size={18} />,       allow: ['admin'] },
   { label: 'ספקים',         to: '/suppliers',    icon: <Handshake size={18} />,       allow: ['admin'] },
   { label: 'ניהול משתמשים', to: '/users',        icon: <Shield size={18} />,          allow: ['admin'] },
+  { label: 'יומן שינויים',  to: '/audit-log',    icon: <History size={18} />,         allow: ['admin'] },
 ]
 
 interface LayoutProps {

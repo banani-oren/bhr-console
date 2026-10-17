@@ -10,6 +10,7 @@ import Transactions from '@/pages/Transactions'
 import HoursPage from '@/pages/hours/HoursPage'
 import Team from '@/pages/Team'
 import Users from '@/pages/Users'
+import AuditLog from '@/pages/AuditLog'
 import Services from '@/pages/Services'
 import Suppliers from '@/pages/Suppliers'
 import BillingReports from '@/pages/BillingReports'
@@ -88,6 +89,14 @@ export default function App() {
               element={
                 <RequireRole allow={['admin']}>
                   <Users />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/audit-log"
+              element={
+                <RequireRole allow={['admin']}>
+                  <AuditLog />
                 </RequireRole>
               }
             />
