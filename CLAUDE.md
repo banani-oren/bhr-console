@@ -94,7 +94,7 @@ Recruiters therefore see 11 columns. Service type is no longer a column but stay
 
 Footer: totals row (Repair 20, extended Repair 21) — count in col 1; סכום חשבונית total (+ "מתוכם ממתין לאישור" sub-line) under col 8; עמלת ספק total (admin/administration) and הכנסה total — all derived from the visible (`sorted`) set via `finance.ts`. No footer in loading/empty states.
 
-Filters: **שנה** (כל השנים + every distinct `closing_year`, descending) and **חודש סגירה** (כל החודשים + 12 months), plus search — all three combine; the totals row follows them. Defaults: כל השנים + כל החודשים. *(The old "month filter has no year" limitation was resolved by Repair 25, 2026-10-17.)*
+Filters (Repair 26, requested by Oren 2026-10-18 — do NOT "restore" Repair 8's removal of the old dropdowns; these are new and deliberate): search · **שנה** · **חודש סגירה** · **מוביל** (admin/administration only; `normalizeLead`) · **סוג שירות** (service_types names + "ללא סוג שירות"; matched through `resolveServiceName`) · **מועד תשלום** (toggle צפוי=`due_date` / בפועל=`payment_date`, from/to range, any non-cancelled event in range) · **חיובים header popover** (multi-select buckets: טרם חויב, לחיוב עכשיו, ממתין לתשלום, באיחור [`isOverduePayment`, no payment_date], שולם, מבוטל, ללא חיובים — a deal matches if ANY event is in ANY selected bucket). All filters combine; the totals row follows them. **State lives in the URL query string** (`q`, `year`, `month`, `lead`, `svc`, `pm`, `from`, `to`, `bill` comma list; defaults are omitted) — no localStorage. "נקה סינונים" appears whenever any filter is active. Filter rows wrap (no horizontal scroll). Defaults: כל השנים + כל החודשים. *(The old "month filter has no year" limitation was resolved by Repair 25, 2026-10-17.)*
 
 ---|---|---|
 | 1 | לקוח | `t.client_name` |
@@ -153,6 +153,7 @@ App Dev/
 │   │   ├── Layout.tsx                  # Desktop shell: RTL sidebar (right) + main content
 │   │   ├── RequireRole.tsx             # Route guard — checks profile.role
 │   │   ├── TransactionDialog.tsx       # Add/edit transaction (dynamic fields from ServiceType)
+│   │   ├── DeleteTransactionDialog.tsx # Repair 26: deliberate deal delete — shows what is deleted with the deal (billed/paid warning), forces release/move choice for linked hours, calls delete_transaction RPC, inline Hebrew errors, 10s abort
 │   │   ├── AgreementUploader.tsx       # PDF upload + extract-agreement edge function
 │   │   ├── BonusWidget.tsx             # Compact per-employee bonus card (current month, actual + תחזית) on AdminDashboard — mounted there since Repair 16 (previously built but never wired in anywhere)
 │   │   ├── ClientPicker.tsx            # Autocomplete client selector
@@ -233,6 +234,7 @@ App Dev/
 │       ├── 20261006_2_drop_billing_percent.sql       # Repair 19: drops the dead transactions.billing_percent column
 │       ├── 20261017_audit_log.sql                    # Repair 24: audit_log table + bhr_audit_row triggers (transactions/billing_events/clients) + get_audit_log()
 │       ├── 20261017_hr_service_hours.sql             # Repair 25: seeds service_types 'שירות משאבי אנוש' (no dynamic fields)
+│       ├── 20261018_delete_transaction.sql           # Repair 26: delete_transaction(p_id, p_hours_action, p_target_transaction) SECURITY DEFINER; hours_log joins the audit log (bhr_audit_row hours_log branch + trigger + audit_log CHECK)
 │       └── 20261017_2_hours_deals_backfill.sql       # Repair 25: fill-only, idempotent backfill of hours deals (service type, kind, period, rate, net, close date, closing month/year); excludes recruitment-signal rows and probable duplicates of a paid deal
 │
 ├── scripts/
@@ -467,7 +469,7 @@ suppliers
 
 audit_log                          -- Repair 24, append-only, admin SELECT only (RLS policy admin_audit_log_read; no insert/update/delete policies; service_role keeps table privileges for maintenance)
   id bigserial PK, occurred_at, txid, actor_id uuid (auth.uid(); null = system), actor_name (snapshot)
-  table_name IN ('transactions','billing_events','clients'), row_id, parent_id, business_key, action IN ('insert','update','delete')
+  table_name IN ('transactions','billing_events','clients','hours_log'), row_id, parent_id, business_key, action IN ('insert','update','delete')
   row_label text, changes jsonb       -- update: {col:{old,new}} changed cols only (custom_fields diffed one level deeper); insert/delete: full snapshot
   -- Written ONLY by trigger bhr_audit_row() (SECURITY DEFINER, EXECUTE revoked from everyone; exception guard — a logging failure never rolls back a save).
   -- Read ONLY via get_audit_log(p_from,p_to,p_actor,p_table,p_search,p_limit,p_offset) (SECURITY DEFINER, admin check inside), which collapses the save RPC's delete+reinsert of unchanged events (same txid + business_key; identical snapshots → dropped, differing → ONE update).
@@ -988,6 +990,16 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 
 ---
 
+## Deleting a deal (Repair 26, 2026-10-18)
+
+**Root cause of "deals cannot be deleted" (confirmed 2026-10-18):** `hours_log.billed_transaction_id → transactions(id)` has no ON DELETE action, so any deal with linked hours fails with FK 23503 (hours deals — שיבומי / קסטרו); `Transactions.tsx` called the delete mutation with no try/catch, so the failure was silent. `billing_events.transaction_id` is ON DELETE CASCADE (paid events go with the deal). `billing_reports.transaction_ids` is an array with no FK (0 rows reference deals as of 2026-10-18).
+- Delete = `DeleteTransactionDialog` → RPC `delete_transaction(p_id, p_hours_action 'release'|'move', p_target_transaction)`: one DB transaction relinks/releases the hours then deletes the deal. SECURITY DEFINER; ⚠ its authorization (admin/administration, or service_lead = current_user_full_name()) must stay in lockstep with the RLS policy `transactions_full_access`. EXECUTE: authenticated only (anon/service_role revoked). The move target must be a `time_period` deal of the same client.
+- The FK was deliberately NOT changed to SET NULL — silently releasing billed hours invites double billing; the user chooses.
+- `hours_log` is now audited (entity "שעות", link change shown as "קישור לעסקה"). Standing rule from Repair 24 applies.
+- Recruiters can't always see the linked hours (hours_log RLS): the dialog then can't show the choice up front; the RPC refuses and the dialog reveals the choice with an inline message.
+
+---
+
 ## Audit log (Repair 24, 2026-10-17)
 
 - **Standing rule: any new table that holds business data gets the `bhr_audit_row` trigger in the SAME migration** (and a label entry in `src/lib/auditLabels.ts`).
@@ -1033,4 +1045,5 @@ broken.
 | Repair 23: Annual Finance Report | /reports gains דוח כספי שנתי: by payment month, by deal-close month, client × month matrix + Excel export |
 | Repair 24: Audit Log (יומן שינויים) | audit_log + triggers on transactions/billing_events/clients, admin-only /audit-log page, read-side collapse of RPC noise |
 | Repair 25: Hours Deals Integrity + Year Filter | שירות משאבי אנוש seeded + one constant; hours deals get service type, end-of-month close date, net amount (forward + backfill of 18); Transactions gains שנה filter |
+| Repair 26: Deal Delete, Transactions Filters, QA Width Rule | Root-caused + fixed silent delete failure (hours_log FK): delete_transaction RPC + dialog (release/move hours, billed/paid warning); hours_log audited; Transactions filters (מוביל, סוג שירות, מועד תשלום, חיובים buckets) in the URL; QA widths = desktop 1440/1024, 375 only for /m |
 
