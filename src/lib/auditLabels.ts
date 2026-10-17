@@ -78,6 +78,13 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   payment_status: 'סטטוס תשלום',
   is_billable: 'ניתן לחיוב',
   time_sheet_pdf_path: 'קובץ דוח שעות',
+  // hours_log (Repair 26)
+  billed_transaction_id: 'קישור לעסקה',
+  visit_date: 'תאריך',
+  hours: 'שעות',
+  start_time: 'שעת התחלה',
+  end_time: 'שעת סיום',
+  hours_category: 'קטגוריית שעות',
   id: 'מזהה',
 }
 
@@ -87,7 +94,7 @@ const MONEY_KEYS = new Set([
 ])
 const PERCENT_KEYS = new Set(['commission_percent', 'supplier_percent'])
 const BOOL_KEYS = new Set(['needs_approval', 'is_billable', 'due_date_is_manual', 'time_log_enabled'])
-const HIDDEN_DETAIL_KEYS = new Set(['id', 'transaction_id', 'client_id', 'service_type_id', 'supplier_id', 'created_by', 'approved_by'])
+const HIDDEN_DETAIL_KEYS = new Set(['id', 'transaction_id', 'client_id', 'service_type_id', 'supplier_id', 'created_by', 'approved_by', 'profile_id', 'team_member_id', 'month', 'year'])
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 })
 
@@ -109,6 +116,7 @@ export function formatAuditValue(key: string, v: unknown): string {
   if (BOOL_KEYS.has(key) || typeof v === 'boolean') return v === true || v === 'true' ? 'כן' : 'לא'
   if (MONEY_KEYS.has(key) && Number.isFinite(Number(v))) return ILS.format(Number(v))
   if (PERCENT_KEYS.has(key) && Number.isFinite(Number(v))) return `${Number(v)}%`
+  if (key === 'billed_transaction_id') return `עסקה ${String(v).slice(0, 8)}`
   if (typeof v === 'string' && isDateKey(key)) return fmtDate(v)
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
@@ -118,6 +126,7 @@ export const ENTITY_LABEL: Record<string, string> = {
   transactions: 'עסקה',
   billing_events: 'אירוע חיוב',
   clients: 'לקוח',
+  hours_log: 'שעות',
 }
 
 /** Key fields of an insert/delete snapshot, for the collapsed "הצג פרטים" view. */

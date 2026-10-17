@@ -37,6 +37,7 @@ const ENTITY_OPTIONS = [
   { value: 'transactions', label: 'עסקאות' },
   { value: 'billing_events', label: 'אירועי חיוב' },
   { value: 'clients', label: 'לקוחות' },
+  { value: 'hours_log', label: 'שעות' },
 ]
 const ACTION_BADGE = {
   insert: { label: 'נוצר', cls: 'text-green-700 border-green-400' },

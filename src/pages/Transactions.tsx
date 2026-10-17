@@ -1,12 +1,15 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, Pencil, Trash2, Search, X, Check } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Plus, Pencil, Trash2, Search, X, Check, Filter } from 'lucide-react'
 import { DateCell } from '@/components/ui/date-cell'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useTable, useDelete } from '@/hooks/useSupabaseQuery'
+import { useTable } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { toAgorot, txInvoiceAgorot, txSupplierAgorot, txIncomeAgorot, txSupplierAmount, txIncome } from '@/lib/finance'
+import { toAgorot, txInvoiceAgorot, txSupplierAgorot, txIncomeAgorot, txSupplierAmount, txIncome, jerusalemYearMonth } from '@/lib/finance'
+import { isOverduePayment } from '@/lib/billingEvents'
+import { normalizeLead } from '@/lib/bonus'
 import type {
   BillingEvent,
   BillingEventStatus,
@@ -14,6 +17,10 @@ import type {
 } from '@/lib/types'
 import type { ServiceType } from '@/lib/serviceTypes'
 import TransactionDialog from '@/components/TransactionDialog'
+import DeleteTransactionDialog from '@/components/DeleteTransactionDialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DateInput } from '@/components/ui/date-input'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -117,8 +124,6 @@ export default function Transactions() {
     return m
   }, [allBillingEvents])
 
-  const remove = useDelete('transactions')
-
   const approveMut = useMutation({
     mutationFn: async (txnId: string) => {
       // 10s abort so a hung approve can't freeze the row's button.
@@ -152,16 +157,39 @@ export default function Transactions() {
   })
 
   // Search + sort
-  const [searchInput, setSearchInput] = useState('')
-  const [searchDebounced, setSearchDebounced] = useState('')
-  const [filterClosingMonth, setFilterClosingMonth] = useState<string>('all')
-  const [filterClosingYear, setFilterClosingYear] = useState<string>('all')
+  // All filters live in the URL query string (Repair 26): a refresh or a shared
+  // link keeps the view. No localStorage.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const param = (k: string, d = '') => searchParams.get(k) ?? d
+  const setParam = (k: string, v: string | null) =>
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev)
+      if (v == null || v === '' || v === 'all') n.delete(k); else n.set(k, v)
+      return n
+    }, { replace: true })
+  const filterClosingMonth = param('month', 'all')
+  const filterClosingYear = param('year', 'all')
+  const filterLead = param('lead', 'all')
+  const filterService = param('svc', 'all')
+  const payMode: 'due' | 'paid' = param('pm', 'due') === 'paid' ? 'paid' : 'due'
+  const payFrom = param('from')
+  const payTo = param('to')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const billBuckets = useMemo(() => new Set(param('bill').split(',').filter(Boolean)), [searchParams])
+  const toggleBucket = (b: string) => {
+    const n = new Set(billBuckets)
+    if (n.has(b)) n.delete(b); else n.add(b)
+    setParam('bill', Array.from(n).join(','))
+  }
+  const [searchInput, setSearchInput] = useState(param('q'))
+  const searchDebounced = param('q').trim().toLowerCase()
   const [sort, setSort] = useState<SortState>({ key: 'close_date', dir: 'desc' })
   const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
 
   useEffect(() => {
-    const t = setTimeout(() => setSearchDebounced(searchInput.trim().toLowerCase()), 200)
+    const t = setTimeout(() => setParam('q', searchInput.trim()), 200)
     return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput])
 
   const serviceNameById = useMemo(() => {
@@ -193,15 +221,70 @@ export default function Transactions() {
     return needles.some((s) => s.includes(q))
   }
 
+  const today = jerusalemYearMonth().today
+  const showLeadFilter = profile?.role === 'admin' || profile?.role === 'administration'
+
+  // Billing-status buckets (Repair 26) — same semantics as the collection model:
+  // an event matches a bucket by its stored status; באיחור = invoiced, due_date
+  // passed, unpaid (isOverduePayment, the dashboard's פיגור rule).
+  const BILL_BUCKETS: { key: string; label: string; match: (e: BillingEvent) => boolean }[] = [
+    { key: 'not_billed', label: 'טרם חויב', match: (e) => e.status === 'pending' || e.status === 'to_bill' },
+    { key: 'to_bill', label: 'לחיוב עכשיו', match: (e) => e.status === 'to_bill' },
+    { key: 'awaiting', label: 'ממתין לתשלום', match: (e) => e.status === 'billed' },
+    { key: 'overdue', label: 'באיחור', match: (e) => isOverduePayment(e, today) && !e.payment_date },
+    { key: 'paid', label: 'שולם', match: (e) => e.status === 'paid' },
+    { key: 'cancelled', label: 'מבוטל', match: (e) => e.status === 'cancelled' },
+  ]
+  const billMatches = (evs: BillingEvent[]) => {
+    if (billBuckets.size === 0) return true
+    if (evs.length === 0) return billBuckets.has('none')
+    return BILL_BUCKETS.some((b) => billBuckets.has(b.key) && evs.some(b.match))
+  }
+
+  // Distinct leads (normalised), displayed with the first-seen spelling.
+  const leadOptions = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const t of transactions) {
+      const k = normalizeLead(t.service_lead)
+      if (k && !m.has(k)) m.set(k, (t.service_lead ?? '').trim())
+    }
+    return Array.from(m.entries()).sort((a, b) => a[1].localeCompare(b[1], 'he'))
+  }, [transactions])
+
+  const payRangeActive = !!(payFrom || payTo)
+  const anyFilterActive =
+    !!searchDebounced || filterClosingYear !== 'all' || filterClosingMonth !== 'all' ||
+    filterLead !== 'all' || filterService !== 'all' || billBuckets.size > 0 || payRangeActive
+
   const filtered = useMemo(() => {
     return transactions.filter((t) => {
       if (!searchMatches(t, searchDebounced)) return false
       if (filterClosingYear !== 'all' && t.closing_year !== Number(filterClosingYear)) return false
       if (filterClosingMonth !== 'all' && t.closing_month !== Number(filterClosingMonth)) return false
+      if (filterLead !== 'all' && normalizeLead(t.service_lead) !== filterLead) return false
+      if (filterService !== 'all') {
+        const name = resolveServiceName(t)
+        if (filterService === 'none' ? name !== '' : name !== filterService) return false
+      }
+      const evs = eventsByTxn.get(t.id) ?? []
+      if (!billMatches(evs)) return false
+      if (payRangeActive) {
+        const hit = evs.some((e) => {
+          if (e.status === 'cancelled') return false
+          const d = payMode === 'paid' ? e.payment_date : e.due_date
+          return !!d && (!payFrom || d >= payFrom) && (!payTo || d <= payTo)
+        })
+        if (!hit) return false
+      }
       return true
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transactions, searchDebounced, filterClosingMonth, filterClosingYear, serviceNameById])
+  }, [transactions, searchDebounced, filterClosingMonth, filterClosingYear, filterLead, filterService, billBuckets, payMode, payFrom, payTo, eventsByTxn, serviceNameById, today])
+
+  const clearAllFilters = () => {
+    setSearchInput('')
+    setSearchParams(new URLSearchParams(), { replace: true })
+  }
 
   // שנה filter options = every distinct non-null closing_year present, descending.
   const closingYears = useMemo(
@@ -255,9 +338,8 @@ export default function Transactions() {
   const openAdd = () => { setEditing(null); setWizardOpen(true) }
   const openEdit = (t: Transaction) => { setEditing(t); setWizardOpen(true) }
 
-  const handleDelete = async (id: string) => {
-    if (confirm('האם למחוק עסקה זו?')) await remove.mutateAsync(id)
-  }
+  const [deleting, setDeleting] = useState<Transaction | null>(null)
+  const handleDelete = (t: Transaction) => setDeleting(t)
 
   const canApprove = profile?.role === 'admin' || profile?.role === 'administration'
   // עמלת ספק is hidden from recruiters entirely (header + cell + footer).
@@ -301,7 +383,7 @@ export default function Transactions() {
           </div>
 
           {/* Closing year — between the search bar and the month filter */}
-          <Select value={filterClosingYear} onValueChange={(v) => setFilterClosingYear(v ?? 'all')}>
+          <Select value={filterClosingYear} onValueChange={(v) => setParam('year', v ?? 'all')}>
             <SelectTrigger className="w-28 shrink-0 border-purple-200 focus:ring-purple-400">
               <span className="text-sm truncate">
                 {filterClosingYear === 'all' ? 'שנה' : filterClosingYear}
@@ -316,7 +398,7 @@ export default function Transactions() {
           </Select>
 
           {/* Closing month — to the left of the year filter */}
-          <Select value={filterClosingMonth} onValueChange={(v) => setFilterClosingMonth(v ?? 'all')}>
+          <Select value={filterClosingMonth} onValueChange={(v) => setParam('month', v ?? 'all')}>
             <SelectTrigger className="w-36 shrink-0 border-purple-200 focus:ring-purple-400">
               <span className="text-sm truncate">
                 {filterClosingMonth === 'all'
@@ -331,6 +413,60 @@ export default function Transactions() {
               ))}
             </SelectContent>
           </Select>
+
+          {/* Repair 26 — filters explicitly requested by Oren (2026-10-18); do not "restore" Repair 8. */}
+          {showLeadFilter && (
+            <Select value={filterLead} onValueChange={(v) => setParam('lead', v ?? 'all')}>
+              <SelectTrigger className="w-36 shrink-0 border-purple-200 focus:ring-purple-400" data-testid="filter-lead">
+                <span className="text-sm truncate">
+                  {filterLead === 'all' ? 'מוביל' : leadOptions.find(([k]) => k === filterLead)?.[1] ?? filterLead}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">כל המובילים</SelectItem>
+                {leadOptions.map(([k, label]) => (<SelectItem key={k} value={k}>{label}</SelectItem>))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <Select value={filterService} onValueChange={(v) => setParam('svc', v ?? 'all')}>
+            <SelectTrigger className="w-40 shrink-0 border-purple-200 focus:ring-purple-400" data-testid="filter-service">
+              <span className="text-sm truncate">
+                {filterService === 'all' ? 'סוג שירות' : filterService === 'none' ? 'ללא סוג שירות' : filterService}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">כל סוגי השירות</SelectItem>
+              {serviceTypes.map((s) => (<SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>))}
+              <SelectItem value="none">ללא סוג שירות</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap mt-2" data-testid="filter-row-2">
+          <span className="text-sm text-muted-foreground">מועד תשלום:</span>
+          <div className="inline-flex rounded-md border border-purple-200 overflow-hidden" role="group" aria-label="מועד תשלום">
+            {([['due', 'צפוי'], ['paid', 'בפועל']] as const).map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                data-testid={`paymode-${v}`}
+                aria-pressed={payMode === v}
+                onClick={() => setParam('pm', v === 'due' ? null : v)}
+                className={cn('px-3 py-1 text-sm', payMode === v ? 'bg-purple-600 text-white' : 'bg-white text-purple-800 hover:bg-purple-50')}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <DateInput className="w-36 shrink-0" value={payFrom} onChange={(e) => setParam('from', e.target.value)} placeholder="מתאריך" data-testid="pay-from" />
+          <DateInput className="w-36 shrink-0" value={payTo} onChange={(e) => setParam('to', e.target.value)} placeholder="עד תאריך" data-testid="pay-to" />
+          <span className="text-xs text-muted-foreground">צפוי = מחשבון עסקה שהופק</span>
+          {anyFilterActive && (
+            <Button size="sm" variant="outline" className="mr-auto" onClick={clearAllFilters} data-testid="clear-filters">
+              נקה סינונים
+            </Button>
+          )}
         </div>
       </Card>
 
@@ -356,7 +492,29 @@ export default function Transactions() {
                     <SortableHead col="supplier_amount_calc" label="עמלת ספק" sort={sort} onToggle={toggleSort} />
                   )}
                   <SortableHead col="income_calc" label="הכנסה" sort={sort} onToggle={toggleSort} />
-                  <TableHead className="text-right text-purple-800 font-semibold">חיובים</TableHead>
+                  <TableHead className="text-right text-purple-800 font-semibold">
+                    <Popover>
+                      <PopoverTrigger
+                        className="inline-flex items-center gap-1 font-semibold hover:text-purple-600"
+                        data-testid="billing-filter-trigger"
+                      >
+                        חיובים
+                        <Filter className={cn('h-3.5 w-3.5', billBuckets.size > 0 && 'fill-purple-600 text-purple-600')} />
+                        {billBuckets.size > 0 && (
+                          <span className="rounded-full bg-purple-600 px-1.5 text-[10px] leading-4 text-white">{billBuckets.size}</span>
+                        )}
+                      </PopoverTrigger>
+                      <PopoverContent align="start" className="w-56" dir="rtl">
+                        {[...BILL_BUCKETS, { key: 'none', label: 'ללא חיובים' }].map((b) => (
+                          <label key={b.key} className="flex items-center gap-2 text-sm cursor-pointer font-normal">
+                            <Checkbox checked={billBuckets.has(b.key)} onCheckedChange={() => toggleBucket(b.key)} data-testid={`bill-${b.key}`} />
+                            {b.label}
+                          </label>
+                        ))}
+                        <Button size="sm" variant="outline" disabled={billBuckets.size === 0} onClick={() => setParam('bill', null)}>נקה</Button>
+                      </PopoverContent>
+                    </Popover>
+                  </TableHead>
                   <TableHead className="text-right text-purple-800 font-semibold">פעולות</TableHead>
                 </TableRow>
               </TableHeader>
@@ -429,7 +587,7 @@ export default function Transactions() {
                           <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:bg-purple-100" onClick={() => openEdit(t)}>
                             <Pencil className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDelete(t.id)}>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDelete(t)}>
                             <Trash2 className="w-4 h-4" />
                           </Button>
                         </div>
@@ -469,6 +627,13 @@ export default function Transactions() {
           </div>
         )}
       </Card>
+
+      <DeleteTransactionDialog
+        deal={deleting}
+        allDeals={transactions}
+        events={deleting ? eventsByTxn.get(deleting.id) ?? [] : []}
+        onClose={() => setDeleting(null)}
+      />
 
       <TransactionDialog
         open={wizardOpen}

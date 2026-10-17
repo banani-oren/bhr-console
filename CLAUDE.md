@@ -946,7 +946,7 @@ QA must cover:
 - Functional flows: walk every changed user flow using browser/API tools
 - RTL rendering on all changed dialogs/forms
 - Empty states, error states, loading states
-- Mobile width (375px) on any changed UI
+- Widths: desktop pages at 1440px and 1024px (RTL, no horizontal page scroll). 375px applies ONLY to `/m/*` routes and only when the phase changes them — every mobile device is hard-locked to `/m`, and at 375px the desktop sidebar leaves ~50px of content. Not checking 375px on a desktop-only change is NOT an open item and must not be reported as one (Oren, 2026-10-18, Repair 26)
 - **Regression check**: confirm all columns/fields listed in "Canonical Column Orders" are still present
 
 Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
