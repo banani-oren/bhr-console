@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Trophy, ChevronLeft, ChevronDown, Search, X } from 'lucide-react'
@@ -23,11 +23,14 @@ import { SortableHead, toggleSortKey, compareBySort, type SortState } from '@/co
 import TransactionDialog from '@/components/TransactionDialog'
 import {
   fetchBonusEvents,
-  buildBonusLedger,
+  buildBonusDeals,
+  buildLedgerFromDeals,
   currentMonthKey,
   normalizeLead,
   actualForecastProgress,
   type BonusEvent,
+  type BonusDeal,
+  type BonusDealUnknownReason,
   type LedgerMonth,
 } from '@/lib/bonus'
 
@@ -75,12 +78,19 @@ const monthKeyOf = (y: number, m: number) => `${y}-${pad2(m)}`
 
 const EMPTY_MONTH: LedgerMonth = {
   actualRevenue: 0, expectedRevenue: 0, forecastRevenue: 0, actualBonus: 0, forecastBonus: 0,
-  isPast: false, isCurrent: true, events: [],
+  isPast: false, isCurrent: true, deals: [],
 }
 
-/** payment_date for a paid (actual) event, due_date -> billing_date for an open (expected) one. */
+/** payment_date for a paid event, due_date -> billing_date for an open one (the payment rows inside an expanded deal). */
 function eventDisplayDate(e: BonusEvent): string | null {
-  return e.kind === 'actual' ? (e.payment_date ?? e.due_date ?? e.billing_date) : (e.due_date ?? e.billing_date)
+  return e.status === 'paid' ? (e.payment_date ?? e.due_date ?? e.billing_date) : (e.due_date ?? e.billing_date)
+}
+
+const UNKNOWN_REASON_LABEL: Record<BonusDealUnknownReason, string> = {
+  not_invoiced: 'טרם הופק חשבון עסקה',
+  terms_missing: 'תנאי תשלום לא מוגדרים',
+  events_not_generated: 'אירועי חיוב טרם נוצרו',
+  no_payment_date: 'חסר תאריך תשלום',
 }
 
 export default function Bonuses() {
@@ -152,8 +162,9 @@ export default function Bonuses() {
     hasModel: boolean
     ledger: Map<string, LedgerMonth>
     month: LedgerMonth
-    allEvents: BonusEvent[]
-    noDateEvents: BonusEvent[]
+    deals: BonusDeal[]
+    unknownDeals: BonusDeal[]
+    partialDeals: BonusDeal[]
     excludedNotInvoicedTotal: number
     excludedTermsMissingTotal: number
     progress: ReturnType<typeof actualForecastProgress>
@@ -169,33 +180,35 @@ export default function Bonuses() {
       if (!p.bonus_model) {
         return {
           profile: p, hasModel: false, ledger: new Map(), month: EMPTY_MONTH,
-          allEvents: mine, noDateEvents: [], excludedNotInvoicedTotal: 0, excludedTermsMissingTotal: 0,
+          deals: [], unknownDeals: [], partialDeals: [], excludedNotInvoicedTotal: 0, excludedTermsMissingTotal: 0,
           progress: actualForecastProgress(0, 0, []),
           sortRevenue: 0, sortBonus: 0, reachedTier: false,
         }
       }
-      const ledger = buildBonusLedger(mine, tiers, todayKey)
+      // Repair 27: the unit is the DEAL — counted only when fully collected, in the month of its last payment.
+      const deals = buildBonusDeals(mine, todayKey)
+      const ledger = buildLedgerFromDeals(deals, tiers, todayKey)
       const month = ledger.get(selectedKey) ?? EMPTY_MONTH
       const progress = actualForecastProgress(month.actualRevenue, month.forecastRevenue, tiers)
-      const noDateEvents = mine.filter((e) => e.monthKey == null)
-      // Repair 18/19: open events excluded from every forecast — either
-      // because no חשבון עסקה has been issued yet (the common, normal case
-      // since Repair 19's B3.1) or because the client's payment terms are
-      // missing/unparseable (Repair 18) — reported per-reason, never
-      // silently dropped (§3.5).
-      const excludedNotInvoicedTotal = mine
-        .filter((e) => e.excludedReason === 'not_invoiced')
-        .reduce((s, e) => s + e.net, 0)
-      const excludedTermsMissingTotal = mine
-        .filter((e) => e.excludedReason === 'terms_missing')
-        .reduce((s, e) => s + e.net, 0)
+      // Completion month unknown (never invented) — listed per reason, never silently dropped.
+      const unknownDeals = deals.filter((d) => d.kind === 'unknown')
+      const remaining = (d: BonusDeal) => Math.round((d.dealIncome - d.collectedIncome) * 100) / 100
+      const excludedNotInvoicedTotal = unknownDeals
+        .filter((d) => d.unknownReason === 'not_invoiced')
+        .reduce((s, d) => s + remaining(d), 0)
+      const excludedTermsMissingTotal = unknownDeals
+        .filter((d) => d.unknownReason === 'terms_missing')
+        .reduce((s, d) => s + remaining(d), 0)
+      // Partially collected deals NOT forecast for the selected month — so a paid advance never "disappears".
+      const partialDeals = deals.filter((d) => d.status === 'partial' && d.completionMonthKey !== selectedKey)
       return {
         profile: p,
         hasModel: true,
         ledger,
         month,
-        allEvents: mine,
-        noDateEvents,
+        deals,
+        unknownDeals,
+        partialDeals,
         excludedNotInvoicedTotal,
         excludedTermsMissingTotal,
         progress,
@@ -370,7 +383,8 @@ function EmployeeCard({
     hasModel: boolean
     ledger: Map<string, LedgerMonth>
     month: LedgerMonth
-    noDateEvents: BonusEvent[]
+    unknownDeals: BonusDeal[]
+    partialDeals: BonusDeal[]
     excludedNotInvoicedTotal: number
     excludedTermsMissingTotal: number
     progress: ReturnType<typeof actualForecastProgress>
@@ -384,7 +398,10 @@ function EmployeeCard({
   loadingTxnId: string | null
 }) {
   const [dealsSort, setDealsSort] = useState<SortState | null>(null)
-  const [noDateOpen, setNoDateOpen] = useState(false)
+  const [unknownOpen, setUnknownOpen] = useState(false)
+  const [partialOpen, setPartialOpen] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpanded = (id: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const toggleDealsSort = (key: string) => setDealsSort((prev) => toggleSortKey(prev ?? { key, dir: 'desc' }, key))
 
   const initial = (row.profile.full_name || '?').charAt(0)
@@ -470,28 +487,29 @@ function EmployeeCard({
   }, [ledger, periodYear])
 
   const dealsRows = useMemo(() => {
-    const withDate = month.events.map((e) => ({ ...e, _date: eventDisplayDate(e) }))
+    const withKey = month.deals.map((d) => ({ ...d, _date: d.completionDate }))
     if (!dealsSort) {
-      // Default grouping: paid (actual) first, then expected — each by date desc.
-      return withDate.sort((a, b) => {
+      // Default grouping: completed (actual) first, then expected — each by completion date desc.
+      return withKey.sort((a, b) => {
         if (a.kind !== b.kind) return a.kind === 'actual' ? -1 : 1
         return (b._date ?? '').localeCompare(a._date ?? '')
       })
     }
-    const getValue = (e: typeof withDate[number], key: string): unknown => {
+    const getValue = (d: typeof withKey[number], key: string): unknown => {
       switch (key) {
-        case 'client_name': return e.client_name
-        case 'position': return [e.position_name, e.candidate_name].filter(Boolean).join(' / ')
-        case 'description': return e.description
-        case 'net': return e.net
-        case 'status': return e.status
-        case 'date': return e._date
-        case 'kind': return e.kind === 'actual' ? 'א' : 'ת'
+        case 'client_name': return d.client_name
+        case 'position_number': return d.position_number
+        case 'position': return [d.position_name, d.candidate_name].filter(Boolean).join(' / ')
+        case 'dealIncome': return d.dealIncome
+        case 'collected': return d.collectedIncome
+        case 'status': return d.status
+        case 'date': return d._date
+        case 'kind': return d.kind === 'actual' ? 'א' : 'ת'
         default: return null
       }
     }
-    return [...withDate].sort((a, b) => compareBySort(a, b, dealsSort, getValue))
-  }, [month.events, dealsSort])
+    return [...withKey].sort((a, b) => compareBySort(a, b, dealsSort, getValue))
+  }, [month.deals, dealsSort])
 
   return (
     <Card>
@@ -518,16 +536,16 @@ function EmployeeCard({
       <CardContent className="space-y-4">
         {/* 1. Stat row — actual vs forecast, mandatory distinction (§2.3) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-          <Stat label="הכנסה בפועל" value={ILS.format(month.actualRevenue)} />
+          <Stat label="עסקאות שנגבו במלואן" value={ILS.format(month.actualRevenue)} />
           <Stat label="בונוס בפועל" value={ILS.format(month.actualBonus)} highlight />
           {isPastPeriod ? (
             <>
-              <Stat label="הכנסה צפויה (תחזית)" value="—" note="חודש סגור" />
+              <Stat label="צפוי להיגבות במלואו (תחזית)" value="—" note="חודש סגור" />
               <Stat label="בונוס צפוי (תחזית)" value="—" note="חודש סגור" />
             </>
           ) : (
             <>
-              <Stat label="הכנסה צפויה (תחזית)" value={ILS.format(month.forecastRevenue)} forecast />
+              <Stat label="צפוי להיגבות במלואו (תחזית)" value={ILS.format(month.forecastRevenue)} forecast />
               <Stat label="בונוס צפוי (תחזית)" value={ILS.format(month.forecastBonus)} forecast />
             </>
           )}
@@ -570,7 +588,7 @@ function EmployeeCard({
           </p>
         )}
 
-        {/* 4. Deals table — replaces the old tier table */}
+        {/* 4. Deals table (Repair 27) — ONE ROW PER DEAL, counted only when fully collected */}
         <div className="space-y-2">
           <p className="text-xs font-semibold text-purple-700">עסקאות בתקופה</p>
           {dealsRows.length === 0 ? (
@@ -581,82 +599,151 @@ function EmployeeCard({
                 <TableHeader>
                   <TableRow>
                     <SortableHead col="client_name" label="לקוח" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="position_number" label="מס משרה" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="position" label="משרה / מועמד" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
-                    <SortableHead col="description" label="תיאור" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
-                    <SortableHead col="net" label="הכנסה" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="dealIncome" label="שווי עסקה (נטו)" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="collected" label="נגבה עד כה" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="status" label="סטטוס" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
-                    <SortableHead col="date" label="תאריך" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
+                    <SortableHead col="date" label="תאריך השלמה" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                     <SortableHead col="kind" label="סוג" sort={dealsSort ?? { key: '', dir: 'desc' }} onToggle={toggleDealsSort} className="text-xs" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {dealsRows.map((e) => (
-                    <TableRow
-                      key={e.id}
-                      className={`cursor-pointer hover:bg-purple-50/60 ${loadingTxnId === e.transaction_id ? 'opacity-50' : ''}`}
-                      onClick={() => onOpenTransaction(e.transaction_id)}
-                    >
-                      <TableCell className="text-xs">{e.client_name ?? '—'}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {[e.position_name, e.candidate_name].filter(Boolean).join(' / ') || '—'}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground max-w-32 truncate">{e.description ?? '—'}</TableCell>
-                      <TableCell className="text-xs font-medium">{ILS.format(e.net)}</TableCell>
-                      <TableCell className="text-xs">
-                        <Badge variant="outline" className={`${STATUS_BADGE[e.status] ?? ''} text-[10px]`}>
-                          {STATUS_LABEL[e.status] ?? e.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs"><DateCell value={e._date} /></TableCell>
-                      <TableCell className="text-xs">
-                        <div className="flex gap-1 items-center">
-                          <Badge
-                            variant="outline"
-                            className={`text-[10px] ${e.kind === 'actual' ? 'bg-purple-600 text-white border-purple-600' : 'bg-purple-100 text-purple-700 border-purple-300'}`}
-                          >
-                            {e.kind === 'actual' ? 'בפועל' : 'תחזית'}
-                          </Badge>
-                          {e.overdue && (
-                            <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-300">
-                              באיחור
+                  {dealsRows.map((d) => {
+                    const open = expanded.has(d.transaction_id)
+                    return (
+                      <Fragment key={d.transaction_id}>
+                        <TableRow
+                          data-testid="bonus-deal-row"
+                          className={`cursor-pointer hover:bg-purple-50/60 ${loadingTxnId === d.transaction_id ? 'opacity-50' : ''}`}
+                          onClick={() => onOpenTransaction(d.transaction_id)}
+                        >
+                          <TableCell className="text-xs">
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                aria-label={open ? 'הסתר תשלומים' : 'הצג תשלומים'}
+                                aria-expanded={open}
+                                data-testid="bonus-deal-toggle"
+                                className="h-5 w-5 shrink-0 rounded hover:bg-purple-100 flex items-center justify-center"
+                                onClick={(ev) => { ev.stopPropagation(); toggleExpanded(d.transaction_id) }}
+                              >
+                                <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+                              </button>
+                              {d.client_name ?? '—'}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{d.position_number ?? '—'}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {[d.position_name, d.candidate_name].filter(Boolean).join(' / ') || '—'}
+                          </TableCell>
+                          <TableCell className="text-xs font-medium">{ILS.format(d.dealIncome)}</TableCell>
+                          <TableCell className="text-xs">{ILS.format(d.collectedIncome)}</TableCell>
+                          <TableCell className="text-xs">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] ${d.status === 'complete' ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-amber-50 text-amber-700 border-amber-200'}`}
+                            >
+                              {d.status === 'complete' ? 'הושלמה' : 'בגבייה חלקית'}
                             </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          </TableCell>
+                          <TableCell className="text-xs"><DateCell value={d._date} /></TableCell>
+                          <TableCell className="text-xs">
+                            <div className="flex gap-1 items-center">
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] ${d.kind === 'actual' ? 'bg-purple-600 text-white border-purple-600' : 'bg-purple-100 text-purple-700 border-purple-300'}`}
+                              >
+                                {d.kind === 'actual' ? 'בפועל' : 'תחזית'}
+                              </Badge>
+                              {d.overdue && (
+                                <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-300">
+                                  באיחור
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        {open && d.events.map((e) => (
+                          <TableRow key={e.id} data-testid="bonus-deal-payment" className="bg-muted/30 hover:bg-muted/30">
+                            <TableCell colSpan={3} className="text-xs text-muted-foreground pr-8">{e.description ?? '—'}</TableCell>
+                            <TableCell className="text-xs">{ILS.format(e.net)}</TableCell>
+                            <TableCell className="text-xs">
+                              <Badge variant="outline" className={`${STATUS_BADGE[e.status] ?? ''} text-[10px]`}>
+                                {STATUS_LABEL[e.status] ?? e.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell colSpan={2} className="text-xs"><DateCell value={eventDisplayDate(e)} /></TableCell>
+                          </TableRow>
+                        ))}
+                      </Fragment>
+                    )
+                  })}
                 </TableBody>
                 <TableFooter>
                   <TableRow className="bg-purple-50/50">
                     <TableCell colSpan={3} className="text-xs font-semibold text-purple-800">סה&quot;כ</TableCell>
-                    <TableCell colSpan={4} className="text-xs font-semibold text-purple-800">
-                      בפועל: {ILS.format(month.actualRevenue)} · צפוי: {ILS.format(month.expectedRevenue)}
+                    <TableCell colSpan={5} className="text-xs font-semibold text-purple-800">
+                      סה&quot;כ בפועל: {ILS.format(month.actualRevenue)} · סה&quot;כ צפוי: {ILS.format(month.expectedRevenue)}
                     </TableCell>
                   </TableRow>
                 </TableFooter>
               </Table>
             </div>
           )}
-          {row.noDateEvents.length > 0 && (
-            <div className="rounded-md border">
+
+          {selectedKey === currentMonthKey() && row.partialDeals.length > 0 && (
+            <div className="rounded-md border" data-testid="bonus-partial-section">
               <button
                 type="button"
-                onClick={() => setNoDateOpen((o) => !o)}
+                onClick={() => setPartialOpen((o) => !o)}
                 className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/40"
               >
-                <span>ללא תאריך ({row.noDateEvents.length})</span>
-                <ChevronDown className={`w-3 h-3 transition-transform ${noDateOpen ? 'rotate-180' : ''}`} />
+                <span>בגבייה חלקית — לא נספר לבונוס ({row.partialDeals.length})</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${partialOpen ? 'rotate-180' : ''}`} />
               </button>
-              {noDateOpen && (
+              {partialOpen && (
                 <div className="divide-y border-t">
-                  {row.noDateEvents.map((e) => (
+                  {row.partialDeals.map((d) => (
                     <div
-                      key={e.id}
+                      key={d.transaction_id}
                       className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-purple-50/60"
-                      onClick={() => onOpenTransaction(e.transaction_id)}
+                      onClick={() => onOpenTransaction(d.transaction_id)}
                     >
-                      <span className="truncate">{e.client_name ?? '—'} · {[e.position_name, e.candidate_name].filter(Boolean).join(' / ')}</span>
-                      <span className="font-medium shrink-0">{ILS.format(e.net)}</span>
+                      <span className="truncate">{d.client_name ?? '—'} · {[d.position_name, d.candidate_name].filter(Boolean).join(' / ')}</span>
+                      <span className="shrink-0 text-muted-foreground">
+                        נגבה {ILS.format(d.collectedIncome)} · נותר {ILS.format(Math.round((d.dealIncome - d.collectedIncome) * 100) / 100)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {row.unknownDeals.length > 0 && (
+            <div className="rounded-md border" data-testid="bonus-unknown-section">
+              <button
+                type="button"
+                onClick={() => setUnknownOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/40"
+              >
+                <span>ללא צפי השלמה ({row.unknownDeals.length})</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${unknownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {unknownOpen && (
+                <div className="divide-y border-t">
+                  {row.unknownDeals.map((d) => (
+                    <div
+                      key={d.transaction_id}
+                      className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-purple-50/60"
+                      onClick={() => onOpenTransaction(d.transaction_id)}
+                    >
+                      <span className="truncate">{d.client_name ?? '—'} · {[d.position_name, d.candidate_name].filter(Boolean).join(' / ')}</span>
+                      <span className="shrink-0 text-right">
+                        <span className="font-medium">{ILS.format(d.dealIncome)}</span>
+                        <span className="text-muted-foreground"> · {d.unknownReason ? UNKNOWN_REASON_LABEL[d.unknownReason] : ''}</span>
+                      </span>
                     </div>
                   ))}
                 </div>

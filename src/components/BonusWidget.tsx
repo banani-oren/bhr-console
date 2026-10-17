@@ -24,7 +24,7 @@ const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS',
 
 const EMPTY_MONTH: LedgerMonth = {
   actualRevenue: 0, expectedRevenue: 0, forecastRevenue: 0, actualBonus: 0, forecastBonus: 0,
-  isPast: false, isCurrent: true, events: [],
+  isPast: false, isCurrent: true, deals: [],
 }
 
 // Batch 5 Phase B1: small bonus card for the admin dashboard.

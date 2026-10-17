@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { BonusTier } from './types'
+import { toAgorot, fromAgorot, eventIncomeAgorot } from './finance'
 
 // ---------------------------------------------------------------------------
 // Tier math (unchanged — non-cumulative, highest tier reached per month)
@@ -92,47 +93,42 @@ export function actualForecastProgress(
 }
 
 // ---------------------------------------------------------------------------
-// Repair 16 (2026-10-03) — one bonus engine, actual vs. forecast.
+// Repair 27 (2026-10-17/18) — the bonus counts a DEAL only when it is fully
+// collected. Supersedes the per-payment attribution of Repair 16.
 //
-// Business rules confirmed by Oren, 2026-10-03 (see prompts/repair16-bonus-engine.md §2):
+// Oren, verbatim (2026-10-17): "עסקה נספרת רק כשהיא שולמה במלואה, בשווי המלא
+// ובחודש התשלום האחרון."
 //
-// ACTUAL (בפועל): revenue = net (amount - supplier_amount) of billing_events
-// with status = 'paid', for approved transactions, where the employee is the
-// מוביל (transactions.service_lead). Month attribution = the month the money
-// was ACTUALLY received (payment_date) — this REVERSES the 2026-09-13 (D5)
-// rule that attributed by due_date. "בונוס משולם לפי התאריך שבו התקבל הכסף
-// בפועל ... אם התקבל תשלום ב-1/9, הסכום לבונוס ישולם כבר במשכורת ספטמבר."
-// Fallback for a paid event with NULL payment_date (legacy rows): due_date,
-// then billing_date.
+// UNIT = the deal (transaction), not the billing event.
 //
-// FORECAST (תחזית): forecast revenue for month M = actual paid revenue in M
-// + expected revenue in M, where expected = net of every OPEN event
-// (status IN pending/to_bill/billed, approved transactions only) whose
-// due_date falls in M. An open event dated before the first day of the
-// current month is rolled forward into the CURRENT month (flagged overdue)
-// rather than left stranded in a closed past month. Past months are
-// closed: forecast = actual there.
+// ACTUAL (בפועל), approved transactions, employee = מוביל (normalizeLead):
+//   A deal is FULLY COLLECTED when (1) every non-cancelled billing event is
+//   'paid' AND (2) Σ event.amount ≥ net_invoice_amount − ₪1 (guards a גיוס whose
+//   advance is paid but whose split events are not generated yet; skipped when
+//   net_invoice_amount is null/0). Deal value = Σ (amount − supplier_amount) of
+//   its non-cancelled events (finance.ts agorot helpers). Month = the month of
+//   the LATEST payment_date among its events (legacy paid rows with no
+//   payment_date fall back to due_date, then billing_date) — month key from the
+//   date STRING (.slice(0,7)), never new Date().getMonth(). Payroll cut-off is
+//   unchanged: a payment on the last day of a month counts for that month, on the
+//   1st for the next. A partially paid deal contributes ₪0 to every month.
+//   Gates unchanged: unapproved transactions excluded, cancelled events ignored
+//   (a deal whose events are all cancelled is not a deal).
 //
-// Repair 18 (2026-10-04): an open event with NO due_date (the client's
-// payment terms are missing/unparseable — see billingEvents.ts's
-// parsePaymentTermSpec) is EXCLUDED from every month's forecast —
-// `monthKey` stays null and buildBonusLedger already skips null-monthKey
-// events — rather than falling back to billing_date (the system's PLAN,
-// not a real due date). That fallback used to exist here and silently
-// forecast money against a date nobody actually committed to. Excluded
-// events are still returned (`excludedFromForecast: true`) so callers can
-// report the total instead of letting it vanish — see the Bonuses page note.
+// FORECAST (תחזית), same unit: a deal not yet fully collected is expected to
+//   complete in the LATEST of: payment_date of paid events, due_date of open
+//   events. A month before the current one rolls forward to the current month
+//   and the deal is flagged באיחור. If any open event has no due_date (not
+//   invoiced yet, or terms missing — Repair 18/19), OR the deal fails the
+//   coverage guard (events not generated yet), the completion month is UNKNOWN:
+//   the deal is listed under "ללא צפי השלמה" with the reason and excluded from
+//   every month's forecast — a date is never invented. Forecast revenue of
+//   month M = actual (deals completed in M) + deals expected to complete in M,
+//   each at FULL deal value. Past months: forecast = actual.
 //
-// Repair 19 (2026-10-06, Part B3.1/B3.4): due_date is now NULL for EVERY
-// not-yet-invoiced open event too, not just terms-missing ones (a חשבון
-// עסקה must be issued before there's an expected payment date at all) — so
-// `excludedFromForecast` now fires far more often, for a totally normal
-// reason. `excludedReason` distinguishes the two so callers never mislabel
-// "hasn't been invoiced yet" as a payment-terms problem.
-//
-// Month keys are always derived from the 'YYYY-MM-DD' date STRING
-// (`.slice(0, 7)`), never `new Date(...).getMonth()`, to avoid timezone
-// drift turning a payment on the 1st into the previous month.
+// Unchanged: tier math (non-cumulative, highest tier reached, ₪0 below the
+// first), solid purple = בפועל / light purple = תחזית, tiers editable only in
+// Team, actualForecastProgress().
 // ---------------------------------------------------------------------------
 
 export type BonusEventStatus = 'pending' | 'to_bill' | 'billed' | 'paid'
@@ -143,8 +139,10 @@ export type BonusEvent = {
   service_lead: string | null
   client_name: string | null
   position_name: string | null
+  position_number: string | null
   candidate_name: string | null
   service_type: string | null
+  net_invoice_amount: number | null
   description: string | null
   status: BonusEventStatus
   amount: number
@@ -154,17 +152,11 @@ export type BonusEvent = {
   due_date: string | null
   billing_date: string | null
   invoice_date: string | null
-  monthKey: string | null // 'YYYY-MM', per the rules above
+  /** Per-PAYMENT month (income reporting, Repair 16 semantics): paid → payment_date, open → due_date rolled forward. */
+  monthKey: string | null
   kind: 'actual' | 'expected'
   overdue: boolean
-  // true only for an 'expected' event with a billing_date but no due_date —
-  // i.e. excluded from the forecast, as opposed to a genuinely dateless row
-  // (no billing_date either, very rare). See excludedReason for WHY.
   excludedFromForecast: boolean
-  // Repair 19 (2026-10-06): 'not_invoiced' = the normal, common case (no
-  // חשבון עסקה yet — Part B3.1); 'terms_missing' = a חשבון עסקה exists but
-  // the client's payment terms are missing/unparseable (Repair 18). Only
-  // set when excludedFromForecast is true.
   excludedReason?: 'not_invoiced' | 'terms_missing'
 }
 
@@ -179,11 +171,14 @@ export function normalizeLead(name: string | null | undefined): string {
 }
 
 type RawTxn = {
+  id?: string
   service_lead: string | null
   client_name: string | null
   position_name: string | null
   candidate_name: string | null
   service_type: string | null
+  net_invoice_amount: number | string | null
+  custom_fields: Record<string, unknown> | null
   needs_approval: boolean
   approved_at: string | null
 }
@@ -207,10 +202,14 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
   if (!t) return null
   if (t.needs_approval && t.approved_at == null) return null
 
-  const amount = Number(row.amount) || 0
-  const supplierAmount = Number(row.supplier_amount) || 0
-  const net = Math.round((amount - supplierAmount) * 100) / 100
+  const amountAg = toAgorot(row.amount)
+  const supplierAg = toAgorot(row.supplier_amount)
+  const amount = fromAgorot(amountAg)
+  const supplierAmount = fromAgorot(supplierAg)
+  const net = fromAgorot(amountAg - supplierAg)
   const status = row.status as BonusEventStatus // query already excludes 'cancelled'
+  const pn = (t.custom_fields ?? {})['position_number']
+  const contract = t.net_invoice_amount == null || t.net_invoice_amount === '' ? null : Number(t.net_invoice_amount)
 
   const base = {
     id: row.id,
@@ -218,8 +217,10 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
     service_lead: t.service_lead ?? null,
     client_name: t.client_name ?? null,
     position_name: t.position_name ?? null,
+    position_number: pn == null || pn === '' ? null : String(pn),
     candidate_name: t.candidate_name ?? null,
     service_type: t.service_type ?? null,
+    net_invoice_amount: contract != null && Number.isFinite(contract) ? contract : null,
     description: row.description,
     status,
     amount,
@@ -232,14 +233,10 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
   }
 
   if (status === 'paid') {
-    // §2.1 fallback chain for legacy rows with no payment_date. Unaffected
-    // by Repair 18/19 — actual bonus is keyed off payment_date, not terms.
     const dateStr = row.payment_date ?? row.due_date ?? row.billing_date
     return { ...base, monthKey: dateStr ? dateStr.slice(0, 7) : null, kind: 'actual', overdue: false, excludedFromForecast: false }
   }
 
-  // Open event: expected revenue, placed by due_date ONLY (Repair 18 — no
-  // billing_date fallback; that's the system's plan, not a real due date).
   const dateStr = row.due_date
   let monthKey = dateStr ? dateStr.slice(0, 7) : null
   let overdue = false
@@ -255,12 +252,11 @@ function toBonusEvent(row: RawBillingEventRow, todayMonthKey: string): BonusEven
 }
 
 /**
- * Fetches every non-cancelled billing event (paid = actual, open = expected)
- * for approved transactions, joined to the transaction's service_lead/client/
- * position/candidate/service_type. Pass `leadName` to filter server-side (the
- * RecruiterDashboard's own-employee view); omit it to fetch every event
- * app-wide (Bonuses page / BonusWidget), which callers then group per
- * employee client-side via `normalizeLead`.
+ * Fetches every non-cancelled billing event (paid + open) for approved
+ * transactions, joined to the transaction's service_lead/client/position/
+ * candidate/service_type/net_invoice_amount/custom_fields. Pass `leadName` to
+ * filter server-side (RecruiterDashboard); omit it to fetch every event
+ * app-wide (Bonuses page / BonusWidget), grouped per employee client-side.
  */
 export async function fetchBonusEvents(
   supabaseClient: SupabaseClient,
@@ -273,7 +269,7 @@ export async function fetchBonusEvents(
       payment_date, due_date, billing_date, invoice_date,
       transactions!inner (
         service_lead, client_name, position_name, candidate_name, service_type,
-        needs_approval, approved_at
+        net_invoice_amount, custom_fields, needs_approval, approved_at
       )
     `)
     .neq('status', 'cancelled')
@@ -292,6 +288,112 @@ export async function fetchBonusEvents(
     .filter((e): e is BonusEvent => e != null)
 }
 
+// ── Deal layer (Repair 27) ─────────────────────────────────────────────────
+
+export type BonusDealUnknownReason = 'not_invoiced' | 'terms_missing' | 'events_not_generated' | 'no_payment_date'
+
+export type BonusDeal = {
+  transaction_id: string
+  service_lead: string | null
+  client_name: string | null
+  position_name: string | null
+  position_number: string | null
+  candidate_name: string | null
+  service_type: string | null
+  contractAmount: number | null // net_invoice_amount
+  dealIncome: number // Σ net of the deal's non-cancelled events
+  collectedIncome: number // Σ net of its paid events
+  events: BonusEvent[] // the deal's payments, sorted by date
+  status: 'complete' | 'partial' | 'open'
+  completionMonthKey: string | null // actual (complete) or expected (else); null = unknown
+  completionDate: string | null // latest payment_date / expected due_date (dd/MM/yyyy display)
+  kind: 'actual' | 'expected' | 'unknown'
+  overdue: boolean
+  unknownReason?: BonusDealUnknownReason
+}
+
+const eventSortDate = (e: BonusEvent) => (e.status === 'paid' ? (e.payment_date ?? e.due_date ?? e.billing_date) : (e.due_date ?? e.billing_date)) ?? ''
+
+/** Groups events into deals and classifies each per the Repair 27 rules above. */
+export function buildBonusDeals(events: BonusEvent[], todayKey: string): BonusDeal[] {
+  const byTxn = new Map<string, BonusEvent[]>()
+  for (const e of events) {
+    const arr = byTxn.get(e.transaction_id)
+    if (arr) arr.push(e); else byTxn.set(e.transaction_id, [e])
+  }
+
+  const deals: BonusDeal[] = []
+  for (const [transaction_id, evs] of byTxn) {
+    const sorted = [...evs].sort((a, b) => eventSortDate(a).localeCompare(eventSortDate(b)))
+    const first = sorted[0]
+    const amountAg = sorted.reduce((s, e) => s + toAgorot(e.amount), 0)
+    const incomeAg = sorted.reduce((s, e) => s + eventIncomeAgorot(e), 0)
+    const paid = sorted.filter((e) => e.status === 'paid')
+    const open = sorted.filter((e) => e.status !== 'paid')
+    const collectedAg = paid.reduce((s, e) => s + eventIncomeAgorot(e), 0)
+    const contractAg = first.net_invoice_amount != null ? toAgorot(first.net_invoice_amount) : 0
+    const coverageOk = contractAg <= 0 || amountAg >= contractAg - 100 // ₪1 tolerance
+    const allPaid = open.length === 0
+    const complete = allPaid && coverageOk
+
+    const status: BonusDeal['status'] = complete ? 'complete' : paid.length > 0 ? 'partial' : 'open'
+    let completionMonthKey: string | null = null
+    let completionDate: string | null = null
+    let kind: BonusDeal['kind'] = 'unknown'
+    let overdue = false
+    let unknownReason: BonusDealUnknownReason | undefined
+
+    if (complete) {
+      // latest payment month; legacy paid rows with no payment_date fall back to due_date, then billing_date
+      const dates = paid.map((e) => e.payment_date ?? e.due_date ?? e.billing_date).filter((d): d is string => !!d).sort()
+      const last = dates[dates.length - 1] ?? null
+      if (last) {
+        completionMonthKey = last.slice(0, 7)
+        completionDate = last
+        kind = 'actual'
+      } else {
+        unknownReason = 'no_payment_date'
+      }
+    } else if (!coverageOk) {
+      unknownReason = 'events_not_generated'
+    } else if (open.some((e) => !e.due_date)) {
+      unknownReason = open.some((e) => !e.invoice_date) ? 'not_invoiced' : 'terms_missing'
+    } else {
+      const dates = [
+        ...paid.map((e) => e.payment_date ?? e.due_date ?? e.billing_date),
+        ...open.map((e) => e.due_date),
+      ].filter((d): d is string => !!d).sort()
+      const last = dates[dates.length - 1]
+      let key = last.slice(0, 7)
+      completionDate = last
+      if (key < todayKey) { key = todayKey; overdue = true }
+      completionMonthKey = key
+      kind = 'expected'
+    }
+
+    deals.push({
+      transaction_id,
+      service_lead: first.service_lead,
+      client_name: first.client_name,
+      position_name: first.position_name,
+      position_number: first.position_number,
+      candidate_name: first.candidate_name,
+      service_type: first.service_type,
+      contractAmount: first.net_invoice_amount,
+      dealIncome: fromAgorot(incomeAg),
+      collectedIncome: fromAgorot(collectedAg),
+      events: sorted,
+      status,
+      completionMonthKey,
+      completionDate,
+      kind,
+      overdue,
+      unknownReason,
+    })
+  }
+  return deals
+}
+
 export type LedgerMonth = {
   actualRevenue: number
   expectedRevenue: number
@@ -300,44 +402,32 @@ export type LedgerMonth = {
   forecastBonus: number
   isPast: boolean
   isCurrent: boolean
-  events: BonusEvent[]
+  deals: BonusDeal[]
 }
 
-/**
- * Groups events by monthKey and computes actual/expected/forecast revenue +
- * tier bonus for each month present. A month with zero events (for this
- * employee) simply has no entry — callers default to zero/₪0 for those.
- * Sums in agorot integers to avoid float drift, per §3.1.
- */
-export function buildBonusLedger(
-  events: BonusEvent[],
+/** Aggregates DEALS by completion month (agorot integers). Unknown deals have no month and are not here. */
+export function buildLedgerFromDeals(
+  deals: BonusDeal[],
   tiers: BonusTier[],
   todayKey: string,
 ): Map<string, LedgerMonth> {
-  const byMonth = new Map<string, BonusEvent[]>()
-  for (const e of events) {
-    if (!e.monthKey) continue
-    if (!byMonth.has(e.monthKey)) byMonth.set(e.monthKey, [])
-    byMonth.get(e.monthKey)!.push(e)
+  const byMonth = new Map<string, BonusDeal[]>()
+  for (const d of deals) {
+    if (!d.completionMonthKey || d.kind === 'unknown') continue
+    if (!byMonth.has(d.completionMonthKey)) byMonth.set(d.completionMonthKey, [])
+    byMonth.get(d.completionMonthKey)!.push(d)
   }
 
   const result = new Map<string, LedgerMonth>()
-  for (const [monthKey, monthEvents] of byMonth) {
+  for (const [monthKey, monthDeals] of byMonth) {
     const isPast = monthKey < todayKey
     const isCurrent = monthKey === todayKey
+    const actualCents = monthDeals.filter((d) => d.kind === 'actual').reduce((s, d) => s + toAgorot(d.dealIncome), 0)
+    // An expected deal can never land in a past month (roll-forward) — the isPast guard is defensive.
+    const expectedCents = monthDeals.filter((d) => d.kind === 'expected').reduce((s, d) => s + toAgorot(d.dealIncome), 0)
 
-    const actualCents = monthEvents
-      .filter((e) => e.kind === 'actual')
-      .reduce((s, e) => s + Math.round(e.net * 100), 0)
-    // The overdue roll-forward in fetchBonusEvents already guarantees no
-    // 'expected' event can land in a genuinely past month — this filter is
-    // the defensive, not the load-bearing, guarantee of that invariant.
-    const expectedCents = monthEvents
-      .filter((e) => e.kind === 'expected')
-      .reduce((s, e) => s + Math.round(e.net * 100), 0)
-
-    const actualRevenue = actualCents / 100
-    const expectedRevenue = isPast ? 0 : expectedCents / 100
+    const actualRevenue = fromAgorot(actualCents)
+    const expectedRevenue = isPast ? 0 : fromAgorot(expectedCents)
     const forecastRevenue = isPast ? actualRevenue : actualRevenue + expectedRevenue
 
     const actualBonus = calculateBonus(actualRevenue, tiers)
@@ -351,10 +441,19 @@ export function buildBonusLedger(
       forecastBonus,
       isPast,
       isCurrent,
-      events: monthEvents,
+      deals: isPast ? monthDeals.filter((d) => d.kind === 'actual') : monthDeals,
     })
   }
   return result
+}
+
+/** Events → deals → ledger. Public signature unchanged from Repair 16 for the callers. */
+export function buildBonusLedger(
+  events: BonusEvent[],
+  tiers: BonusTier[],
+  todayKey: string,
+): Map<string, LedgerMonth> {
+  return buildLedgerFromDeals(buildBonusDeals(events, todayKey), tiers, todayKey)
 }
 
 /** Convenience accessor — returns an empty-but-valid month when nothing exists yet. */
@@ -368,7 +467,34 @@ export function ledgerMonth(ledger: Map<string, LedgerMonth>, monthKey: string, 
       forecastBonus: 0,
       isPast,
       isCurrent,
-      events: [],
+      deals: [],
     }
   )
+}
+
+// ── Per-PAYMENT income (NOT bonus) ─────────────────────────────────────────
+// RecruiterDashboard's "הכנסה החודש" KPI and 6-month income chart are INCOME
+// figures (money received per payment, by payment_date) — Repair 27 deliberately
+// leaves them unchanged. This is the Repair 16 per-payment aggregation, kept
+// only for those income surfaces.
+export function paymentIncomeByMonth(
+  events: BonusEvent[],
+  todayKey: string,
+): Map<string, { actualRevenue: number; expectedRevenue: number; forecastRevenue: number }> {
+  const out = new Map<string, { a: number; e: number }>()
+  for (const ev of events) {
+    if (!ev.monthKey) continue
+    const cur = out.get(ev.monthKey) ?? { a: 0, e: 0 }
+    const ag = eventIncomeAgorot(ev)
+    if (ev.kind === 'actual') cur.a += ag; else cur.e += ag
+    out.set(ev.monthKey, cur)
+  }
+  const res = new Map<string, { actualRevenue: number; expectedRevenue: number; forecastRevenue: number }>()
+  for (const [k, v] of out) {
+    const isPast = k < todayKey
+    const actualRevenue = fromAgorot(v.a)
+    const expectedRevenue = isPast ? 0 : fromAgorot(v.e)
+    res.set(k, { actualRevenue, expectedRevenue, forecastRevenue: isPast ? actualRevenue : actualRevenue + expectedRevenue })
+  }
+  return res
 }

@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
-import { fetchBonusEvents, buildBonusLedger, currentMonthKey, actualForecastProgress, type BonusEvent } from '@/lib/bonus'
+import { fetchBonusEvents, buildBonusLedger, paymentIncomeByMonth, currentMonthKey, actualForecastProgress, type BonusEvent } from '@/lib/bonus'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
@@ -50,9 +50,9 @@ const STATUS_BADGE: Record<string, string> = {
 }
 
 // 6 calendar months ending at todayKey, actual (paid, by payment_date) revenue
-// per month — sourced from the shared ledger, so this chart can never drift
-// from the hero card's own numbers.
-function buildRecent6Months(ledger: Map<string, import('@/lib/bonus').LedgerMonth>, todayKey: string) {
+// per month. Repair 27: this is INCOME (per payment, paymentIncomeByMonth) — NOT
+// the deal-based bonus ledger — and is deliberately unchanged.
+function buildRecent6Months(ledger: Map<string, { actualRevenue: number }>, todayKey: string) {
   const [ty, tm] = todayKey.split('-').map(Number)
   const out: { label: string; revenue: number }[] = []
   for (let i = 5; i >= 0; i--) {
@@ -77,12 +77,16 @@ export default function RecruiterDashboard() {
 
   const tiers = useMemo(() => profile?.bonus_model?.tiers ?? [], [profile?.bonus_model])
   const ledger = useMemo(() => buildBonusLedger(myEvents, tiers, todayKey), [myEvents, tiers, todayKey])
+  // Repair 27: the bonus hero follows the deal rule (a deal counts only when fully collected);
+  // the income KPI + 6-month chart stay per-payment income.
   const month = ledger.get(todayKey) ?? {
     actualRevenue: 0, expectedRevenue: 0, forecastRevenue: 0, actualBonus: 0, forecastBonus: 0,
-    isPast: false, isCurrent: true, events: [],
+    isPast: false, isCurrent: true, deals: [],
   }
-  const monthRevenue = month.actualRevenue
+  const bonusBasisRevenue = month.actualRevenue
   const monthForecastRevenue = month.forecastRevenue
+  const incomeLedger = useMemo(() => paymentIncomeByMonth(myEvents, todayKey), [myEvents, todayKey])
+  const monthRevenue = incomeLedger.get(todayKey)?.actualRevenue ?? 0
 
   const monthEventCount = useMemo(
     () => myEvents.filter((ev) => (ev.billing_date ?? '').slice(0, 7) === todayKey).length,
@@ -98,7 +102,7 @@ export default function RecruiterDashboard() {
   // old calcBonusTier fell back to the lowest tier's bonus with `?? sorted[0]`
   // even when revenue hadn't reached it — showing e.g. ₪800 on ₪0 revenue).
   const { currentTier, nextTier, actualPct, forecastPct, amountToNext } =
-    actualForecastProgress(monthRevenue, monthForecastRevenue, tiers)
+    actualForecastProgress(bonusBasisRevenue, monthForecastRevenue, tiers)
   // Does the forecast reach a higher tier than the actual one?
   const forecastTier = useMemo(() => {
     const sorted = [...tiers].sort((a, b) => a.min - b.min)
@@ -111,7 +115,7 @@ export default function RecruiterDashboard() {
     return fIdx >= 0 && sorted[fIdx].min !== curMin ? sorted[fIdx] : null
   }, [tiers, monthForecastRevenue, currentTier])
 
-  const monthlyRevenue = useMemo(() => buildRecent6Months(ledger, todayKey), [ledger, todayKey])
+  const monthlyRevenue = useMemo(() => buildRecent6Months(incomeLedger, todayKey), [incomeLedger, todayKey])
 
   const recent5 = useMemo(() => {
     return [...myEvents]
@@ -169,7 +173,7 @@ export default function RecruiterDashboard() {
                   </div>
                   <div className="flex justify-between text-xs text-purple-900/80">
                     <span>{ILS.format(currentTier?.min ?? 0)}</span>
-                    <span className="font-medium">הכנסה החודש: {ILS.format(monthRevenue)}</span>
+                    <span className="font-medium">נגבו במלואן החודש: {ILS.format(bonusBasisRevenue)}</span>
                     <span>{ILS.format(nextTier.min)}</span>
                   </div>
                   <p className="text-sm text-purple-900 font-medium">
@@ -182,12 +186,13 @@ export default function RecruiterDashboard() {
               ) : currentTier ? (
                 <p className="text-sm text-purple-900 font-medium">הגעת למדרגה המקסימלית! 🎉</p>
               ) : (
-                <p className="text-sm text-purple-900/80">טרם הגעת למדרגה הראשונה החודש. הכנסה החודש: {ILS.format(monthRevenue)}</p>
+                <p className="text-sm text-purple-900/80">טרם הגעת למדרגה הראשונה החודש. נגבו במלואן החודש: {ILS.format(bonusBasisRevenue)}</p>
               )}
             </div>
           ) : (
             <p className="text-sm text-purple-900/80">המנהל עדיין לא הגדיר מודל בונוס.</p>
           )}
+          <p className="text-xs text-purple-700/70">בונוס נספר על עסקאות שנגבו במלואן</p>
         </CardContent>
       </Card>
 
