@@ -15,6 +15,7 @@ import {
   toLocalInputValue,
   type AttendancePair,
 } from '@/lib/attendance'
+import RecruiterAttendanceMonth from '@/components/RecruiterAttendanceMonth'
 import { DateInput } from '@/components/ui/date-input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -57,6 +58,9 @@ export default function Attendance() {
   const queryClient = useQueryClient()
   const today = todayIsrael()
   const canReport = profile?.role === 'admin' || profile?.role === 'administration'
+  // Repair 32: a recruiter corrects her own reports directly, in the current month only (month table below);
+  // the edit-request flow is for admin/administration.
+  const isRecruiter = profile?.role === 'recruiter'
 
   const [saving, setSaving] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -235,11 +239,13 @@ export default function Attendance() {
                       <span className="text-purple-800 font-semibold text-xs mr-auto ml-2">
                         {pair.open ? '' : formatHours(pair.hours) + 'ש\''}
                       </span>
-                      <RequestEditButton
-                        entry={pair.outEntry ?? pair.inEntry}
-                        profileId={profile!.id}
-                        onSubmitted={() => {/* no invalidation needed for today view */}}
-                      />
+                      {!isRecruiter && (
+                        <RequestEditButton
+                          entry={pair.outEntry ?? pair.inEntry}
+                          profileId={profile!.id}
+                          onSubmitted={() => {/* no invalidation needed for today view */}}
+                        />
+                      )}
                     </div>
                     {pair.outEntry?.notes && (
                       <p className="text-xs text-muted-foreground truncate">{pair.outEntry.notes}</p>
@@ -254,6 +260,9 @@ export default function Attendance() {
 
       {/* ── Admin pending edit requests ────────────────────────────────── */}
       {profile?.role === 'admin' && <PendingEditRequests />}
+
+      {/* ── Recruiter: her own reports by month (Repair 32) ───────────── */}
+      {isRecruiter && <RecruiterAttendanceMonth />}
 
       {/* ── Report (admin + administration) ────────────────────────────── */}
       {canReport && <AttendanceReport today={today} />}

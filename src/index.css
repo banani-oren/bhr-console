@@ -83,6 +83,32 @@
   --sidebar-ring: oklch(0.45 0.2 295);
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, monospace;
+  /* Repair 32 (D2) — recruiter-portal bonus statuses. Admin/Bonuses keep the purple rule. */
+  --bonus-locked: #059669;          /* מובטח: solid emerald (fills, bars, swatches) */
+  --bonus-locked-bg: #d1fae5;
+  --bonus-locked-text: #065f46;     /* AA text on --bonus-locked-bg and on white */
+  --bonus-expected: #d97706;        /* צפוי: amber, always drawn striped */
+  --bonus-expected-bg: #fef3c7;
+  --bonus-expected-text: #92400e;
+  --bonus-estimate: #6b7280;        /* הערכה: grey, dashed outline */
+  --bonus-estimate-text: #4b5563;
+}
+
+.dark {
+  --bonus-locked: #34d399;
+  --bonus-locked-bg: #064e3b;
+  --bonus-locked-text: #a7f3d0;
+  --bonus-expected: #fbbf24;
+  --bonus-expected-bg: #422006;
+  --bonus-expected-text: #fde68a;
+  --bonus-estimate: #9ca3af;
+  --bonus-estimate-text: #d1d5db;
+}
+
+/* Diagonal stripe = צפוי (colour is never the only carrier: every use also carries a text label). */
+.bonus-stripes {
+  background-color: var(--bonus-expected-bg);
+  background-image: repeating-linear-gradient(135deg, var(--bonus-expected) 0 2px, transparent 2px 9px);
 }
 
 @layer base {

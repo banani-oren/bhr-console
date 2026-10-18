@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { addBusinessDays } from '@/lib/ilCalendar'
 import type { BillingEvent, PaymentSplit } from '@/lib/types'
 
 /**
@@ -9,10 +10,9 @@ import type { BillingEvent, PaymentSplit } from '@/lib/types'
  *                (שוטף, שוטף+N, bare integer N) — unchanged since Repair 18.
  *   'business' — the reference date + N business days, Sunday-Thursday
  *                (מיידי = 5 business days — Oren, 2026-10-06: "לתשלום מיידי
- *                אומר שהתשלום יתקבל בתוך 5 ימי עסקים"). Israeli public
- *                holidays are NOT handled — a holiday inside the window
- *                still counts as a business day. Known, dated limitation;
- *                do not attempt a holiday calendar without a new decision.
+ *                אומר שהתשלום יתקבל בתוך 5 ימי עסקים"). Since Repair 32 (2026-10-19)
+ *                a business day is a legal Israeli workday: Sunday–Thursday and not an official
+ *                non-working day (src/lib/ilCalendar.ts / table il_non_working_days).
  *
  * Matched pair with `bhr_payment_term_spec()` in
  * `20261006_business_days_and_event_index.sql` — change both together or
@@ -53,21 +53,11 @@ export function addDays(iso: string, days: number): string {
 }
 
 /**
- * N business days (Sunday-Thursday) after an ISO "YYYY-MM-DD" date, computed
- * in UTC to avoid local-vs-UTC drift. Matched pair with the SQL
- * `bhr_add_business_days()` — same Sun-Thu week, same "holidays not
- * handled" limitation.
+ * N business days after an ISO "YYYY-MM-DD" date — Israeli workdays (Sun–Thu, minus the official
+ * non-working days). Lives in ilCalendar.ts; re-exported here. Matched pair with the SQL
+ * `bhr_add_business_days()` (Repair 32).
  */
-export function addBusinessDays(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`)
-  let remaining = days
-  while (remaining > 0) {
-    d.setUTCDate(d.getUTCDate() + 1)
-    const dow = d.getUTCDay() // 0=Sunday .. 6=Saturday
-    if (dow !== 5 && dow !== 6) remaining -= 1
-  }
-  return d.toISOString().slice(0, 10)
-}
+export { addBusinessDays }
 
 /**
  * Last calendar day of the month of an ISO "YYYY-MM-DD" date, computed in UTC
@@ -86,7 +76,7 @@ export function endOfMonth(iso: string): string {
  * Calculates the expected payment date (תאריך תשלום צפוי) from the real
  * invoice date (תאריך הפקה) and the client's parsed payment-term spec:
  * - 'eom'      — advance to the last day of the invoice month, then add N days
- * - 'business' — add N business days (Sunday-Thursday) directly
+ * - 'business' — add N Israeli workdays directly
  *
  * Example ('eom'): invoice 11 May 2026, days=30 → end of May (31 May) + 30 = 30 June 2026
  * Example ('business'): invoice Wed 7 Oct 2026, days=5 → 14 Oct 2026 (Oren's worked example, 2026-10-06)

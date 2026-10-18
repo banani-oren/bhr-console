@@ -58,9 +58,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION bhr_add_business_days(date, integer) IS
-  'N business days (Sun-Thu) after d. Israeli public holidays are NOT '
-  'handled (a holiday inside the window still counts as a business day) — '
-  'a known, dated limitation (Repair 19, 2026-10-06). Matched pair with '
+  'N business days (Sun-Thu) after d. [Repair 32: holidays ARE handled since 20261020_il_working_days.sql, '
+  'which replaced this body; text kept for history.] Matched pair with '
   'src/lib/billingEvents.ts''s addBusinessDays().';
 
 DO $$ BEGIN

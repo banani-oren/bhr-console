@@ -4,8 +4,11 @@ import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { jerusalemYearMonth } from '@/lib/finance'
-import type { BonusOverview } from '@/lib/bonusOverview'
-import type { Transaction } from '@/lib/types'
+import type { BonusOverview, ExpectedDealRef } from '@/lib/bonusOverview'
+import type { AttendanceLog, Transaction } from '@/lib/types'
+import { buildMonthDays, monthTotals, shiftMonthKey } from '@/lib/attendanceMonth'
+import { addCalendarDays, expectedHours } from '@/lib/ilCalendar'
+import { formatHours } from '@/lib/attendance'
 import TransactionDialog from '@/components/TransactionDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,39 +29,33 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from 'recharts'
-import { Briefcase, Trophy, Clock, CalendarX, Pencil } from 'lucide-react'
+import { Briefcase, Trophy, Clock, CalendarX, CalendarCheck, Check, Hourglass, Pencil } from 'lucide-react'
 
-// Repair 31 — the recruiter dashboard shows her deals, her hours and a live, HONEST bonus. No
-// accounting data: no revenue, amounts, invoices, payments or collection wording (Oren,
-// 2026-10-18). The bonus rule is unchanged (Repair 27: a deal counts only when fully paid, at full
-// value, in the month of its last payment); only the presentation changed. Numbers come from the
-// my-bonus-overview Edge Function (same engine as bonus.ts) — amounts and deal COUNTS only.
+// Repair 31 — the recruiter dashboard shows her deals, her attendance and a live, HONEST bonus. No
+// accounting data: no revenue, amounts, invoices, payments or collection wording (Oren, 2026-10-18).
+// The bonus rule is unchanged (Repair 27: a deal counts only when fully paid, at full value, in the
+// month of its last payment); numbers come from the my-bonus-overview Edge Function (same engine as
+// bonus.ts) — bonus amounts and deal COUNTS only.
+//
+// Repair 32 (Oren, 2026-10-19): the bonus hero is the core of the page. Three statuses, each ALWAYS
+// labelled — מובטח (emerald, solid), צפוי (amber, striped), הערכה (grey, dashed) — and NO conditional
+// wording ("אם", "במידה", "בהנחה") anywhere next to a bonus number. This overrides the purple rule of
+// CLAUDE.md for the recruiter portal only (Admin / Bonuses.tsx keep purple).
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 const NUM = new Intl.NumberFormat('he-IL')
 const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר']
 const HE_MONTHS_SHORT = ['ינו', 'פבר', 'מרץ', 'אפר', 'מאי', 'יוני', 'יולי', 'אוג', 'ספט', 'אוק', 'נוב', 'דצמ']
-const LOCKED = '#7c3aed'
-const EXPECTED = '#c4b5fd'
+const LOCKED = 'var(--bonus-locked)'
+const EXPECTED = 'var(--bonus-expected)'
+const MAX_TILES = 12
 
 const monthName = (key: string) => HE_MONTHS[Number(key.slice(5)) - 1]
 const dealsWord = (n: number) => (n === 1 ? 'עסקה' : 'עסקאות')
 
 const isoMs = (iso: string) => Date.parse(iso + 'T00:00:00Z')
 const daysBetween = (fromIso: string, toIso: string) => Math.max(0, Math.round((isoMs(toIso) - isoMs(fromIso)) / 86_400_000))
-
-/** Sunday–Thursday workdays from the 1st of the month up to and including `lastIso` that are not in `have`. */
-function missingWorkdays(firstIso: string, lastIso: string, have: Set<string>): number {
-  let n = 0
-  for (let ms = isoMs(firstIso); ms <= isoMs(lastIso); ms += 86_400_000) {
-    const d = new Date(ms)
-    const dow = d.getUTCDay() // 0 = Sunday … 6 = Saturday
-    if (dow >= 0 && dow <= 4 && !have.has(d.toISOString().slice(0, 10))) n += 1
-  }
-  return n
-}
 
 export default function RecruiterDashboard() {
   const { profile } = useAuth()
@@ -88,40 +85,31 @@ export default function RecruiterDashboard() {
     },
   })
 
-  const hoursQ = useQuery<number>({
-    queryKey: ['recruiter-hours-month', profile?.id, monthKey],
+  // "שעות החודש" = ATTENDANCE hours (Repair 32, D4) — the old card summed hours_log (client hours), which a
+  // recruiter who only reports attendance never fills, so it read a bare 0. Same month-days helper as /attendance.
+  const attendanceQ = useQuery<AttendanceLog[]>({
+    queryKey: ['recruiter-attendance-month', profile?.id, monthKey],
     enabled: !!profile?.id,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('hours_log')
-        .select('hours')
-        .eq('profile_id', profile!.id)
-        .eq('month', month)
-        .eq('year', year)
-      if (error) throw error
-      return (data ?? []).reduce((s, r) => s + (Number((r as { hours: number | string }).hours) || 0), 0)
-    },
-  })
-
-  const attendanceQ = useQuery<number>({
-    queryKey: ['recruiter-attendance-missing', profile?.id, monthKey, today],
-    enabled: !!profile?.id,
-    queryFn: async () => {
-      if (today <= firstOfMonth) return 0 // nothing to check before the 2nd of the month
-      const yesterday = new Date(isoMs(today) - 86_400_000).toISOString().slice(0, 10)
       const { data, error } = await supabase
         .from('attendance_log')
-        .select('work_date')
+        .select('*')
         .eq('profile_id', profile!.id)
         .gte('work_date', firstOfMonth)
-        .lte('work_date', yesterday)
+        .lt('work_date', shiftMonthKey(monthKey, 1) + '-01')
+        .order('logged_at', { ascending: true })
       if (error) throw error
-      const have = new Set((data ?? []).map((r) => (r as { work_date: string }).work_date))
-      return missingWorkdays(firstOfMonth, yesterday, have)
+      return (data ?? []) as AttendanceLog[]
     },
   })
 
+  const monthDays = useMemo(() => buildMonthDays(monthKey, attendanceQ.data ?? [], today), [attendanceQ.data, monthKey, today])
+  const totals = useMemo(() => monthTotals(monthDays), [monthDays])
+  const yesterday = addCalendarDays(today, -1)
+  const expectedToDate = today > firstOfMonth ? expectedHours(firstOfMonth, yesterday) : 0
+
   const deals = useMemo(() => dealsQ.data ?? [], [dealsQ.data])
+  const dealsById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals])
   const openDeals = useMemo(
     () =>
       deals
@@ -134,7 +122,7 @@ export default function RecruiterDashboard() {
 
   const ov = overviewQ.data
 
-  // Chart: past months = solid bar; current + future = locked solid + expected light.
+  // Chart: past months = solid emerald; current + future = emerald (מובטח) + striped amber (צפוי) on top.
   const chartData = useMemo(() => {
     if (!ov) return []
     return ov.months.map((m) => {
@@ -150,43 +138,88 @@ export default function RecruiterDashboard() {
     })
   }, [ov, monthKey])
 
-  // "בדרך": expected deals grouped by the month they will count in.
-  const onTheWay = useMemo(
-    () => (ov ? ov.months.filter((m) => m.month >= monthKey && m.expected_deals_count > 0) : []),
-    [ov, monthKey],
-  )
-
   const openAdd = () => { setEditing(null); setDialogOpen(true) }
   const openEdit = (t: Transaction) => { setEditing(t); setDialogOpen(true) }
+
+  const hoursLoading = attendanceQ.isLoading
+  const noHours = totals.hours <= 0
 
   return (
     <div className="p-6 space-y-6" dir="rtl">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">דשבורד</h1>
 
-      <BonusHero overviewQ={overviewQ} monthKey={monthKey} onTheWay={onTheWay} />
+      <BonusHero
+        overviewQ={overviewQ}
+        monthKey={monthKey}
+        onAddDeal={openAdd}
+        onOpenDeal={(ref) => { const t = dealsById.get(ref.deal_id); if (t) openEdit(t) }}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard title="העסקאות הפתוחות שלי" icon={<Briefcase size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(openDeals.length)} testId="kpi-open-deals" />
-        <KpiCard title="השמות החודש" icon={<Trophy size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(closedThisMonth)} testId="kpi-closed-month" />
-        <KpiCard title="שעות החודש" icon={<Clock size={18} className="text-purple-600" />} value={hoursQ.isLoading ? '…' : (hoursQ.data ?? 0).toFixed(1)} testId="kpi-hours" />
-        {(attendanceQ.data ?? 0) > 0 && (
-          <Link to="/attendance" className="block" data-testid="kpi-missing-attendance">
-            <Card className="h-full border-amber-300 bg-amber-50/60 hover:bg-amber-50 transition-colors">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-medium text-amber-800">חסרי נוכחות</CardTitle>
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100">
-                    <CalendarX size={18} className="text-amber-700" />
-                  </span>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold leading-none text-amber-900">{NUM.format(attendanceQ.data ?? 0)}</p>
-                <p className="text-xs text-amber-800/80 mt-1">ימי עבודה החודש ללא דיווח · לדיווח</p>
-              </CardContent>
-            </Card>
-          </Link>
-        )}
+        <KpiCard title="נסגרו החודש" icon={<Trophy size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(closedThisMonth)} testId="kpi-closed-month" />
+
+        <Card data-testid="kpi-hours">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium text-muted-foreground">שעות החודש</CardTitle>
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50"><Clock size={18} className="text-purple-600" /></span>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {hoursLoading ? (
+              <p className="text-2xl font-bold leading-none">…</p>
+            ) : attendanceQ.isError ? (
+              <p className="text-sm text-destructive">שגיאה בטעינת הנוכחות</p>
+            ) : noHours ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium" data-testid="kpi-hours-empty">טרם דווחו שעות החודש</p>
+                <Link to="/attendance" className="inline-block rounded-md border border-purple-300 px-2.5 py-1 text-xs font-medium text-purple-700 hover:bg-purple-50">לדיווח נוכחות</Link>
+              </div>
+            ) : (
+              <>
+                <p className="text-2xl font-bold leading-none">{formatHours(Math.round(totals.hours * 10) / 10)}</p>
+                {expectedToDate > 0 && (
+                  <p className="text-xs text-muted-foreground mt-1" data-testid="kpi-hours-expected">
+                    מתוך {formatHours(expectedToDate)} שעות צפויות עד היום
+                  </p>
+                )}
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ימי נוכחות חסרים — always visible; the link lands on exactly the missing dates (Repair 32 C.2) */}
+        <Link
+          to={totals.missingDays > 0 ? `/attendance?month=${monthKey}&missing=1` : `/attendance?month=${monthKey}`}
+          className="block"
+          data-testid="kpi-missing-attendance"
+        >
+          <Card className={`h-full transition-colors ${totals.missingDays > 0 ? 'border-amber-300 bg-amber-50/60 hover:bg-amber-50' : 'hover:bg-muted/40'}`}>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className={`text-sm font-medium ${totals.missingDays > 0 ? 'text-amber-800' : 'text-muted-foreground'}`}>ימי נוכחות חסרים</CardTitle>
+                <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${totals.missingDays > 0 ? 'bg-amber-100' : 'bg-purple-50'}`}>
+                  {totals.missingDays > 0 ? <CalendarX size={18} className="text-amber-700" /> : <CalendarCheck size={18} className="text-purple-600" />}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {attendanceQ.isLoading ? (
+                <p className="text-2xl font-bold leading-none">…</p>
+              ) : totals.missingDays > 0 ? (
+                <>
+                  <p className="text-2xl font-bold leading-none text-amber-900" data-testid="kpi-missing-count">{NUM.format(totals.missingDays)}</p>
+                  <p className="text-xs text-amber-800/80 mt-1">ימי עבודה החודש ללא דיווח · לדיווח</p>
+                </>
+              ) : (
+                <p className="flex items-center gap-1.5 text-base font-semibold" data-testid="kpi-missing-ok">
+                  <Check size={18} style={{ color: LOCKED }} aria-hidden /> הכול מדווח
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </Link>
       </div>
 
       <Card>
@@ -199,20 +232,28 @@ export default function RecruiterDashboard() {
           ) : overviewQ.isError || !ov ? (
             <p className="text-sm text-destructive py-10 text-center">שגיאה בטעינת נתוני הבונוס.</p>
           ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={chartData} margin={{ top: 4, right: 4, left: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={(v: number) => ILS.format(v)} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64} />
-                <Tooltip content={<BonusTooltip />} cursor={{ fill: 'rgba(124,58,237,0.08)' }} />
-                <Legend
-                  formatter={(v: string) => (v === 'locked' ? 'נעול' : 'צפוי')}
-                  wrapperStyle={{ fontSize: 12 }}
-                />
-                <Bar dataKey="locked" stackId="b" fill={LOCKED} maxBarSize={40} name="locked" />
-                <Bar dataKey="expected" stackId="b" fill={EXPECTED} radius={[4, 4, 0, 0]} maxBarSize={40} name="expected" />
-              </BarChart>
-            </ResponsiveContainer>
+            <>
+              <div className="flex items-center gap-4 text-xs mb-2" data-testid="chart-legend">
+                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: LOCKED }} />מובטח</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bonus-stripes border" style={{ borderColor: EXPECTED }} />צפוי</span>
+              </div>
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={chartData} margin={{ top: 4, right: 4, left: 8, bottom: 4 }}>
+                  <defs>
+                    <pattern id="bonus-expected-stripes" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                      <rect width="8" height="8" style={{ fill: 'var(--bonus-expected-bg)' }} />
+                      <rect width="2.5" height="8" style={{ fill: 'var(--bonus-expected)' }} />
+                    </pattern>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v: number) => ILS.format(v)} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64} />
+                  <Tooltip content={<BonusTooltip />} cursor={{ fill: 'rgba(100,100,100,0.08)' }} />
+                  <Bar dataKey="locked" stackId="b" fill="var(--bonus-locked)" maxBarSize={40} name="locked" />
+                  <Bar dataKey="expected" stackId="b" fill="url(#bonus-expected-stripes)" stroke="var(--bonus-expected)" radius={[4, 4, 0, 0]} maxBarSize={40} name="expected" />
+                </BarChart>
+              </ResponsiveContainer>
+            </>
           )}
         </CardContent>
       </Card>
@@ -294,10 +335,49 @@ function BonusTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   return (
     <div className="rounded-lg border bg-background p-2 text-xs shadow-md" dir="rtl">
       <p className="font-semibold mb-1">{row.label}</p>
-      <p><span className="inline-block w-2 h-2 rounded-sm ml-1" style={{ background: LOCKED }} />נעול: {ILS.format(row.locked)} · {NUM.format(row.lockedDeals)} {dealsWord(row.lockedDeals)}</p>
+      <p><span className="inline-block w-2 h-2 rounded-sm ml-1" style={{ background: LOCKED }} />מובטח: {ILS.format(row.locked)} · {NUM.format(row.lockedDeals)} {dealsWord(row.lockedDeals)}</p>
       {(row.expected > 0 || row.expectedDeals > 0) && (
-        <p><span className="inline-block w-2 h-2 rounded-sm ml-1" style={{ background: EXPECTED }} />צפוי: {ILS.format(row.expected)} · {NUM.format(row.expectedDeals)} {dealsWord(row.expectedDeals)}</p>
+        <p><span className="inline-block w-2 h-2 rounded-sm ml-1 bonus-stripes" style={{ outline: `1px solid ${EXPECTED}` }} />צפוי: {ILS.format(row.expected)} · {NUM.format(row.expectedDeals)} {dealsWord(row.expectedDeals)}</p>
       )}
+    </div>
+  )
+}
+
+// ── Bonus hero ──────────────────────────────────────────────────────────────
+
+type TileKind = 'locked' | 'expected' | 'estimate'
+type TileSpec = { kind: TileKind; key: string; label: string; sub?: string; deal?: ExpectedDealRef }
+
+function Tile({ spec, onOpenDeal }: { spec: TileSpec; onOpenDeal: (d: ExpectedDealRef) => void }) {
+  const base = 'relative flex h-[4.25rem] w-[8.25rem] flex-col justify-between rounded-lg px-2.5 py-1.5 text-right'
+  if (spec.kind === 'locked') {
+    return (
+      <div className={`${base} border-2`} style={{ borderColor: LOCKED, background: 'var(--bonus-locked-bg)', color: 'var(--bonus-locked-text)' }} data-testid="tile-locked">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full text-white" style={{ background: LOCKED }}><Check size={13} strokeWidth={3} aria-hidden /></span>
+        <span className="text-xs font-bold leading-tight">{spec.label}</span>
+      </div>
+    )
+  }
+  if (spec.kind === 'expected') {
+    return (
+      <button
+        type="button"
+        onClick={() => spec.deal && onOpenDeal(spec.deal)}
+        className={`${base} bonus-stripes border-2 cursor-pointer hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2`}
+        style={{ borderColor: EXPECTED, color: 'var(--bonus-expected-text)' }}
+        title={[spec.deal?.client_name, spec.deal?.position_name, spec.deal?.candidate_name].filter(Boolean).join(' · ')}
+        data-testid="tile-expected"
+        data-deal-id={spec.deal?.deal_id}
+      >
+        <span className="rounded bg-white/80 px-1 text-[11px] font-bold leading-tight line-clamp-1 self-start max-w-full">{spec.label}</span>
+        <span className="rounded bg-white/80 px-1 text-[11px] font-semibold leading-tight self-start">{spec.sub}</span>
+      </button>
+    )
+  }
+  return (
+    <div className={`${base} border-2 border-dashed`} style={{ borderColor: 'var(--bonus-estimate)', color: 'var(--bonus-estimate-text)' }} data-testid="tile-estimate">
+      <Hourglass size={14} aria-hidden />
+      <span className="text-xs font-bold leading-tight">{spec.label}</span>
     </div>
   )
 }
@@ -305,23 +385,23 @@ function BonusTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
 function BonusHero({
   overviewQ,
   monthKey,
-  onTheWay,
+  onAddDeal,
+  onOpenDeal,
 }: {
   overviewQ: { data?: BonusOverview; isLoading: boolean; isError: boolean; refetch: () => unknown }
   monthKey: string
-  onTheWay: BonusOverview['months']
+  onAddDeal: () => void
+  onOpenDeal: (d: ExpectedDealRef) => void
 }) {
   const ov = overviewQ.data
   if (overviewQ.isLoading) {
     return (
-      <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
-        <CardContent className="p-6"><p className="text-sm text-muted-foreground">טוען נתונים...</p></CardContent>
-      </Card>
+      <Card><CardContent className="p-6"><p className="text-sm text-muted-foreground">טוען נתונים...</p></CardContent></Card>
     )
   }
   if (overviewQ.isError || !ov) {
     return (
-      <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200">
+      <Card>
         <CardContent className="p-6 flex flex-col items-center gap-3">
           <p className="text-sm text-destructive">שגיאה בטעינת נתוני הבונוס.</p>
           <button type="button" onClick={() => void overviewQ.refetch()} className="text-sm text-purple-700 underline">נסה שנית</button>
@@ -330,86 +410,99 @@ function BonusHero({
     )
   }
 
-  const { current } = ov
-  const noModel = !current.next_tier && current.locked_bonus === 0 && current.expected_this_month.bonus_if_completed === 0 && ov.months.every((m) => m.locked_bonus === 0 && m.expected_bonus === 0)
-  const lockedZero = current.locked_bonus === 0
+  const headline = ov.locked.bonus + ov.expected.bonus
+  const nExp = ov.expected.deals_count
+  const next = ov.next_tier
+  const estimate = next?.deals_to_tier_estimate ?? 0
 
-  // Row 1 — "כבר שלך החודש" (locked, always honest: only what Repair 27 has already counted).
-  const row1 = (
-    <div data-testid="hero-locked" className={lockedZero ? 'opacity-90' : ''}>
-      <div className="flex items-center gap-2">
-        <p className="text-sm text-purple-800/80">כבר שלך החודש</p>
-        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold text-white" style={{ background: LOCKED }}>נעול</span>
-      </div>
-      <p className={`${lockedZero ? 'text-2xl' : 'text-5xl'} font-bold text-purple-900 mt-1`}>{ILS.format(current.locked_bonus)}</p>
-      <p className="text-sm text-purple-700/80 mt-1">{current.locked_deals_count === 1 ? 'עסקה אחת הושלמה' : `${NUM.format(current.locked_deals_count)} עסקאות הושלמו`}</p>
-    </div>
+  // Tiles: one per deal in the picture — completed, to complete, estimated extra (D2 / B.2).
+  const all: TileSpec[] = []
+  for (let i = 0; i < ov.locked.deals_count; i++) all.push({ kind: 'locked', key: `l${i}`, label: 'הושלמה' })
+  ov.expected.deals.forEach((d, i) =>
+    all.push({ kind: 'expected', key: `e${i}`, label: d.client_name ?? 'עסקה', sub: 'להשלמה', deal: d }),
   )
+  for (let i = 0; i < estimate; i++) all.push({ kind: 'estimate', key: `s${i}`, label: 'הערכה' })
+  const shown = all.slice(0, MAX_TILES)
+  const hidden = all.length - shown.length
 
-  // Row 2 — "בדרך" (expected, light, always labelled; month only — no dates, no payment wording).
-  const row2 = (
-    <div data-testid="hero-expected" className="space-y-1.5">
-      <div className="flex items-center gap-2">
-        <p className="text-sm font-semibold text-purple-900">בדרך</p>
-        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold text-purple-900" style={{ background: EXPECTED }}>צפוי</span>
-      </div>
-      {onTheWay.length === 0 ? (
-        <p className="text-sm text-purple-900/70">אין עסקאות צפויות להשלמה בחודשים הקרובים.</p>
-      ) : (
-        onTheWay.map((m) => (
-          <p key={m.month} className="text-sm text-purple-900">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm ml-1.5 align-middle" style={{ background: EXPECTED }} />
-            {m.expected_bonus > 0
-              ? `${NUM.format(m.expected_deals_count)} ${dealsWord(m.expected_deals_count)} → בונוס ${monthName(m.month)} צפוי ${ILS.format(m.expected_bonus)}`
-              : `${NUM.format(m.expected_deals_count)} ${dealsWord(m.expected_deals_count)} צפויות להשלים ב${monthName(m.month)}`}
-          </p>
-        ))
-      )}
-      {ov.pending_unknown_count > 0 && (
-        <p className="text-xs text-purple-800/60">
-          {NUM.format(ov.pending_unknown_count)} {ov.pending_unknown_count === 1 ? 'עסקה נוספת ממתינה' : 'עסקאות נוספות ממתינות'} — ייכנסו לבונוס כשיושלמו
-        </p>
-      )}
-    </div>
-  )
-
-  // Row 3 — "למדרגה הבאה": progress in DEAL units, never a shekel scale.
-  const next = current.next_tier
-  let row3: React.ReactNode
-  if (next) {
-    const needed = next.deals_needed ?? 1
-    const done = current.locked_deals_count
-    const lockedPct = Math.min(100, (done / Math.max(1, done + needed)) * 100)
-    const expectedPct = Math.min(100, ((done + current.expected_this_month.deals_count) / Math.max(1, done + needed)) * 100)
-    row3 = (
-      <div data-testid="hero-next" className="space-y-2">
-        <p className="text-sm font-semibold text-purple-900">למדרגה הבאה</p>
-        <div className="h-3 w-full rounded-full bg-purple-200/70 overflow-hidden relative" aria-hidden>
-          <div className="h-full absolute inset-y-0 right-0 transition-all" style={{ width: `${expectedPct}%`, background: EXPECTED }} />
-          <div className="h-full absolute inset-y-0 right-0 transition-all" style={{ width: `${lockedPct}%`, background: LOCKED }} />
-        </div>
-        <p className="text-sm text-purple-900 font-medium">
-          {next.deals_needed == null ? 'עסקה אחת נוספת' : `עוד ${NUM.format(needed)} ${dealsWord(needed)}`} → בונוס {ILS.format(next.bonus)} · נותרו {NUM.format(current.days_left_in_month)} ימים בחודש
-        </p>
-        {current.expected_this_month.bonus_if_completed > current.locked_bonus && (
-          <p className="text-xs text-purple-800">
-            אם העסקאות הצפויות החודש יושלמו — הבונוס שלך יעלה ל-{ILS.format(current.expected_this_month.bonus_if_completed)}
-          </p>
-        )}
-      </div>
-    )
-  } else if (noModel) {
-    row3 = <p data-testid="hero-next" className="text-sm text-purple-900/80">המנהל עדיין לא הגדיר מודל בונוס.</p>
+  // Requirement line — a status statement, never conditional wording (D3).
+  let requirement: string
+  if (!ov.has_model) {
+    requirement = 'המנהל עדיין לא הגדיר מודל בונוס.'
+  } else if (ov.top_tier === 'locked') {
+    requirement = 'הגעת לדרגה הגבוהה החודש'
+  } else if (ov.top_tier === 'expected') {
+    requirement = `${nExp === 1 ? 'עסקה אחת' : `${NUM.format(nExp)} עסקאות`} להשלמה לדרגה הגבוהה (${ILS.format(headline)})`
+  } else if (next) {
+    if (next.deals_to_tier_estimate == null) {
+      requirement = `נדרשות עוד עסקאות להשלמה לדרגה הבאה (${ILS.format(next.bonus)})`
+    } else {
+      const toComplete = nExp === 0 ? '' : `${nExp === 1 ? 'עסקה אחת' : `${NUM.format(nExp)} עסקאות`} להשלמה + `
+      const extra = next.deals_to_tier_estimate === 1 ? 'עסקה נוספת אחת' : `כ-${NUM.format(next.deals_to_tier_estimate)} עסקאות נוספות`
+      requirement = `להגעה לדרגה הבאה (${ILS.format(next.bonus)}): ${toComplete}${extra} (לפי הממוצע שלך)`
+    }
   } else {
-    row3 = <p data-testid="hero-next" className="text-sm text-purple-900 font-medium">הגעת למדרגה המקסימלית! 🎉</p>
+    requirement = ''
   }
 
-  const rows = lockedZero ? [row3, row2, row1] : [row1, row2, row3]
-  void monthKey
+  const chip = (testId: string, label: string, amount: number, kind: 'locked' | 'expected') => (
+    <span
+      data-testid={testId}
+      className={`inline-flex items-center gap-1.5 rounded-full border-2 px-3 py-1 text-sm font-semibold ${kind === 'expected' ? 'bonus-stripes' : ''}`}
+      style={
+        kind === 'locked'
+          ? { borderColor: LOCKED, background: 'var(--bonus-locked-bg)', color: 'var(--bonus-locked-text)' }
+          : { borderColor: EXPECTED, color: 'var(--bonus-expected-text)' }
+      }
+    >
+      {kind === 'locked' ? (
+        <span className="flex h-4 w-4 items-center justify-center rounded-full text-white" style={{ background: LOCKED }}><Check size={11} strokeWidth={3} aria-hidden /></span>
+      ) : (
+        <Hourglass size={14} aria-hidden />
+      )}
+      <span className={kind === 'expected' ? 'rounded bg-white/80 px-1' : ''}>{label} {ILS.format(amount)}</span>
+    </span>
+  )
+
   return (
-    <Card className="bg-gradient-to-br from-purple-50 to-purple-100 border-purple-200" data-testid="bonus-hero">
+    <Card data-testid="bonus-hero">
       <CardContent className="p-6 space-y-5">
-        {rows.map((r, i) => (<div key={i}>{r}</div>))}
+        <h2 className="text-lg font-semibold" data-testid="hero-title">הבונוס שלך לחודש {monthName(monthKey)}</h2>
+
+        {ov.has_model && headline === 0 ? (
+          <div className="space-y-3" data-testid="hero-empty">
+            <p className="text-base font-medium">הבונוס של החודש מתחיל בעסקה הראשונה שתיסגר בתשלום מלא</p>
+            <Button className="bg-purple-600 hover:bg-purple-700 text-white" onClick={onAddDeal}>פתיחת עסקה</Button>
+          </div>
+        ) : (
+          ov.has_model && <p className="text-5xl font-bold leading-none" data-testid="hero-headline">{ILS.format(headline)}</p>
+        )}
+
+        {ov.has_model && (
+          <div className="flex flex-wrap items-center gap-2" data-testid="hero-chips">
+            {chip('chip-locked', 'מובטח', ov.locked.bonus, 'locked')}
+            {chip('chip-expected', 'צפוי', ov.expected.bonus, 'expected')}
+          </div>
+        )}
+
+        {shown.length > 0 && (
+          <div className="flex flex-wrap items-stretch gap-2" data-testid="hero-tiles">
+            {shown.map((t) => <Tile key={t.key} spec={t} onOpenDeal={onOpenDeal} />)}
+            {hidden > 0 && (
+              <span className="flex h-[4.25rem] items-center px-2 text-sm font-semibold text-muted-foreground" data-testid="tiles-more">+{NUM.format(hidden)}</span>
+            )}
+          </div>
+        )}
+        {estimate > 0 && <p className="-mt-3 text-xs text-muted-foreground">הערכה — לפי הממוצע שלך</p>}
+
+        {requirement && <p className="text-sm font-medium" data-testid="hero-requirement">{requirement}</p>}
+
+        <div className="space-y-1 border-t pt-3 text-sm text-muted-foreground" data-testid="hero-footer">
+          <p>נותרו {NUM.format(ov.workdays_left)} ימי עבודה בחודש</p>
+          {ov.pending_unknown_count > 0 && (
+            <p>{NUM.format(ov.pending_unknown_count)} {ov.pending_unknown_count === 1 ? 'עסקה ממתינה' : 'עסקאות ממתינות'} להגדרת תאריך השלמה</p>
+          )}
+        </div>
       </CardContent>
     </Card>
   )
