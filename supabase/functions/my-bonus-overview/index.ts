@@ -64,16 +64,7 @@ Deno.serve(async (req) => {
 
     const events = await fetchBonusEvents(admin as never, { leadName })
     const overview = buildBonusOverview(events, bonusModel?.tiers ?? [], today)
-    // TEMPORARY (Repair 32 rollout): the previous UI build still reads `current`; removed once the new UI is live.
-    const [yy, mm, dd] = today.split('-').map(Number)
-    const legacy = {
-      locked_bonus: overview.locked.bonus,
-      locked_deals_count: overview.locked.deals_count,
-      expected_this_month: { bonus_if_completed: overview.locked.bonus + overview.expected.bonus, deals_count: overview.expected.deals_count },
-      next_tier: overview.next_tier ? { bonus: overview.next_tier.bonus, deals_needed: overview.next_tier.deals_to_tier_estimate } : null,
-      days_left_in_month: Math.max(0, new Date(Date.UTC(yy, mm, 0)).getUTCDate() - dd),
-    }
-    return json({ ...overview, current: legacy })
+    return json(overview)
   } catch (e) {
     console.error('my-bonus-overview error:', e)
     return json({ error: 'Internal error' }, 500)

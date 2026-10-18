@@ -137,6 +137,9 @@ App Dev/
 │   │   ├── billingBuckets.ts           # Repair 29: BILL_BUCKETS (טרם חויב · לחיוב עכשיו · ממתין לתשלום · באיחור · שולם · מבוטל) with `match(event, today)` — the ONE definition shared by Transactions (חיובים popover) and BillingReports (סטטוס popover)
 │   │   ├── dealEvents.ts               # Repair 31: buildDealEvents() — the billing-event drafts of a deal save (extracted verbatim from TransactionDialog.handleSave); run in the browser for admin/administration and server-side by recruiter-save-deal
 │   │   ├── bonusOverview.ts            # Repair 31: buildBonusOverview() — recruiter bonus payload (amounts + deal COUNTS only) on top of bonus.ts; runs in my-bonus-overview
+│   │   ├── ilCalendar.ts               # Repair 32: THE Israeli working-day calendar — IL_NON_WORKING_DAYS (18 days, 2026–2027), isWorkday / isNonWorkingDay / isErevHoliday / addBusinessDays / workdaysBetween / expectedHours / workdaysLeftInMonth. Matched pair with il_non_working_days + bhr_is_workday + bhr_add_business_days; `npm run test:calendar` fails on any drift
+│   │   ├── workHours.ts                # Repair 32 (D6): STANDARD_WORKDAY_HOURS = 8.4, EREV_HOLIDAY_HOURS = 7 — Oren to confirm
+│   │   ├── attendanceMonth.ts          # Repair 32: buildMonthDays()/monthTotals() — one month of attendance day by day (present/missing/holiday/erev/future/weekend); shared by the dashboard cards and the recruiter /attendance table
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
 │   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
@@ -162,6 +165,7 @@ App Dev/
 │   │   ├── ClientPicker.tsx            # Autocomplete client selector. Repair 31: for role recruiter it searches through the `search_clients_for_picker` RPC (clients has no recruiter SELECT). Repair 29: arrow-key/Enter navigation (Esc closes), optional `popoverClassName` (BillingReports passes `min-w-[16rem] max-h-72`); defaults unchanged — TransactionDialog still doesn't auto-open
 │   │   ├── SortableHead.tsx            # Shared sortable <TableHead> + SortState/toggleSortKey/compareBySort (Repair 8). Repair 30: label + indicator sit at the RIGHT edge (`justify-start` in RTL; indicator aligned with the label's last line) on every table that uses it
 │   │   ├── BrandLogo.tsx               # Repair 30: THE React placement of the company logo — `<BrandLogo variant="navy|white" size={px height} />` (navy on light, white on dark). Never draw/inline the mark any other way
+│   │   ├── RecruiterAttendanceMonth.tsx # Repair 32: recruiter's own attendance by month (default current, earlier months read-only, `?month=YYYY-MM&missing=1`), add/edit/delete only inside the current month (RLS-enforced)
 │   │   ├── LabeledToggle.tsx           # Labeled switch/toggle
 │   │   ├── MobileAutoRoute.tsx         # Mobile hard lock: redirects any mobile device to /m on every navigation (re-evaluates via useIsMobileDevice, no one-shot guard, no bhr_force_desktop opt-out — Batch 8 Phase 1)
 │   │   ├── ProfileEditor.tsx           # Inline profile edit form
@@ -239,6 +243,10 @@ App Dev/
 │       ├── 20261017_audit_log.sql                    # Repair 24: audit_log table + bhr_audit_row triggers (transactions/billing_events/clients) + get_audit_log()
 │       ├── 20261017_hr_service_hours.sql             # Repair 25: seeds service_types 'שירות משאבי אנוש' (no dynamic fields)
 │       ├── 20261018_delete_transaction.sql           # Repair 26: delete_transaction(p_id, p_hours_action, p_target_transaction) SECURITY DEFINER; hours_log joins the audit log (bhr_audit_row hours_log branch + trigger + audit_log CHECK)
+│       ├── 20261019_recruiter_portal.sql / 20261019_2_recruiter_lockdown.sql  # Repair 31
+│       ├── 20261020_repair32_hebrew_literals_fix.sql # Repair 32 hotfix: re-creates search_clients_for_picker + delete_transaction whose Hebrew literals were corrupted (U+FFFD) by a shell-piped apply
+│       ├── 20261020_il_working_days.sql              # Repair 32: il_non_working_days (18 rows) + bhr_is_workday + holiday-aware bhr_add_business_days (STABLE, SECURITY DEFINER, anon revoked)
+│       ├── 20261020_2_attendance_recruiter_window.sql # Repair 32: recruiter attendance writes limited to the current month (RLS)
 │       └── 20261017_2_hours_deals_backfill.sql       # Repair 25: fill-only, idempotent backfill of hours deals (service type, kind, period, rate, net, close date, closing month/year); excludes recruitment-signal rows and probable duplicates of a paid deal
 │
 ├── scripts/
@@ -268,7 +276,7 @@ App Dev/
 | `/clients` | Clients | admin, administration |
 | `/transactions` | Transactions | admin, administration, recruiter |
 | `/hours` | Hours | admin, administration, recruiter |
-| `/attendance` | Attendance (check-in/out + report) | admin, administration, recruiter (report section: admin, administration only) |
+| `/attendance` | Attendance (check-in/out + report; recruiters: own reports by month) | admin, administration, recruiter (report section: admin, administration only; month table: recruiter only) |
 | `/billing-reports` | Billing Reports | admin, administration |
 | `/reports` | Reports (דוח גיוסים) | admin |
 | `/bonuses` | Bonuses | admin |
@@ -408,7 +416,7 @@ attendance_log                     -- Employee check-in/out log (Feature: Attend
   notes text
   created_at timestamptz
   -- RLS: insert own (profile_id = auth.uid()); select own OR admin/administration (current_user_role());
-  --      update/delete admin only. Report names come from SECURITY DEFINER public.list_profiles_for_attendance().
+  --      update/delete admin only — PLUS (Repair 32) recruiter own-row insert/update/delete restricted to the CURRENT calendar month (Asia/Jerusalem) via bhr_in_current_month_il(work_date) in policies attendance_insert_own / attendance_recruiter_update / attendance_recruiter_delete (insert/update also refuse logged_at in the future). Report names come from SECURITY DEFINER public.list_profiles_for_attendance().
 
 attendance_edit_requests           -- Employee-submitted correction requests (Feature: Attendance V2)
   id uuid PK
@@ -598,12 +606,7 @@ unchanged — this is the `bhr_payment_term_days_strict(...)  IS NULL` / shape
 business days (Thu 8th, Sun 11th, Mon 12th, Tue 13th, Wed 14th) → due
 **2026-10-14**.
 
-⚠️ **Known, dated limitation (2026-10-06): Israeli public holidays are NOT
-handled.** A holiday falling inside the 5-business-day window still counts
-as a business day — `bhr_add_business_days()` / `addBusinessDays()` only
-know Sunday–Thursday vs. Friday/Saturday. Do not build a holiday calendar
-without a fresh decision from Oren; this is an accepted gap, not a bug to
-silently "fix" by guessing which days are holidays.
+**Israeli holidays ARE handled since Repair 32 (2026-10-19)** — the "holidays NOT handled" limitation of Repair 19 is gone. A *business day* = a **workday**: Sunday–Thursday AND not in `il_non_working_days` (see "Working days" below). `bhr_add_business_days()` / `addBusinessDays()` are a matched pair over that one calendar.
 
 **`'eom'` example:** invoice_date = 11 May 2026, terms = שוטף+30 → 31 May + 30 = **30 June 2026** (unchanged since Repair 17/18).
 
@@ -817,7 +820,7 @@ chosen by ACTUAL revenue, never forecast).
 
 Display rule (mandatory everywhere a bonus number appears): בפועל = solid
 purple `#7c3aed`; תחזית = light purple `#c4b5fd`, always labelled "תחזית" —
-never shown unlabelled.
+never shown unlabelled. **Override (Repair 32, Oren 2026-10-19) — RECRUITER PORTAL ONLY:** מובטח = solid emerald `#059669`, צפוי = amber `#d97706` drawn with a diagonal stripe on `#fef3c7`, הערכה = grey dashed outline (tokens `--bonus-*` in `index.css`, dark-mode overrides under `.dark`). Admin, administration and Bonuses.tsx keep the purple rule unchanged.
 
 ⚠️ Interacts with the `due_date` trigger (Feature: Expected Payment Date):
 an open event's `due_date` is whatever the trigger last computed from
@@ -907,6 +910,7 @@ Claude Code has direct API/CLI access to **Git, Vercel, Supabase, and Resend**.
 - SQL migrations: `supabase db push` or Supabase Management API — never "paste in the SQL editor"
 - Deploys: `git push` triggers Vercel; confirm via Vercel CLI or API
 - Oren is never asked to perform any terminal, dashboard, or browser action
+- **Hebrew in SQL / shell (Repair 32, 2026-10-19):** never pass SQL containing Hebrew through a bash variable or `curl -d "$BODY"` — Windows Git Bash corrupts it to U+FFFD (Repair 31's `c.status = 'פעיל'` became garbage → empty recruiter client picker; `delete_transaction` messages garbled). Apply migrations with a Node `fetch` to the Management API reading the file as UTF-8, and afterwards scan `pg_get_functiondef` for U+FFFD / `???`.
 
 ---
 
@@ -1024,16 +1028,33 @@ Trigger: the dashboard showed "גבייה החודש 100% — ₪62,198 מתוך
 - Writes: `recruiter-save-deal` Edge Function — reads the client's billing terms and the deal's events with the service role, runs `buildDealEvents` (same code as the admin dialog), calls `save_transaction_with_events` under the recruiter's own JWT (own-lead authorization unchanged), strips supplier fields from her payload, preserves hidden custom_fields totals, returns only the id. Parity proven 2026-10-19: גיוס insert (advance + 30/70 splits), הדרכה insert and final-salary reconcile produce identical events for a recruiter-saved and an admin-saved deal; a recruiter cannot save another lead's deal.
 - Edge Functions share the engine through GENERATED copies: `npm run sync:edge` (scripts/sync-edge-shared.mjs → `supabase/functions/*/lib`, import specifiers rewritten for Deno) then `npm run deploy:edge -- <slug>` (Management API, no CLI). Never edit the copies.
 
-**Bonus:** `my-bonus-overview` (verify_jwt) resolves the caller's service_lead from the JWT and returns `{ months[6 back..2 fwd]{locked_bonus, expected_bonus, locked/expected_deals_count}, current{locked_bonus, locked_deals_count, expected_this_month{bonus_if_completed, deals_count}, next_tier{bonus, deals_needed}|null, days_left_in_month}, pending_unknown_count }` — bonus amounts and counts only. Same Repair 27 engine (`bonus.ts`), no second rule. `deals_needed` = ⌈ shekel gap to the next tier by ACTUAL revenue ÷ average value of her completed deals in the last 12 months ⌉, min 1; `null` (UI: "עסקה אחת נוספת") with no history. `next_tier = null` = top tier reached (or no bonus model). Parity vs `bonus.ts` (4 leads × 9 months × 2 reference dates = 72 rows, 0 mismatches, 2026-10-19). Only a service_role JWT may pass `lead_name`/`today`/`tiers` (QA parity) — never a browser.
+**Bonus:** `my-bonus-overview` (verify_jwt) resolves the caller's service_lead from the JWT and returns (Repair 32 shape) `{ month, months[6 back..2 fwd]{locked_bonus, expected_bonus, locked/expected_deals_count}, locked{bonus,deals_count}, expected{bonus,deals_count,deals[{deal_id,client_name,position_name,candidate_name}]}, current_tier{bonus}|null, next_tier{bonus,deals_to_tier_estimate}|null, top_tier:'locked'|'expected'|null, has_model, workdays_left, pending_unknown_count }` — bonus amounts, counts and deal identifiers only (no revenue, no deal amounts, no shekel thresholds). Same Repair 27 engine (`bonus.ts`), no second rule. `current_tier` follows ACTUAL (locked) revenue (Repair 16); `next_tier` is the first tier ABOVE the month's FORECAST revenue so "expected deals to complete + about N more" is one target; `deals_to_tier_estimate` = ⌈ (next tier min − forecast revenue) ÷ average value of her completed deals in the last 12 months ⌉, min 1, `null` with no history; `next_tier = null` = top tier / no model. `workdays_left` = Israeli workdays after today in the month. Parity vs `bonus.ts`: 100 lead×month rows incl. current-month checks, 0 mismatches (2026-10-19). Only a service_role JWT may pass `lead_name`/`today`/`tiers` (QA parity) — never a browser.
 
 **Recruiter UI:**
-- Dashboard (`RecruiterDashboard.tsx`): bonus hero — "כבר שלך החודש" (נעול, solid #7c3aed), "בדרך" (צפוי, light #c4b5fd, by bonus month, no dates), "למדרגה הבאה" (progress in DEAL units, no shekel scale); with ₪0 locked the hero leads with the next-tier row, then "בדרך", row 1 small. KPIs: העסקאות הפתוחות שלי (close_date null), השמות החודש, שעות החודש, חסרי נוכחות (Sun–Thu workdays 1st→yesterday with no attendance entry; shown only when > 0, links /attendance). Chart "הבונוס שלי" (past solid, current/future stacked locked+expected; tooltip amount + deal count). Table "העסקאות הפתוחות שלי" (לקוח · משרה / מועמד · נפתחה · ימים פתוחה · edit; sorted by days open; empty state + "פתח עסקה"). Admin's "דשבורד עובד" preview renders this same component for the admin's own lead.
+- Dashboard (`RecruiterDashboard.tsx`, Repair 32): bonus hero = title "הבונוס שלך לחודש {חודש}" · headline (locked + expected, never a bare ₪0 — empty state "הבונוס של החודש מתחיל בעסקה הראשונה שתיסגר בתשלום מלא" + "פתיחת עסקה") · chips **מובטח ₪X** / **צפוי ₪Y** (always visible) · deal tiles (emerald ✓ "הושלמה" × locked count; striped amber "להשלמה" per expected deal — click opens that deal; grey dashed "הערכה" × estimate; max 12 + "+N") · requirement line built from the numbers · footer "נותרו N ימי עבודה בחודש" (+ pending-unknown count, no amount). **No conditional wording** ("אם", "במידה", "בהנחה") next to any bonus number (D3). KPIs: העסקאות הפתוחות שלי · נסגרו החודש · **שעות החודש = ATTENDANCE hours** (D4; sub-line "מתוך X שעות צפויות עד היום"; 0 → "טרם דווחו שעות החודש" + button to /attendance; the old card summed `hours_log` = client hours, which a recruiter who reports only attendance never fills → bare 0) · **ימי נוכחות חסרים** (always shown; "הכול מדווח" at 0; click → `/attendance?month=YYYY-MM&missing=1`, same `buildMonthDays()` helper as the page). Chart "הבונוס שלי": emerald (past + מובטח) and striped amber (צפוי) stack, legend + tooltip with labels and counts, estimate not drawn. Table "העסקאות הפתוחות שלי" unchanged. Admin's "דשבורד עובד" preview renders this same component for the admin's own lead.
 - Transactions: 8 columns — לקוח (+ממתין לאישור) · משרה / מועמד · שכר · % עמלה · מוביל · תאריך סגירה · תחילת עבודה · פעולות; no totals row, no מועד תשלום row, no חיובים popover, no delete; URL params `pm`/`from`/`to`/`bill` are ignored and stripped; search placeholder/predicate without invoice numbers; deals via `my_deals`.
 - TransactionDialog (recruiter): no ספק section, no מקדמה, no billing-events block, no billing texts, no סכום חשבונית / הדרכה total / hours rate+amount, no payment terms / hourly rate under the client; saves via `recruiter-save-deal`; a final-salary change reconciles server-side without a confirm prompt.
 - Hours: client list via `my_time_log_clients`; the "הפק דוח" button (rate + amount) is hidden; no shekel figure anywhere on `/hours`, `/attendance`, `/m/*`.
 - Routes: recruiters reach only `/`, `/transactions`, `/hours`, `/attendance`, `/profile`, `/m/*`; every other route redirects to `/` (`DEFAULT_LANDING.recruiter = '/'`). Sidebar = דשבורד, עסקאות, יומן שעות, נוכחות.
 
 **Known, dated (2026-10-19), not changed:** הדרכה deals still show מחיר הדרכה and חיוב נסיעות inputs to the recruiter (inputs, not totals — Oren's rule names totals); `team_members` has an "Authenticated full access" policy (ALL, true) and `suppliers` a SELECT-true policy that recruiters can still hit directly; her own profile row (incl. her `bonus_model` tiers) is readable by her. Each is a separate decision.
+
+---
+
+## Working days (Repair 32, 2026-10-19)
+
+**One calendar for the whole system (D1).** A *workday* = Sunday–Thursday that is not an official non-working day. Friday/Saturday are never workdays for any count (missing attendance, expected hours, business days); a report entered on a weekend still shows but is never "missing". Eve days (ערב חג) and Chol HaMoed are workdays.
+- Table `il_non_working_days(day pk, name, kind)` — RLS SELECT for authenticated only, writes only through migrations. Seeded with exactly 18 days: 2026 (Pesach 04-02, 04-08 · Independence Day 04-22 · Shavuot 05-22 · Rosh Hashanah 09-12/09-13 · Yom Kippur 09-21 · Sukkot 09-26 · Simchat Torah 10-03; verified against timeanddate / officeholidays / Bank of Israel) and 2027 (rayclock.co.il/work-hours-2027.html: 04-22, 04-28, 05-12, 06-11, 10-02, 10-03, 10-11, 10-16, 10-23). Not seeded: Purim, Tisha B'Av, Chanukah, Lag BaOmer, Yom HaShoah/HaZikaron, Jerusalem Day, Chol HaMoed, erev days.
+- SQL: `bhr_is_workday(date)`, `bhr_add_business_days(date,int)` (STABLE, SECURITY DEFINER, EXECUTE = authenticated + service_role, anon revoked); `bhr_calc_due_date` was made STABLE. TS: `src/lib/ilCalendar.ts` (re-exported `addBusinessDays` in `billingEvents.ts`; Edge copies via `sync:edge`). Tests: `npm run test:calendar` (Pesach/Rosh Hashanah/Yom Kippur cases, TS list == DB table, 200 random dates SQL == TS).
+- Effect on data (dry run 2026-10-19): 0 open, non-manual billing events belong to a מיידי client → no `due_date` changed; paid / cancelled / manual events are frozen as before.
+- **Expected hours (D6, Oren to confirm):** 8.4 h per workday, 7 h on an erev-holiday workday (`workHours.ts`).
+- ⚠️ Open: **Knesset election day 2026-10-27 (Tue)** is listed as a public holiday by officeholidays.com but was NOT in Oren's seed list, so it is not seeded (Repair 32 said "use only these dates"). Add a one-row migration if Oren confirms it is a day off for the company.
+
+## Recruiter attendance (Repair 32, 2026-10-19)
+
+- `/attendance` for a recruiter = the check-in/out card (no edit-request button) + **"הדיווחים שלי לפי חודש"**: month stepper (default current month, earliest = her first report month), totals (שעות · ימים מדווחים · ימים חסרים), one row per calendar day: תאריך (weekday) · סטטוס (נוכח / חסר / חג / ערב חג · 7 שעות צפויות / היום / עתיד; Fri/Sat show no status) · כניסה · יציאה · סה"כ · הערה · פעולה. `?missing=1` filters to exactly the missing dates.
+- **Edit window (D5):** add / edit / delete only for dates in the current month; earlier months are read-only (missing days there read "החודש נסגר — לא ניתן לדווח"). Enforced by RLS (see schema); verified over REST: insert into an earlier month → 403, update/delete of an earlier-month row → 0 rows affected, current-month insert/update/delete → OK. `attendance_edit_requests` UI is hidden for recruiters; admin/administration flow unchanged.
+- A "missing" workday = before today, no COMPLETE check-in→check-out pair (an open check-in counts as missing, shown "חסר — חסרה יציאה"). Dashboard card and page use the same `buildMonthDays()`.
 
 ---
 
@@ -1079,4 +1100,5 @@ broken.
 | Repair 29: Billing Reports Upgrade | Remainder rows (טרם חויב), סטטוס header bucket filter shared with Transactions (`billingBuckets.ts`), תיאור sort, 12 columns fit at 1440, client picker fixed (Card overflow-hidden clipped the dropdown), sidebar reorder; no migration |
 | Repair 30: Billing Reports Polish + Company Logo | SortableHead right-aligned everywhere; דוחות חיוב two-line headers + tighter columns + compact client picker (same height as neighbours); company logo (favicon, PWA icons, sidebar, login, mobile, print view, PDFs) via `BrandLogo` + generated assets; no migration |
 | Repair 31: Recruiter Portal | Recruiters lose all accounting data at the data layer (RLS lockdown + my_deals / client-picker / hours-clients RPCs); bonus via my-bonus-overview Edge Function (same engine, counts + bonus only); recruiter-save-deal generates billing events server-side (parity proven); new recruiter dashboard (bonus hero, KPIs, chart, open deals), 8-column Transactions, trimmed deal dialog, delete = admin/administration only |
+| Repair 32: Recruiter Portal Corrections + Israeli Working Days | Client picker fixed (root cause: corrupted Hebrew literal in the RPC); il_non_working_days + holiday-aware business days (SQL + TS, parity-tested); recruiter bonus hero rewritten (מובטח/צפוי/הערכה, tiles, no conditional wording); שעות החודש = attendance, missing-days card links to the exact dates; recruiter attendance by month with server-enforced current-month edit window |
 
