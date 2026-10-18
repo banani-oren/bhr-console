@@ -135,6 +135,8 @@ App Dev/
 │   │   ├── auditLabels.ts              # Repair 24: Hebrew field-label map + value formatting + Jerusalem timestamp/boundary helpers for the audit log
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents() → buildBonusDeals() → buildLedgerFromDeals(): a DEAL counts only when fully collected, at full value, in the month of its last payment (Repair 27); paymentIncomeByMonth() = per-payment INCOME (not bonus). See "Bonus Engine".
 │   │   ├── billingBuckets.ts           # Repair 29: BILL_BUCKETS (טרם חויב · לחיוב עכשיו · ממתין לתשלום · באיחור · שולם · מבוטל) with `match(event, today)` — the ONE definition shared by Transactions (חיובים popover) and BillingReports (סטטוס popover)
+│   │   ├── dealEvents.ts               # Repair 31: buildDealEvents() — the billing-event drafts of a deal save (extracted verbatim from TransactionDialog.handleSave); run in the browser for admin/administration and server-side by recruiter-save-deal
+│   │   ├── bonusOverview.ts            # Repair 31: buildBonusOverview() — recruiter bonus payload (amounts + deal COUNTS only) on top of bonus.ts; runs in my-bonus-overview
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
 │   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
@@ -157,7 +159,7 @@ App Dev/
 │   │   ├── DeleteTransactionDialog.tsx # Repair 26: deliberate deal delete — shows what is deleted with the deal (billed/paid warning), forces release/move choice for linked hours, calls delete_transaction RPC, inline Hebrew errors, 10s abort
 │   │   ├── AgreementUploader.tsx       # PDF upload + extract-agreement edge function
 │   │   ├── BonusWidget.tsx             # Compact per-employee bonus card (current month, actual + תחזית) on AdminDashboard — mounted there since Repair 16 (previously built but never wired in anywhere)
-│   │   ├── ClientPicker.tsx            # Autocomplete client selector. Repair 29: arrow-key/Enter navigation (Esc closes), optional `popoverClassName` (BillingReports passes `min-w-[16rem] max-h-72`); defaults unchanged — TransactionDialog still doesn't auto-open
+│   │   ├── ClientPicker.tsx            # Autocomplete client selector. Repair 31: for role recruiter it searches through the `search_clients_for_picker` RPC (clients has no recruiter SELECT). Repair 29: arrow-key/Enter navigation (Esc closes), optional `popoverClassName` (BillingReports passes `min-w-[16rem] max-h-72`); defaults unchanged — TransactionDialog still doesn't auto-open
 │   │   ├── SortableHead.tsx            # Shared sortable <TableHead> + SortState/toggleSortKey/compareBySort (Repair 8). Repair 30: label + indicator sit at the RIGHT edge (`justify-start` in RTL; indicator aligned with the label's last line) on every table that uses it
 │   │   ├── BrandLogo.tsx               # Repair 30: THE React placement of the company logo — `<BrandLogo variant="navy|white" size={px height} />` (navy on light, white on dark). Never draw/inline the mark any other way
 │   │   ├── LabeledToggle.tsx           # Labeled switch/toggle
@@ -703,7 +705,7 @@ the UI and are RLS-governed regardless. `billing_events` RLS
 has always permitted `administration` full read/write — the button gate
 was frontend-only (`isAdmin`) until Phase 5; no migration was ever needed.
 Recruiters are excluded from management (their `billing_events` policy is
-SELECT-only via `recruiter_billing_events_read`) — exposing the button to
+SELECT-only via `recruiter_billing_events_read` — DROPPED in Repair 31 (2026-10-19): recruiters now have NO access to billing_events) — exposing the button to
 them would only produce a confusing RLS failure.
 
 ### Persistence: atomic save RPC (since 2026-07-13, see Phase History)
@@ -801,7 +803,7 @@ diagnosis.)
 
 **Forecast (תחזית):** same unit. A not-yet-collected deal is expected to complete in the latest of: `payment_date` of paid events, `due_date` of open events; a month before the current one rolls forward to the current month and the deal is flagged **באיחור**. **Unknown completion — never invented:** any open event with no `due_date` (reason `not_invoiced` / `terms_missing`, Repair 18/19 semantics), a deal failing the coverage guard (`events_not_generated`), or a fully-paid deal with no date at all (`no_payment_date`) is listed under **"ללא צפי השלמה"** with the Hebrew reason and excluded from every month's forecast. Forecast revenue of month M = actual (deals completed in M) + deals expected in M, each at FULL value; past months: forecast = actual.
 
-**UI (Bonuses.tsx):** one row per deal (לקוח · מס משרה · משרה/מועמד · שווי עסקה (נטו) · נגבה עד כה · סטטוס הושלמה/בגבייה חלקית · תאריך השלמה · סוג בפועל/תחזית + באיחור), each expandable to its payments; current month also shows **"בגבייה חלקית — לא נספר לבונוס"** (partially paid deals not forecast this month) and **"ללא צפי השלמה"**; stat labels "עסקאות שנגבו במלואן" / "צפוי להיגבות במלואו (תחזית)". The old "ללא תאריך" collapsible is subsumed by "ללא צפי השלמה". **Income is NOT bonus:** RecruiterDashboard's "הכנסה החודש" KPI and 6-month chart use `paymentIncomeByMonth()` (per payment, by `payment_date`) and are unchanged; only its bonus hero follows the deal rule (note: "בונוס נספר על עסקאות שנגבו במלואן").
+**UI (Bonuses.tsx):** one row per deal (לקוח · מס משרה · משרה/מועמד · שווי עסקה (נטו) · נגבה עד כה · סטטוס הושלמה/בגבייה חלקית · תאריך השלמה · סוג בפועל/תחזית + באיחור), each expandable to its payments; current month also shows **"בגבייה חלקית — לא נספר לבונוס"** (partially paid deals not forecast this month) and **"ללא צפי השלמה"**; stat labels "עסקאות שנגבו במלואן" / "צפוי להיגבות במלואו (תחזית)". The old "ללא תאריך" collapsible is subsumed by "ללא צפי השלמה". **Income is NOT bonus (for admin/administration; since Repair 31 recruiters read `my-bonus-overview` and see no income at all):** RecruiterDashboard's "הכנסה החודש" KPI and 6-month chart use `paymentIncomeByMonth()` (per payment, by `payment_date`) and are unchanged; only its bonus hero follows the deal rule (note: "בונוס נספר על עסקאות שנגבו במלואן").
 
 *Historical (Repair 16, superseded 2026-10-17):* "revenue = net of paid events attributed per payment to its payment_date month". Repair 18/19's due_date rules still decide WHEN an open deal can complete.
 
@@ -964,7 +966,7 @@ Print `QA COMPLETE ✓` with evidence, then `PHASE N COMPLETE ✓`.
 ## Deleting a deal (Repair 26, 2026-10-18)
 
 **Root cause of "deals cannot be deleted" (confirmed 2026-10-18):** `hours_log.billed_transaction_id → transactions(id)` has no ON DELETE action, so any deal with linked hours fails with FK 23503 (hours deals — שיבומי / קסטרו); `Transactions.tsx` called the delete mutation with no try/catch, so the failure was silent. `billing_events.transaction_id` is ON DELETE CASCADE (paid events go with the deal). `billing_reports.transaction_ids` is an array with no FK (0 rows reference deals as of 2026-10-18).
-- Delete = `DeleteTransactionDialog` → RPC `delete_transaction(p_id, p_hours_action 'release'|'move', p_target_transaction)`: one DB transaction relinks/releases the hours then deletes the deal. SECURITY DEFINER; ⚠ its authorization (admin/administration, or service_lead = current_user_full_name()) must stay in lockstep with the RLS policy `transactions_full_access`. EXECUTE: authenticated only (anon/service_role revoked). The move target must be a `time_period` deal of the same client.
+- Delete = `DeleteTransactionDialog` → RPC `delete_transaction(p_id, p_hours_action 'release'|'move', p_target_transaction)`: one DB transaction relinks/releases the hours then deletes the deal. SECURITY DEFINER; ⚠ its authorization is **admin and administration only since Repair 31 (2026-10-19)** and must stay in lockstep with RLS policy `transactions_staff_access` (Repair 26's "the deal's own service_lead may delete" is superseded, Oren 2026-10-18). EXECUTE: authenticated only (anon/service_role revoked). The move target must be a `time_period` deal of the same client.
 - The FK was deliberately NOT changed to SET NULL — silently releasing billed hours invites double billing; the user chooses.
 - `hours_log` is now audited (entity "שעות", link change shown as "קישור לעסקה"). Standing rule from Repair 24 applies.
 - Recruiters can't always see the linked hours (hours_log RLS): the dialog then can't show the choice up front; the RPC refuses and the dialog reveals the choice with an inline message.
@@ -1012,6 +1014,29 @@ Trigger: the dashboard showed "גבייה החודש 100% — ₪62,198 מתוך
 
 ---
 
+## Recruiter portal (Repair 31, 2026-10-19)
+
+**Rule (Oren, 2026-10-18):** a recruiter (role `recruiter`, e.g. נועה פולק) opens and updates the deals she works on, reports hours/attendance, and sees her bonus live. She never sees accounting data: סכום חשבונית, הכנסה, עמלת ספק, invoice/receipt numbers, any payment date, billing events/status dots, collection wording, totals rows, company revenue. **שכר and % עמלה stay visible and editable.** Admin and administration are unchanged.
+
+**Data layer (the UI hiding is NOT the control — RLS is):**
+- RLS: `transactions_staff_access` (admin + administration only) replaced `transactions_full_access`; `recruiter_billing_events_read` dropped; `clients` never had a recruiter policy. Direct REST by a recruiter returns nothing (verified 2026-10-19). Migrations `20261019_recruiter_portal.sql` (additive RPCs) + `20261019_2_recruiter_lockdown.sql` (RLS + `delete_transaction`, applied after the UI deployed).
+- Reads: `my_deals(p_id)` (own service_lead, non-accounting columns, `custom_fields` minus net_invoice_amount/commission_amount), `search_clients_for_picker(p_query, p_id)` (id, name, ח.פ., % עמלה, ימי אחריות — a deliberate small extension of "id, name, ח.פ." because the dialog prefills commission % and warranty), `my_time_log_clients()`. All SECURITY DEFINER, EXECUTE = authenticated only.
+- Writes: `recruiter-save-deal` Edge Function — reads the client's billing terms and the deal's events with the service role, runs `buildDealEvents` (same code as the admin dialog), calls `save_transaction_with_events` under the recruiter's own JWT (own-lead authorization unchanged), strips supplier fields from her payload, preserves hidden custom_fields totals, returns only the id. Parity proven 2026-10-19: גיוס insert (advance + 30/70 splits), הדרכה insert and final-salary reconcile produce identical events for a recruiter-saved and an admin-saved deal; a recruiter cannot save another lead's deal.
+- Edge Functions share the engine through GENERATED copies: `npm run sync:edge` (scripts/sync-edge-shared.mjs → `supabase/functions/*/lib`, import specifiers rewritten for Deno) then `npm run deploy:edge -- <slug>` (Management API, no CLI). Never edit the copies.
+
+**Bonus:** `my-bonus-overview` (verify_jwt) resolves the caller's service_lead from the JWT and returns `{ months[6 back..2 fwd]{locked_bonus, expected_bonus, locked/expected_deals_count}, current{locked_bonus, locked_deals_count, expected_this_month{bonus_if_completed, deals_count}, next_tier{bonus, deals_needed}|null, days_left_in_month}, pending_unknown_count }` — bonus amounts and counts only. Same Repair 27 engine (`bonus.ts`), no second rule. `deals_needed` = ⌈ shekel gap to the next tier by ACTUAL revenue ÷ average value of her completed deals in the last 12 months ⌉, min 1; `null` (UI: "עסקה אחת נוספת") with no history. `next_tier = null` = top tier reached (or no bonus model). Parity vs `bonus.ts` (4 leads × 9 months × 2 reference dates = 72 rows, 0 mismatches, 2026-10-19). Only a service_role JWT may pass `lead_name`/`today`/`tiers` (QA parity) — never a browser.
+
+**Recruiter UI:**
+- Dashboard (`RecruiterDashboard.tsx`): bonus hero — "כבר שלך החודש" (נעול, solid #7c3aed), "בדרך" (צפוי, light #c4b5fd, by bonus month, no dates), "למדרגה הבאה" (progress in DEAL units, no shekel scale); with ₪0 locked the hero leads with the next-tier row, then "בדרך", row 1 small. KPIs: העסקאות הפתוחות שלי (close_date null), השמות החודש, שעות החודש, חסרי נוכחות (Sun–Thu workdays 1st→yesterday with no attendance entry; shown only when > 0, links /attendance). Chart "הבונוס שלי" (past solid, current/future stacked locked+expected; tooltip amount + deal count). Table "העסקאות הפתוחות שלי" (לקוח · משרה / מועמד · נפתחה · ימים פתוחה · edit; sorted by days open; empty state + "פתח עסקה"). Admin's "דשבורד עובד" preview renders this same component for the admin's own lead.
+- Transactions: 8 columns — לקוח (+ממתין לאישור) · משרה / מועמד · שכר · % עמלה · מוביל · תאריך סגירה · תחילת עבודה · פעולות; no totals row, no מועד תשלום row, no חיובים popover, no delete; URL params `pm`/`from`/`to`/`bill` are ignored and stripped; search placeholder/predicate without invoice numbers; deals via `my_deals`.
+- TransactionDialog (recruiter): no ספק section, no מקדמה, no billing-events block, no billing texts, no סכום חשבונית / הדרכה total / hours rate+amount, no payment terms / hourly rate under the client; saves via `recruiter-save-deal`; a final-salary change reconciles server-side without a confirm prompt.
+- Hours: client list via `my_time_log_clients`; the "הפק דוח" button (rate + amount) is hidden; no shekel figure anywhere on `/hours`, `/attendance`, `/m/*`.
+- Routes: recruiters reach only `/`, `/transactions`, `/hours`, `/attendance`, `/profile`, `/m/*`; every other route redirects to `/` (`DEFAULT_LANDING.recruiter = '/'`). Sidebar = דשבורד, עסקאות, יומן שעות, נוכחות.
+
+**Known, dated (2026-10-19), not changed:** הדרכה deals still show מחיר הדרכה and חיוב נסיעות inputs to the recruiter (inputs, not totals — Oren's rule names totals); `team_members` has an "Authenticated full access" policy (ALL, true) and `suppliers` a SELECT-true policy that recruiters can still hit directly; her own profile row (incl. her `bonus_model` tiers) is readable by her. Each is a separate decision.
+
+---
+
 ## Phase History
 
 Full detail for every phase (diagnosis, QA evidence, commits) lives in
@@ -1053,4 +1078,5 @@ broken.
 | Repair 28: Collections Dashboard Math | דשבורד גבייה: one helper `collectionMonth` — % = collected ÷ due-this-month (incl. overdue carry-over), never clamped; overdue by `due_date`/`isOverduePayment`, aging + top-10 follow it; W shows amount; no migration |
 | Repair 29: Billing Reports Upgrade | Remainder rows (טרם חויב), סטטוס header bucket filter shared with Transactions (`billingBuckets.ts`), תיאור sort, 12 columns fit at 1440, client picker fixed (Card overflow-hidden clipped the dropdown), sidebar reorder; no migration |
 | Repair 30: Billing Reports Polish + Company Logo | SortableHead right-aligned everywhere; דוחות חיוב two-line headers + tighter columns + compact client picker (same height as neighbours); company logo (favicon, PWA icons, sidebar, login, mobile, print view, PDFs) via `BrandLogo` + generated assets; no migration |
+| Repair 31: Recruiter Portal | Recruiters lose all accounting data at the data layer (RLS lockdown + my_deals / client-picker / hours-clients RPCs); bonus via my-bonus-overview Edge Function (same engine, counts + bonus only); recruiter-save-deal generates billing events server-side (parity proven); new recruiter dashboard (bonus hero, KPIs, chart, open deals), 8-column Transactions, trimmed deal dialog, delete = admin/administration only |
 
