@@ -7,6 +7,7 @@ import {
 } from './bonus'
 import { fromAgorot, toAgorot } from './finance'
 import { workdaysLeftInMonth } from './ilCalendar'
+import { barGeometry, type BarGeometry } from './bonusBar'
 
 // Repair 31 — the recruiter's bonus presentation payload. Pure function over the SAME
 // engine as every other bonus surface (bonus.ts: buildBonusDeals → buildLedgerFromDeals,
@@ -36,8 +37,23 @@ export type ExpectedDealRef = {
 // Repair 32 (B.1). Statuses: locked = מובטח (Repair 27 actual), expected = צפוי (this month, full value).
 // current_tier follows ACTUAL revenue (Repair 16: never the forecast). next_tier is the first tier ABOVE
 // the month's forecast revenue, so "expected deals to complete + about N more" is one coherent target.
+/** Repair 33: one card of the forward-looking panel (current month + the next three). */
+export type UpcomingMonth = {
+  month: string // 'YYYY-MM'
+  counted_bonus: number // already counted in that month (0 for future months)
+  expected_bonus: number // forecast from deals not yet fully paid (Repair 27 forecast − counted)
+  expected_deals: ExpectedDealRef[]
+  next_tier_bonus: number | null // first tier above the month's forecast; null = top tier / no model
+  deals_to_next_tier_estimate: number | null // remaining gap ÷ her 12-month average deal value, min 1; null = no history / top tier
+  avg_deal_bonus: number | null // her average bonus per completed deal, last 12 months (display of the estimate); null = no history
+  top_tier_reached: boolean
+  bar: BarGeometry
+}
+
 export type BonusOverview = {
   month: string // 'YYYY-MM'
+  upcoming: UpcomingMonth[] // exactly 4: current month, +1, +2, +3
+  current_month_closed: true // informational — the UI never asks her to act on the current month
   months: BonusOverviewMonth[] // chart: 6 back .. 2 forward
   locked: { bonus: number; deals_count: number }
   expected: { bonus: number; deals_count: number; deals: ExpectedDealRef[] } // bonus = the extra on top of locked
@@ -90,6 +106,38 @@ export function buildBonusOverview(
   const sorted = [...tiers].sort((a, b) => a.min - b.min)
   const top = sorted.length ? sorted[sorted.length - 1] : null
 
+  // ── Repair 33: upcoming months ──
+  const histFrom = shiftMonth(todayKey, -11)
+  const history = deals.filter(
+    (d) => d.kind === 'actual' && d.completionMonthKey && d.completionMonthKey >= histFrom && d.completionMonthKey <= todayKey,
+  )
+  const avgValue = history.length > 0 ? fromAgorot(Math.round(history.reduce((s, d) => s + toAgorot(d.dealIncome), 0) / history.length)) : null
+  let histBonus = 0
+  for (let i = -11; i <= 0; i++) histBonus += ledger.get(shiftMonth(todayKey, i))?.actualBonus ?? 0
+  const avgDealBonus = history.length > 0 && histBonus > 0 ? Math.round(histBonus / history.length) : null
+  const upcoming: UpcomingMonth[] = []
+  for (let i = 0; i <= 3; i++) {
+    const key = shiftMonth(todayKey, i)
+    const lm = ledger.get(key)
+    const counted = lm?.actualBonus ?? 0
+    const forecastRev = lm?.forecastRevenue ?? 0
+    const expectedBonus = Math.max(0, (lm?.forecastBonus ?? 0) - counted)
+    const nextT = sorted.find((t) => t.min > forecastRev) ?? null
+    const est = nextT && avgValue && avgValue > 0 ? Math.max(1, Math.ceil((nextT.min - forecastRev) / avgValue)) : null
+    const mDeals = deals.filter((d) => d.kind === 'expected' && d.completionMonthKey === key)
+    upcoming.push({
+      month: key,
+      counted_bonus: counted,
+      expected_bonus: expectedBonus,
+      expected_deals: mDeals.map((d) => ({ deal_id: d.transaction_id, client_name: d.client_name, position_name: d.position_name, candidate_name: d.candidate_name })),
+      next_tier_bonus: nextT ? nextT.bonus : null,
+      deals_to_next_tier_estimate: est,
+      avg_deal_bonus: avgDealBonus,
+      top_tier_reached: !!top && !nextT && forecastRev >= top.min,
+      bar: barGeometry({ counted, expected: expectedBonus, next: nextT ? nextT.bonus : null, estimateDeals: est, avgDealBonus }),
+    })
+  }
+
   const expectedDeals = deals.filter((d) => d.kind === 'expected' && d.completionMonthKey === todayKey)
 
   // next tier above the FORECAST revenue; extra-deals estimate = remaining shekel gap ÷ her average
@@ -113,6 +161,8 @@ export function buildBonusOverview(
 
   return {
     month: todayKey,
+    upcoming,
+    current_month_closed: true,
     months,
     locked: { bonus: lockedBonus, deals_count: countDeals(todayKey, 'actual') },
     expected: {

@@ -83,32 +83,42 @@
   --sidebar-ring: oklch(0.45 0.2 295);
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, monospace;
-  /* Repair 32 (D2) — recruiter-portal bonus statuses. Admin/Bonuses keep the purple rule. */
-  --bonus-locked: #059669;          /* מובטח: solid emerald (fills, bars, swatches) */
-  --bonus-locked-bg: #d1fae5;
-  --bonus-locked-text: #065f46;     /* AA text on --bonus-locked-bg and on white */
-  --bonus-expected: #d97706;        /* צפוי: amber, always drawn striped */
-  --bonus-expected-bg: #fef3c7;
-  --bonus-expected-text: #92400e;
-  --bonus-estimate: #6b7280;        /* הערכה: grey, dashed outline */
-  --bonus-estimate-text: #4b5563;
+  /* Repair 33 (D5) — recruiter-portal bonus palette. Overrides the CLAUDE.md purple display rule for the
+     recruiter's bonus panel + chart ONLY (admin / Bonuses / BonusWidget keep purple). Contrast: npm run check:contrast */
+  --bonus-counted: #6d28d9;         /* solid counted bonus, legend swatch, CTA start */
+  --bonus-counted-ink: #ffffff;
+  --bonus-expected: #b5476e;        /* expected stripes, amounts, chip border */
+  --bonus-expected-stripe: #f8d3dd;
+  --bonus-expected-chip: #fce4ec;
+  --bonus-expected-ink: #a93d63;
+  --bonus-title-ink: #6b1530;
+  --bonus-estimate: #8b5cf6;        /* dashed estimate border + swatch */
+  --bonus-surface: #f5f0ff;
+  --bonus-row: #fdf2f5;
+  --bonus-track: #ede9fe;
+  --bonus-text: #1f1537;
+  --bonus-muted: #5b4b7a;
 }
 
 .dark {
-  --bonus-locked: #34d399;
-  --bonus-locked-bg: #064e3b;
-  --bonus-locked-text: #a7f3d0;
-  --bonus-expected: #fbbf24;
-  --bonus-expected-bg: #422006;
-  --bonus-expected-text: #fde68a;
-  --bonus-estimate: #9ca3af;
-  --bonus-estimate-text: #d1d5db;
+  --bonus-counted: #8553f1;
+  --bonus-counted-ink: #ffffff;
+  --bonus-expected: #d9719a;
+  --bonus-expected-stripe: #4a1a31;
+  --bonus-expected-chip: #3b1426;
+  --bonus-expected-ink: #f4a6bf;
+  --bonus-title-ink: #fbe7ee;
+  --bonus-estimate: #a78bfa;
+  --bonus-surface: #1f1537;
+  --bonus-row: #2a1a3d;
+  --bonus-track: #2e2146;
+  --bonus-text: #f5f0ff;
+  --bonus-muted: #c9bde0;
 }
 
-/* Diagonal stripe = צפוי (colour is never the only carrier: every use also carries a text label). */
+/* Diagonal stripe = expected (colour is never the only carrier: every use also carries a text label). */
 .bonus-stripes {
-  background-color: var(--bonus-expected-bg);
-  background-image: repeating-linear-gradient(135deg, var(--bonus-expected) 0 2px, transparent 2px 9px);
+  background-image: repeating-linear-gradient(45deg, var(--bonus-expected) 0 5px, var(--bonus-expected-stripe) 5px 10px);
 }
 
 @layer base {

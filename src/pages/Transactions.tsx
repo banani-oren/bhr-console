@@ -89,7 +89,9 @@ export default function Transactions() {
   // filters, billing dots or delete. Admin / administration are unchanged.
   const isRecruiter = profile?.role === 'recruiter'
   const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
-    queryKey: ['transactions'],
+    // Repair 33: a recruiter's my_deals result must never share a cache entry with the admin list (the admin's
+    // "דשבורד עובד" preview mounts the recruiter dashboard) — same-key collision made Transactions look empty. Prefix keeps invalidation working.
+    queryKey: isRecruiter ? ['transactions', 'mine'] : ['transactions'],
     enabled: !!profile,
     queryFn: async () => {
       if (isRecruiter) {

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>הבונוסים הבאים — דסקטופ</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:Heebo,system-ui,sans-serif}
+</style>
+</helmet>
+<div style="width:960px;height:760px;box-sizing:border-box;padding:32px 36px;background:#ffffff;color:#1f1537;display:flex;flex-direction:column;gap:22px;font-family:Heebo,system-ui,sans-serif">
+
+  <!-- כותרת: קדימה, לא אחורה -->
+  <div>
+    <div style="font-size:28px;font-weight:800;color:#4c1d95">הבונוסים הבאים שלך</div>
+    <div style="margin-top:6px;font-size:15px;color:#4b3b6b">כל עסקה שתיסגר עכשיו נכנסת לחודש שבו הכסף ייכנס, ומקדמת אותך לדרגה הבאה</div>
+  </div>
+
+  <!-- שלושה חודשים קדימה -->
+  <div style="display:flex;gap:16px">
+
+    <!-- נובמבר -->
+    <div style="flex:1;padding:18px;border-radius:18px;background:#f5f0ff;border:1px solid #ddd6fe;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:18px;font-weight:800;color:#4c1d95">נובמבר</div>
+        <div style="font-size:12px;color:#5b4b7a">2 עסקאות בדרך</div>
+      </div>
+      <div style="font-size:34px;font-weight:800;color:#b5476e;line-height:1">₪1,600</div>
+      <div style="font-size:12px;color:#6b1530">צפוי · ממתין לתשלום מלא</div>
+      <!-- פס התקדמות לדרגה הבאה -->
+      <div style="position:relative;height:14px;border-radius:999px;background:#ede9fe;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:31%;background:repeating-linear-gradient(45deg,#b5476e 0 5px,#f8d3dd 5px 10px)"></div>
+        <div style="position:absolute;left:31%;top:0;bottom:0;width:38%;border:2px dashed #8b5cf6;box-sizing:border-box;border-radius:0 999px 999px 0"></div>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:#1f1537">
+        לדרגה הבאה (₪2,100): <b>עוד כ-1 עסקה</b> לפי הממוצע שלך
+      </div>
+    </div>
+
+    <!-- דצמבר -->
+    <div style="flex:1;padding:18px;border-radius:18px;background:#f5f0ff;border:1px solid #ddd6fe;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:18px;font-weight:800;color:#4c1d95">דצמבר</div>
+        <div style="font-size:12px;color:#5b4b7a">עסקה אחת בדרך</div>
+      </div>
+      <div style="font-size:34px;font-weight:800;color:#b5476e;line-height:1">₪800</div>
+      <div style="font-size:12px;color:#6b1530">צפוי · ממתין לתשלום מלא</div>
+      <div style="position:relative;height:14px;border-radius:999px;background:#ede9fe;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:17%;background:repeating-linear-gradient(45deg,#b5476e 0 5px,#f8d3dd 5px 10px)"></div>
+        <div style="position:absolute;left:17%;top:0;bottom:0;width:50%;border:2px dashed #8b5cf6;box-sizing:border-box;border-radius:0 999px 999px 0"></div>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:#1f1537">
+        לדרגה הבאה (₪2,100): <b>עוד כ-2 עסקאות</b>. כל עסקה חדשה שתיסגר השבוע מקרבת אותך
+      </div>
+    </div>
+
+    <!-- ינואר -->
+    <div style="flex:1;padding:18px;border-radius:18px;background:#ffffff;border:2px dashed #8b5cf6;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:18px;font-weight:800;color:#4c1d95">ינואר</div>
+        <div style="font-size:12px;color:#5b4b7a">עוד לא נפתחו עסקאות</div>
+      </div>
+      <div style="font-size:34px;font-weight:800;color:#6d28d9;line-height:1">₪0</div>
+      <div style="font-size:12px;color:#5b4b7a">הערכה לפי הממוצע שלך: כ-₪800 לכל עסקה</div>
+      <div style="position:relative;height:14px;border-radius:999px;background:#ede9fe;overflow:hidden">
+        <div style="position:absolute;left:0;top:0;bottom:0;width:38%;border:2px dashed #8b5cf6;box-sizing:border-box;border-radius:999px"></div>
+      </div>
+      <div style="font-size:13px;line-height:1.5;color:#1f1537">
+        <b>פתיחת עסקה אחת עכשיו</b> נותנת לינואר את הצעד הראשון
+      </div>
+    </div>
+  </div>
+
+  <!-- העסקאות שכבר בדרך, עם חודש הכניסה -->
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div style="font-size:16px;font-weight:800;color:#4c1d95">העסקאות שכבר בדרך לבונוס</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:14px;background:#fdf2f5;border:2px solid #b5476e">
+      <div>
+        <div style="font-size:15px;font-weight:800;color:#6b1530">אלדר שיווק · חשבת שכר</div>
+        <div style="font-size:12px;color:#a93d63">ממתינה לתשלום מלא</div>
+      </div>
+      <div style="font-size:13px;font-weight:800;color:#b5476e;background:#fce4ec;padding:6px 12px;border-radius:999px">נכנסת לנובמבר</div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:14px;background:#fdf2f5;border:2px solid #b5476e">
+      <div>
+        <div style="font-size:15px;font-weight:800;color:#6b1530">אלדר שיווק · מנהל חשבונות</div>
+        <div style="font-size:12px;color:#a93d63">ממתינה לתשלום מלא</div>
+      </div>
+      <div style="font-size:13px;font-weight:800;color:#b5476e;background:#fce4ec;padding:6px 12px;border-radius:999px">נכנסת לנובמבר</div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:14px;background:#fdf2f5;border:2px solid #b5476e">
+      <div>
+        <div style="font-size:15px;font-weight:800;color:#6b1530">ניטון מרכזים · בקרת איכות</div>
+        <div style="font-size:12px;color:#a93d63">ממתינה לתשלום מלא</div>
+      </div>
+      <div style="font-size:13px;font-weight:800;color:#b5476e;background:#fce4ec;padding:6px 12px;border-radius:999px">נכנסת לדצמבר</div>
+    </div>
+  </div>
+
+  <!-- קריאה לפעולה -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-radius:16px;background:linear-gradient(90deg,#6d28d9,#7c3aed);color:#ffffff">
+    <div>
+      <div style="font-size:16px;font-weight:800">פתיחת עסקה חדשה היום נכנסת לינואר</div>
+      <div style="font-size:13px;opacity:.9">כל עסקה ממוצעת שלך מקרבת אותך לדרגה הבאה</div>
+    </div>
+    <div style="font-size:14px;font-weight:800;background:#b5476e;color:#ffffff;padding:10px 18px;border-radius:12px">פתיחת עסקה</div>
+  </div>
+
+  <!-- מקרא -->
+  <div style="display:flex;gap:18px;font-size:12px;color:#5b4b7a;align-items:center">
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:4px;background:repeating-linear-gradient(45deg,#b5476e 0 3px,#f8d3dd 3px 6px)"></span>צפוי · ממתין לתשלום מלא</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:4px;border:2px dashed #8b5cf6;box-sizing:border-box"></span>הערכה לפי הממוצע שלך</span>
+    <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:14px;height:14px;border-radius:4px;background:#6d28d9"></span>נספר לבונוס</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":960,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { jerusalemYearMonth } from '@/lib/finance'
-import type { BonusOverview, ExpectedDealRef } from '@/lib/bonusOverview'
+import type { BonusOverview } from '@/lib/bonusOverview'
+import UpcomingBonusPanel from '@/components/recruiter/UpcomingBonusPanel'
 import type { AttendanceLog, Transaction } from '@/lib/types'
 import { buildMonthDays, monthTotals, shiftMonthKey } from '@/lib/attendanceMonth'
 import { addCalendarDays, expectedHours } from '@/lib/ilCalendar'
@@ -30,7 +31,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Briefcase, Trophy, Clock, CalendarX, CalendarCheck, Check, Hourglass, Pencil } from 'lucide-react'
+import { Briefcase, Trophy, Clock, CalendarX, CalendarCheck, Check, Pencil } from 'lucide-react'
 
 // Repair 31 — the recruiter dashboard shows her deals, her attendance and a live, HONEST bonus. No
 // accounting data: no revenue, amounts, invoices, payments or collection wording (Oren, 2026-10-18).
@@ -38,20 +39,15 @@ import { Briefcase, Trophy, Clock, CalendarX, CalendarCheck, Check, Hourglass, P
 // month of its last payment); numbers come from the my-bonus-overview Edge Function (same engine as
 // bonus.ts) — bonus amounts and deal COUNTS only.
 //
-// Repair 32 (Oren, 2026-10-19): the bonus hero is the core of the page. Three statuses, each ALWAYS
-// labelled — מובטח (emerald, solid), צפוי (amber, striped), הערכה (grey, dashed) — and NO conditional
-// wording ("אם", "במידה", "בהנחה") anywhere next to a bonus number. This overrides the purple rule of
-// CLAUDE.md for the recruiter portal only (Admin / Bonuses.tsx keep purple).
+// Repair 33 (Oren, 2026-10-19): the bonus hero of Repair 32 is replaced by the forward-looking
+// UpcomingBonusPanel (components/recruiter) — current month + the next three, counted / expected / estimate.
+// Palette = --bonus-* tokens (overrides the purple rule for the recruiter portal only; Admin / Bonuses.tsx keep purple).
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 const NUM = new Intl.NumberFormat('he-IL')
-const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר']
 const HE_MONTHS_SHORT = ['ינו', 'פבר', 'מרץ', 'אפר', 'מאי', 'יוני', 'יולי', 'אוג', 'ספט', 'אוק', 'נוב', 'דצמ']
-const LOCKED = 'var(--bonus-locked)'
-const EXPECTED = 'var(--bonus-expected)'
-const MAX_TILES = 12
+const COUNTED = 'var(--bonus-counted)'
 
-const monthName = (key: string) => HE_MONTHS[Number(key.slice(5)) - 1]
 const dealsWord = (n: number) => (n === 1 ? 'עסקה' : 'עסקאות')
 
 const isoMs = (iso: string) => Date.parse(iso + 'T00:00:00Z')
@@ -76,7 +72,7 @@ export default function RecruiterDashboard() {
   })
 
   const dealsQ = useQuery<Transaction[]>({
-    queryKey: ['transactions'],
+    queryKey: ['transactions', 'mine'], // own cache entry — see Transactions.tsx (Repair 33)
     enabled: !!profile?.id,
     queryFn: async () => {
       const { data, error } = await supabase.rpc('my_deals')
@@ -109,7 +105,6 @@ export default function RecruiterDashboard() {
   const expectedToDate = today > firstOfMonth ? expectedHours(firstOfMonth, yesterday) : 0
 
   const deals = useMemo(() => dealsQ.data ?? [], [dealsQ.data])
-  const dealsById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals])
   const openDeals = useMemo(
     () =>
       deals
@@ -122,7 +117,7 @@ export default function RecruiterDashboard() {
 
   const ov = overviewQ.data
 
-  // Chart: past months = solid emerald; current + future = emerald (מובטח) + striped amber (צפוי) on top.
+  // Chart: past months = solid counted; current + future = counted (נספר לבונוס) + striped expected (צפוי) on top.
   const chartData = useMemo(() => {
     if (!ov) return []
     return ov.months.map((m) => {
@@ -148,12 +143,18 @@ export default function RecruiterDashboard() {
     <div className="p-6 space-y-6" dir="rtl">
       <h1 className="text-2xl font-bold tracking-tight text-foreground">דשבורד</h1>
 
-      <BonusHero
-        overviewQ={overviewQ}
-        monthKey={monthKey}
-        onAddDeal={openAdd}
-        onOpenDeal={(ref) => { const t = dealsById.get(ref.deal_id); if (t) openEdit(t) }}
-      />
+      {overviewQ.isLoading ? (
+        <Card><CardContent className="p-6"><p className="text-sm text-muted-foreground">טוען נתונים...</p></CardContent></Card>
+      ) : overviewQ.isError || !ov ? (
+        <Card>
+          <CardContent className="p-6 flex flex-col items-center gap-3">
+            <p className="text-sm text-destructive">שגיאה בטעינת נתוני הבונוס.</p>
+            <button type="button" onClick={() => void overviewQ.refetch()} className="text-sm text-purple-700 underline">נסה שנית</button>
+          </CardContent>
+        </Card>
+      ) : (
+        <UpcomingBonusPanel ov={ov} onOpenDeal={openAdd} />
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard title="העסקאות הפתוחות שלי" icon={<Briefcase size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(openDeals.length)} testId="kpi-open-deals" />
@@ -214,7 +215,7 @@ export default function RecruiterDashboard() {
                 </>
               ) : (
                 <p className="flex items-center gap-1.5 text-base font-semibold" data-testid="kpi-missing-ok">
-                  <Check size={18} style={{ color: LOCKED }} aria-hidden /> הכול מדווח
+                  <Check size={18} style={{ color: COUNTED }} aria-hidden /> הכול מדווח
                 </p>
               )}
             </CardContent>
@@ -234,22 +235,22 @@ export default function RecruiterDashboard() {
           ) : (
             <>
               <div className="flex items-center gap-4 text-xs mb-2" data-testid="chart-legend">
-                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: LOCKED }} />מובטח</span>
-                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bonus-stripes border" style={{ borderColor: EXPECTED }} />צפוי</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm" style={{ background: COUNTED }} />נספר לבונוס</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-sm bonus-stripes" />צפוי</span>
               </div>
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={chartData} margin={{ top: 4, right: 4, left: 8, bottom: 4 }}>
                   <defs>
                     <pattern id="bonus-expected-stripes" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                      <rect width="8" height="8" style={{ fill: 'var(--bonus-expected-bg)' }} />
-                      <rect width="2.5" height="8" style={{ fill: 'var(--bonus-expected)' }} />
+                      <rect width="8" height="8" style={{ fill: 'var(--bonus-expected-stripe)' }} />
+                      <rect width="3" height="8" style={{ fill: 'var(--bonus-expected)' }} />
                     </pattern>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                   <YAxis tickFormatter={(v: number) => ILS.format(v)} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64} />
                   <Tooltip content={<BonusTooltip />} cursor={{ fill: 'rgba(100,100,100,0.08)' }} />
-                  <Bar dataKey="locked" stackId="b" fill="var(--bonus-locked)" maxBarSize={40} name="locked" />
+                  <Bar dataKey="locked" stackId="b" fill="var(--bonus-counted)" maxBarSize={40} name="locked" />
                   <Bar dataKey="expected" stackId="b" fill="url(#bonus-expected-stripes)" stroke="var(--bonus-expected)" radius={[4, 4, 0, 0]} maxBarSize={40} name="expected" />
                 </BarChart>
               </ResponsiveContainer>
@@ -335,175 +336,10 @@ function BonusTooltip({ active, payload }: { active?: boolean; payload?: Tooltip
   return (
     <div className="rounded-lg border bg-background p-2 text-xs shadow-md" dir="rtl">
       <p className="font-semibold mb-1">{row.label}</p>
-      <p><span className="inline-block w-2 h-2 rounded-sm ml-1" style={{ background: LOCKED }} />מובטח: {ILS.format(row.locked)} · {NUM.format(row.lockedDeals)} {dealsWord(row.lockedDeals)}</p>
+      <p><span className="inline-block w-2 h-2 rounded-sm ml-1" style={{ background: COUNTED }} />נספר לבונוס: {ILS.format(row.locked)} · {NUM.format(row.lockedDeals)} {dealsWord(row.lockedDeals)}</p>
       {(row.expected > 0 || row.expectedDeals > 0) && (
-        <p><span className="inline-block w-2 h-2 rounded-sm ml-1 bonus-stripes" style={{ outline: `1px solid ${EXPECTED}` }} />צפוי: {ILS.format(row.expected)} · {NUM.format(row.expectedDeals)} {dealsWord(row.expectedDeals)}</p>
+        <p><span className="inline-block w-2 h-2 rounded-sm ml-1 bonus-stripes" />צפוי: {ILS.format(row.expected)} · {NUM.format(row.expectedDeals)} {dealsWord(row.expectedDeals)}</p>
       )}
     </div>
-  )
-}
-
-// ── Bonus hero ──────────────────────────────────────────────────────────────
-
-type TileKind = 'locked' | 'expected' | 'estimate'
-type TileSpec = { kind: TileKind; key: string; label: string; sub?: string; deal?: ExpectedDealRef }
-
-function Tile({ spec, onOpenDeal }: { spec: TileSpec; onOpenDeal: (d: ExpectedDealRef) => void }) {
-  const base = 'relative flex h-[4.25rem] w-[8.25rem] flex-col justify-between rounded-lg px-2.5 py-1.5 text-right'
-  if (spec.kind === 'locked') {
-    return (
-      <div className={`${base} border-2`} style={{ borderColor: LOCKED, background: 'var(--bonus-locked-bg)', color: 'var(--bonus-locked-text)' }} data-testid="tile-locked">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full text-white" style={{ background: LOCKED }}><Check size={13} strokeWidth={3} aria-hidden /></span>
-        <span className="text-xs font-bold leading-tight">{spec.label}</span>
-      </div>
-    )
-  }
-  if (spec.kind === 'expected') {
-    return (
-      <button
-        type="button"
-        onClick={() => spec.deal && onOpenDeal(spec.deal)}
-        className={`${base} bonus-stripes border-2 cursor-pointer hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2`}
-        style={{ borderColor: EXPECTED, color: 'var(--bonus-expected-text)' }}
-        title={[spec.deal?.client_name, spec.deal?.position_name, spec.deal?.candidate_name].filter(Boolean).join(' · ')}
-        data-testid="tile-expected"
-        data-deal-id={spec.deal?.deal_id}
-      >
-        <span className="rounded bg-white/80 px-1 text-[11px] font-bold leading-tight line-clamp-1 self-start max-w-full">{spec.label}</span>
-        <span className="rounded bg-white/80 px-1 text-[11px] font-semibold leading-tight self-start">{spec.sub}</span>
-      </button>
-    )
-  }
-  return (
-    <div className={`${base} border-2 border-dashed`} style={{ borderColor: 'var(--bonus-estimate)', color: 'var(--bonus-estimate-text)' }} data-testid="tile-estimate">
-      <Hourglass size={14} aria-hidden />
-      <span className="text-xs font-bold leading-tight">{spec.label}</span>
-    </div>
-  )
-}
-
-function BonusHero({
-  overviewQ,
-  monthKey,
-  onAddDeal,
-  onOpenDeal,
-}: {
-  overviewQ: { data?: BonusOverview; isLoading: boolean; isError: boolean; refetch: () => unknown }
-  monthKey: string
-  onAddDeal: () => void
-  onOpenDeal: (d: ExpectedDealRef) => void
-}) {
-  const ov = overviewQ.data
-  if (overviewQ.isLoading) {
-    return (
-      <Card><CardContent className="p-6"><p className="text-sm text-muted-foreground">טוען נתונים...</p></CardContent></Card>
-    )
-  }
-  if (overviewQ.isError || !ov) {
-    return (
-      <Card>
-        <CardContent className="p-6 flex flex-col items-center gap-3">
-          <p className="text-sm text-destructive">שגיאה בטעינת נתוני הבונוס.</p>
-          <button type="button" onClick={() => void overviewQ.refetch()} className="text-sm text-purple-700 underline">נסה שנית</button>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const headline = ov.locked.bonus + ov.expected.bonus
-  const nExp = ov.expected.deals_count
-  const next = ov.next_tier
-  const estimate = next?.deals_to_tier_estimate ?? 0
-
-  // Tiles: one per deal in the picture — completed, to complete, estimated extra (D2 / B.2).
-  const all: TileSpec[] = []
-  for (let i = 0; i < ov.locked.deals_count; i++) all.push({ kind: 'locked', key: `l${i}`, label: 'הושלמה' })
-  ov.expected.deals.forEach((d, i) =>
-    all.push({ kind: 'expected', key: `e${i}`, label: d.client_name ?? 'עסקה', sub: 'להשלמה', deal: d }),
-  )
-  for (let i = 0; i < estimate; i++) all.push({ kind: 'estimate', key: `s${i}`, label: 'הערכה' })
-  const shown = all.slice(0, MAX_TILES)
-  const hidden = all.length - shown.length
-
-  // Requirement line — a status statement, never conditional wording (D3).
-  let requirement: string
-  if (!ov.has_model) {
-    requirement = 'המנהל עדיין לא הגדיר מודל בונוס.'
-  } else if (ov.top_tier === 'locked') {
-    requirement = 'הגעת לדרגה הגבוהה החודש'
-  } else if (ov.top_tier === 'expected') {
-    requirement = `${nExp === 1 ? 'עסקה אחת' : `${NUM.format(nExp)} עסקאות`} להשלמה לדרגה הגבוהה (${ILS.format(headline)})`
-  } else if (next) {
-    if (next.deals_to_tier_estimate == null) {
-      requirement = `נדרשות עוד עסקאות להשלמה לדרגה הבאה (${ILS.format(next.bonus)})`
-    } else {
-      const toComplete = nExp === 0 ? '' : `${nExp === 1 ? 'עסקה אחת' : `${NUM.format(nExp)} עסקאות`} להשלמה + `
-      const extra = next.deals_to_tier_estimate === 1 ? 'עסקה נוספת אחת' : `כ-${NUM.format(next.deals_to_tier_estimate)} עסקאות נוספות`
-      requirement = `להגעה לדרגה הבאה (${ILS.format(next.bonus)}): ${toComplete}${extra} (לפי הממוצע שלך)`
-    }
-  } else {
-    requirement = ''
-  }
-
-  const chip = (testId: string, label: string, amount: number, kind: 'locked' | 'expected') => (
-    <span
-      data-testid={testId}
-      className={`inline-flex items-center gap-1.5 rounded-full border-2 px-3 py-1 text-sm font-semibold ${kind === 'expected' ? 'bonus-stripes' : ''}`}
-      style={
-        kind === 'locked'
-          ? { borderColor: LOCKED, background: 'var(--bonus-locked-bg)', color: 'var(--bonus-locked-text)' }
-          : { borderColor: EXPECTED, color: 'var(--bonus-expected-text)' }
-      }
-    >
-      {kind === 'locked' ? (
-        <span className="flex h-4 w-4 items-center justify-center rounded-full text-white" style={{ background: LOCKED }}><Check size={11} strokeWidth={3} aria-hidden /></span>
-      ) : (
-        <Hourglass size={14} aria-hidden />
-      )}
-      <span className={kind === 'expected' ? 'rounded bg-white/80 px-1' : ''}>{label} {ILS.format(amount)}</span>
-    </span>
-  )
-
-  return (
-    <Card data-testid="bonus-hero">
-      <CardContent className="p-6 space-y-5">
-        <h2 className="text-lg font-semibold" data-testid="hero-title">הבונוס שלך לחודש {monthName(monthKey)}</h2>
-
-        {ov.has_model && headline === 0 ? (
-          <div className="space-y-3" data-testid="hero-empty">
-            <p className="text-base font-medium">הבונוס של החודש מתחיל בעסקה הראשונה שתיסגר בתשלום מלא</p>
-            <Button className="bg-purple-600 hover:bg-purple-700 text-white" onClick={onAddDeal}>פתיחת עסקה</Button>
-          </div>
-        ) : (
-          ov.has_model && <p className="text-5xl font-bold leading-none" data-testid="hero-headline">{ILS.format(headline)}</p>
-        )}
-
-        {ov.has_model && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="hero-chips">
-            {chip('chip-locked', 'מובטח', ov.locked.bonus, 'locked')}
-            {chip('chip-expected', 'צפוי', ov.expected.bonus, 'expected')}
-          </div>
-        )}
-
-        {shown.length > 0 && (
-          <div className="flex flex-wrap items-stretch gap-2" data-testid="hero-tiles">
-            {shown.map((t) => <Tile key={t.key} spec={t} onOpenDeal={onOpenDeal} />)}
-            {hidden > 0 && (
-              <span className="flex h-[4.25rem] items-center px-2 text-sm font-semibold text-muted-foreground" data-testid="tiles-more">+{NUM.format(hidden)}</span>
-            )}
-          </div>
-        )}
-        {estimate > 0 && <p className="-mt-3 text-xs text-muted-foreground">הערכה — לפי הממוצע שלך</p>}
-
-        {requirement && <p className="text-sm font-medium" data-testid="hero-requirement">{requirement}</p>}
-
-        <div className="space-y-1 border-t pt-3 text-sm text-muted-foreground" data-testid="hero-footer">
-          <p>נותרו {NUM.format(ov.workdays_left)} ימי עבודה בחודש</p>
-          {ov.pending_unknown_count > 0 && (
-            <p>{NUM.format(ov.pending_unknown_count)} {ov.pending_unknown_count === 1 ? 'עסקה ממתינה' : 'עסקאות ממתינות'} להגדרת תאריך השלמה</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
   )
 }

@@ -12,7 +12,7 @@ const lib = resolve(here, '../src/lib')
 const fns = resolve(here, '../supabase/functions')
 
 const targets = {
-  'my-bonus-overview': ['types', 'finance', 'workHours', 'ilCalendar', 'billingEvents', 'bonus', 'bonusOverview'],
+  'my-bonus-overview': ['types', 'finance', 'workHours', 'ilCalendar', 'billingEvents', 'bonus', 'bonusBar', 'bonusOverview'],
   'recruiter-save-deal': ['types', 'finance', 'workHours', 'ilCalendar', 'billingEvents', 'dealEvents'],
 }
 

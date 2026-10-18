@@ -11,7 +11,9 @@
     "generate:icons": "node scripts/generate-icons.mjs",
     "sync:edge": "node scripts/sync-edge-shared.mjs",
     "deploy:edge": "node scripts/deploy-edge.mjs",
-    "test:calendar": "node scripts/test-il-calendar.mjs"
+    "test:calendar": "node scripts/test-il-calendar.mjs",
+    "test:bonus-bar": "node scripts/test-bonus-bar.mjs",
+    "check:contrast": "node scripts/check-bonus-contrast.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
