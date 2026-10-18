@@ -55,7 +55,8 @@ export function SortableHead({
       className={`text-right text-purple-800 font-semibold cursor-pointer select-none hover:bg-purple-100 transition-colors ${className}`}
       onClick={() => onToggle(col)}
     >
-      <span className="inline-flex items-center gap-1 justify-end w-full">
+      {/* RTL: justify-start = the right edge (Repair 30); the indicator follows the label, aligned with its last line when the label wraps. */}
+      <span className="inline-flex items-end gap-1 justify-start w-full">
         {label}
         <span className="text-[10px] text-muted-foreground">
           {active ? (sort.dir === 'asc' ? '↑' : '↓') : '↕'}

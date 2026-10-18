@@ -101,9 +101,15 @@ const formatCurrency = (n: number | null | undefined) => {
 // ≈ 1136px beside the w-64 sidebar). Below that the table scrolls inside its card;
 // the checkbox + לקוח columns are sticky on the right (RTL) with opaque backgrounds.
 const CELL = 'px-1.5 py-1.5 align-middle'
-const HEAD = 'px-1.5 whitespace-normal leading-tight h-auto py-2'
+// Headers wrap to two lines (text unchanged, only wrapped), bottom-aligned, right-aligned.
+const HEAD = 'px-1.5 whitespace-normal leading-tight h-auto py-2 align-bottom text-right'
+// Column widths: dates sized to dd/MM/yy or a dd/MM/yyyy input, document numbers to ~8 digits;
+// the space freed goes to לקוח.
+const W_DATE = 'w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]'
+const W_DATE_INPUT = 'w-[7.5rem] min-w-[7.5rem]'
+const W_DOC = 'w-[5.75rem] min-w-[5.75rem] max-w-[5.75rem]'
 const STICKY_CHK = 'sticky right-0 z-10 w-8 min-w-8'
-const STICKY_CLIENT = 'sticky right-8 z-10 w-24 min-w-24 max-w-24'
+const STICKY_CLIENT = 'sticky right-8 z-10 w-36 min-w-36 max-w-36'
 const stickyBg = (selected: boolean) => (selected ? 'bg-purple-50' : 'bg-background group-hover:bg-purple-50')
 
 export default function BillingReports() {
@@ -384,6 +390,7 @@ export default function BillingReports() {
               allSentinelLabel="כל הלקוחות"
               placeholder="כל הלקוחות"
               popoverClassName="min-w-[16rem] max-h-72"
+              compact
             />
           </div>
 
@@ -480,7 +487,7 @@ export default function BillingReports() {
                   />
                 </TableHead>
                 <SortableHead col="client_name" label="לקוח" sort={sort} onToggle={toggleSort} className={cn(HEAD, STICKY_CLIENT, 'bg-purple-50')} />
-                <TableHead className={cn(HEAD, 'text-right text-purple-800')}>שירות</TableHead>
+                <TableHead className={cn(HEAD, 'text-purple-800')}>שירות</TableHead>
                 <SortableHead col="description" label="תיאור" sort={sort} onToggle={toggleSort} className={HEAD} />
                 <SortableHead col="amount" label="סכום" sort={sort} onToggle={toggleSort} className={HEAD} />
                 <TableHead className={cn(HEAD, 'text-right text-purple-800 font-semibold')}>
@@ -519,12 +526,12 @@ export default function BillingReports() {
                     </Popover>
                   </span>
                 </TableHead>
-                <SortableHead col="billing_date" label="תאריך חיוב מתוכנן" sort={sort} onToggle={toggleSort} className={HEAD} />
-                <TableHead className={cn(HEAD, 'text-right text-purple-800')}>מספר חשבון עסקה</TableHead>
-                <SortableHead col="invoice_date" label="תאריך הפקה" sort={sort} onToggle={toggleSort} className={HEAD} />
-                <SortableHead col="due_date" label="תאריך תשלום צפוי" sort={sort} onToggle={toggleSort} className={HEAD} />
-                <TableHead className={cn(HEAD, 'text-right text-purple-800')}>מספר חשבונית מס קבלה</TableHead>
-                <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} className={HEAD} />
+                <SortableHead col="billing_date" label="תאריך חיוב מתוכנן" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE)} />
+                <TableHead className={cn(HEAD, 'text-purple-800', W_DOC)}>מספר חשבון עסקה</TableHead>
+                <SortableHead col="invoice_date" label="תאריך הפקה" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE_INPUT)} />
+                <SortableHead col="due_date" label="תאריך תשלום צפוי" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE)} />
+                <TableHead className={cn(HEAD, 'text-purple-800', W_DOC)}>מספר חשבונית מס קבלה</TableHead>
+                <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE_INPUT)} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -607,7 +614,7 @@ function RemainderDashRow({ row, onOpen }: { row: RemainderRow; onOpen: () => vo
     >
       <TableCell className={cn(CELL, STICKY_CHK, stickyBg(false))} />
       <TableCell className={cn(CELL, 'font-medium', STICKY_CLIENT, stickyBg(false))}>
-        <div className="truncate" title={deal.client_name}>{deal.client_name}</div>
+        <div className="line-clamp-2 break-words whitespace-normal leading-tight" title={deal.client_name}>{deal.client_name}</div>
       </TableCell>
       <TableCell className={cn(CELL, 'min-w-24 max-w-[6.5rem] whitespace-normal leading-tight')}>{deal.service_type || '—'}</TableCell>
       <TableCell className={cn(CELL, 'text-xs min-w-28 max-w-40 whitespace-normal leading-tight')}>
@@ -696,7 +703,7 @@ function BillingEventDashRow({
         />
       </TableCell>
       <TableCell className={cn(CELL, 'font-medium', STICKY_CLIENT, stickyBg(selected))}>
-        <div className="truncate" title={event.transactions.client_name}>{event.transactions.client_name}</div>
+        <div className="line-clamp-2 break-words whitespace-normal leading-tight" title={event.transactions.client_name}>{event.transactions.client_name}</div>
       </TableCell>
       <TableCell className={cn(CELL, 'min-w-24 max-w-[6.5rem] whitespace-normal leading-tight')}>{event.transactions.service_type ?? '—'}</TableCell>
       <TableCell className={cn(CELL, 'text-xs min-w-28 max-w-40 whitespace-normal leading-tight')}>
@@ -719,7 +726,7 @@ function BillingEventDashRow({
           value={invoice}
           onChange={(e) => setInvoice(e.target.value)}
           onBlur={() => invoice !== (event.invoice_number ?? '') && void saveField('invoice_number', invoice)}
-          className="h-7 w-20 px-1.5 text-xs"
+          className="h-7 w-[4.5rem] px-1.5 text-xs"
           disabled={!transactionApproved}
           title={awaitingApprovalTitle}
           placeholder={busy === 'invoice_number' ? 'שומר...' : ''}
@@ -730,7 +737,7 @@ function BillingEventDashRow({
           value={invoiceDate}
           onChange={(e) => setInvoiceDate(e.target.value)}
           onBlur={() => invoiceDate !== (event.invoice_date ?? '') && void saveField('invoice_date', invoiceDate)}
-          className="h-7 w-28 min-w-0 px-1 text-xs"
+          className="h-7 w-[7rem] min-w-0 px-1 text-xs"
           disabled={!transactionApproved}
           title={awaitingApprovalTitle}
         />
@@ -747,7 +754,7 @@ function BillingEventDashRow({
           value={receipt}
           onChange={(e) => setReceipt(e.target.value)}
           onBlur={() => receipt !== (event.receipt_number ?? '') && void saveField('receipt_number', receipt)}
-          className="h-7 w-20 px-1.5 text-xs"
+          className="h-7 w-[4.5rem] px-1.5 text-xs"
           disabled={!transactionApproved}
           title={awaitingApprovalTitle}
           placeholder={busy === 'receipt_number' ? 'שומר...' : ''}
@@ -758,7 +765,7 @@ function BillingEventDashRow({
           value={paymentDate}
           onChange={(e) => setPaymentDate(e.target.value)}
           onBlur={() => paymentDate !== (event.payment_date ?? '') && void saveField('payment_date', paymentDate)}
-          className="h-7 w-28 min-w-0 px-1 text-xs"
+          className="h-7 w-[7rem] min-w-0 px-1 text-xs"
           disabled={!transactionApproved || !event.receipt_number}
           title={awaitingApprovalTitle ?? (!event.receipt_number ? 'יש להזין מספר חשבונית מס קבלה תחילה' : undefined)}
         />

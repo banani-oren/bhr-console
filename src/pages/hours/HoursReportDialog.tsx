@@ -15,6 +15,7 @@ import { DateInput } from '@/components/ui/date-input'
 import TransactionDialog from '@/components/TransactionDialog'
 import type { DialogInitial } from '@/components/TransactionDialog'
 import { formatDate } from '@/lib/dates'
+import { BRAND_LOGO_PNG } from '@/lib/brandLogoData'
 import { todayIso } from './common'
 
 type EligibleProfile = Pick<Profile, 'id' | 'full_name' | 'role'>
@@ -164,6 +165,7 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
   <title>דוח שעות – ${escapeHtml(selectedClient.name)}</title>
   <style>
     body { font-family: Arial, Helvetica, sans-serif; direction: rtl; margin: 32px; color: #111; }
+    .brand { height: 56px; width: auto; display: block; margin-bottom: 12px; }
     h1 { font-size: 20px; margin-bottom: 4px; }
     .meta { font-size: 13px; color: #555; margin-bottom: 24px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -176,6 +178,7 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
   </style>
 </head>
 <body>
+  <img class="brand" src="${BRAND_LOGO_PNG}" alt="Banani HR">
   <h1>דוח שעות</h1>
   <div class="meta">
     <span>לקוח: <strong>${escapeHtml(selectedClient.name)}</strong></span>&nbsp;&nbsp;

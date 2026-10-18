@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import BrandLogo from '@/components/BrandLogo'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
@@ -105,6 +106,7 @@ export default function Login() {
     >
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center gap-1">
+          <BrandLogo variant="navy" size={72} className="mx-auto mb-2" />
           <CardTitle className="text-2xl font-bold tracking-tight">
             BHR Console
           </CardTitle>

@@ -158,7 +158,8 @@ App Dev/
 │   │   ├── AgreementUploader.tsx       # PDF upload + extract-agreement edge function
 │   │   ├── BonusWidget.tsx             # Compact per-employee bonus card (current month, actual + תחזית) on AdminDashboard — mounted there since Repair 16 (previously built but never wired in anywhere)
 │   │   ├── ClientPicker.tsx            # Autocomplete client selector. Repair 29: arrow-key/Enter navigation (Esc closes), optional `popoverClassName` (BillingReports passes `min-w-[16rem] max-h-72`); defaults unchanged — TransactionDialog still doesn't auto-open
-│   │   ├── SortableHead.tsx            # Shared sortable <TableHead> + SortState/toggleSortKey/compareBySort (Repair 8)
+│   │   ├── SortableHead.tsx            # Shared sortable <TableHead> + SortState/toggleSortKey/compareBySort (Repair 8). Repair 30: label + indicator sit at the RIGHT edge (`justify-start` in RTL; indicator aligned with the label's last line) on every table that uses it
+│   │   ├── BrandLogo.tsx               # Repair 30: THE React placement of the company logo — `<BrandLogo variant="navy|white" size={px height} />` (navy on light, white on dark). Never draw/inline the mark any other way
 │   │   ├── LabeledToggle.tsx           # Labeled switch/toggle
 │   │   ├── MobileAutoRoute.tsx         # Mobile hard lock: redirects any mobile device to /m on every navigation (re-evaluates via useIsMobileDevice, no one-shot guard, no bhr_force_desktop opt-out — Batch 8 Phase 1)
 │   │   ├── ProfileEditor.tsx           # Inline profile edit form
@@ -172,7 +173,7 @@ App Dev/
 │   │   ├── Transactions.tsx            # Transaction table: filters, inline edit, export
 │   │   ├── AuditLog.tsx                # Repair 24: /audit-log (admin) — filters (date/user/entity/search), 50-row pages, Hebrew field diffs via get_audit_log()
 │   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration). V2: two-phase check-out with optional note (≤250); today's-log + report show check_in→check_out pairs (report = one TableRow per pair, name/date only on first); employee 'תיקון' edit-request form (insert into attendance_edit_requests); admin pencil direct-edit + 'בקשות תיקון ממתינות' approve/reject panel. Edit forms use toLocalInputValue() so datetime-local shows Israel local time. Repair 12: admin-only AdminDeleteButton (trash, two-step inline 'מחק? כן/ביטול') in the פעולות column deletes both pair entries; /attendance sidebar link now allows admin too (Layout.tsx).
-│   │   ├── BillingReports.tsx          # דוחות חיוב (Repair 29). Rows = billing events + one virtual "טרם חויב" row per deal with `ungeneratedRemainderAgorot` > 0 (read-only, not selectable, click opens TransactionDialog; hidden while a date range is set). Events of unapproved deals show an amber "ממתין לאישור" badge, inputs + checkbox disabled. סטטוס header = sort + BILL_BUCKETS popover (default = all but מבוטל; cancelled events fetched only when מבוטל selected). URL: `bill=` (comma list), `client=`. Totals in agorot: טרם חויב + ממתין לתשלום + שולם = סה"כ of visible rows. Column-fit rule: all 12 columns visible at 1440px with no horizontal scroll (compact cells, wrapped תיאור/שירות, truncated לקוח); at 1024px the table scrolls inside its card with checkbox + לקוח sticky on the right. Sidebar order: … עסקאות → דוחות חיוב → יומן שעות …
+│   │   ├── BillingReports.tsx          # דוחות חיוב (Repair 29; Repair 30 header/width rules: all headers right-aligned, labels wrap to two lines (text unchanged), dates sized to dd/MM/yy or a 7.5rem input, document numbers to ~8 digits, the freed space goes to לקוח (w-36, two lines + title tooltip); client picker uses `compact` to match the h-8 neighbours). Rows = billing events + one virtual "טרם חויב" row per deal with `ungeneratedRemainderAgorot` > 0 (read-only, not selectable, click opens TransactionDialog; hidden while a date range is set). Events of unapproved deals show an amber "ממתין לאישור" badge, inputs + checkbox disabled. סטטוס header = sort + BILL_BUCKETS popover (default = all but מבוטל; cancelled events fetched only when מבוטל selected). URL: `bill=` (comma list), `client=`. Totals in agorot: טרם חויב + ממתין לתשלום + שולם = סה"כ of visible rows. Column-fit rule: all 12 columns visible at 1440px with no horizontal scroll (compact cells, wrapped תיאור/שירות, truncated לקוח); at 1024px the table scrolls inside its card with checkbox + לקוח sticky on the right. Sidebar order: … עסקאות → דוחות חיוב → יומן שעות …
 │   │   ├── FinanceReport.tsx           # Repair 23: דוח כספי שנתי body (sections A/B/C + Excel export), rendered by Reports.tsx
 │   │   ├── Reports.tsx                 # Admin-only דוחות section — TWO reports behind a picker (דוח גיוסים default + דוח כספי שנתי, Repair 23; both stay mounted so each keeps its filters). דוח גיוסים: KPIs + לפי מוביל/לקוח/משרה breakdowns with drill-down + Excel export (Batch 8 Phase 4)
 │   │   ├── Bonuses.tsx                 # Per-employee card: actual vs. forecast stats, two-layer progress bar, sortable per-month DEALS table (one row per deal, expandable payments; click a row → TransactionDialog; Repair 27) + partial-collection and ללא צפי השלמה sections, stacked 12-month chart (Repair 16 — tier table removed, moved to Team only)
@@ -1002,6 +1003,15 @@ Trigger: the dashboard showed "גבייה החודש 100% — ₪62,198 מתוך
 
 ---
 
+## Brand & logo (Repair 30, 2026-10-18)
+
+- **Single source:** `public/brand/bhr-logo-source.png` (1080×1080 RGBA, transparent; lowercase "b" + superscript "hr"). Brand navy **`#150c82`**. Never redraw the mark.
+- **Derived assets** (all produced by `npm run generate:icons` = `scripts/generate-icons.mjs`; commit the outputs): `public/brand/bhr-logo.png` (navy, trimmed, 512px), `bhr-logo-white.png` (pure white, alpha kept), `public/favicon.svg` (navy PNG embedded on a white rounded square), `public/favicon.ico` (16/32/48), `public/icons/*` (icon-192/512, maskable at 55% logo, apple-touch 180 opaque white), and `src/lib/brandLogoData.ts` (generated base64 + aspect for jsPDF and the print window).
+- **Usage:** React → `<BrandLogo>` only. Placements: sidebar header (white, 34px, "BHR Console" text kept), Login + SetPassword (navy 72px), `/m` landing + shell (white 28px), hours-report print view (navy), all three PDFs in `pdf.ts` (`addBrandLogo`; text lines kept). Manifest `background_color` #ffffff, `theme_color` stays #7c3aed. PWA precache includes the two logo PNGs, favicon.ico/svg.
+- Installed PWAs / iOS home-screen icons cache aggressively: already-installed phone icons may only update after the app is removed and re-added (iOS limitation, not an open item).
+
+---
+
 ## Phase History
 
 Full detail for every phase (diagnosis, QA evidence, commits) lives in
@@ -1042,4 +1052,5 @@ broken.
 | Repair 27: Bonus = Fully Collected Deals | Bonus engine unit changes from billing event to deal: counts only when every event is paid and covers the contract, at full value, in the last payment month; Bonuses deals table + partial/unknown sections; income figures untouched |
 | Repair 28: Collections Dashboard Math | דשבורד גבייה: one helper `collectionMonth` — % = collected ÷ due-this-month (incl. overdue carry-over), never clamped; overdue by `due_date`/`isOverduePayment`, aging + top-10 follow it; W shows amount; no migration |
 | Repair 29: Billing Reports Upgrade | Remainder rows (טרם חויב), סטטוס header bucket filter shared with Transactions (`billingBuckets.ts`), תיאור sort, 12 columns fit at 1440, client picker fixed (Card overflow-hidden clipped the dropdown), sidebar reorder; no migration |
+| Repair 30: Billing Reports Polish + Company Logo | SortableHead right-aligned everywhere; דוחות חיוב two-line headers + tighter columns + compact client picker (same height as neighbours); company logo (favicon, PWA icons, sidebar, login, mobile, print view, PDFs) via `BrandLogo` + generated assets; no migration |
 

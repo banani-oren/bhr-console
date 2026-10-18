@@ -28,6 +28,8 @@ type Props = {
   allowClear?: boolean
   /** Extra classes for the dropdown panel (Repair 29: BillingReports widens it). Default: none. */
   popoverClassName?: string
+  /** Repair 30: match the height of neighbouring h-8 controls (filter rows). Default: off. */
+  compact?: boolean
 }
 
 export default function ClientPicker({
@@ -41,6 +43,7 @@ export default function ClientPicker({
   className,
   allowClear = true,
   popoverClassName,
+  compact = false,
 }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -130,7 +133,9 @@ export default function ClientPicker({
       ref={wrapperRef}
     >
       <div
-        className={`flex items-center gap-2 border rounded-md px-3 py-2 bg-background cursor-text ${
+        className={`flex items-center gap-2 border rounded-md bg-background cursor-text ${
+          compact ? 'h-8 px-2.5 py-0 text-sm' : 'px-3 py-2'
+        } ${
           disabled ? 'opacity-60 pointer-events-none' : ''
         }`}
         onClick={() => {
@@ -142,7 +147,7 @@ export default function ClientPicker({
       >
         <Input
           ref={inputRef}
-          className="border-0 focus-visible:ring-0 p-0 flex-1 bg-transparent"
+          className={`border-0 focus-visible:ring-0 p-0 flex-1 bg-transparent ${compact ? 'h-full text-sm' : ''}`}
           placeholder={selected ? '' : placeholder}
           value={displayValue}
           onChange={(e) => {

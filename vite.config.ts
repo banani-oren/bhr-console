@@ -10,7 +10,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'icons/apple-touch-icon.png'],
+      includeAssets: ['favicon.ico', 'favicon.svg', 'icons/apple-touch-icon.png', 'brand/bhr-logo.png', 'brand/bhr-logo-white.png'],
       manifest: {
         name: 'BHR Console',
         short_name: 'BHR',
@@ -18,7 +18,7 @@ export default defineConfig({
         lang: 'he',
         dir: 'rtl',
         theme_color: '#7c3aed',
-        background_color: '#f9f5ff',
+        background_color: '#ffffff',
         display: 'standalone',
         start_url: '/',
         scope: '/',

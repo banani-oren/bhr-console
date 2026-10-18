@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
+import BrandLogo from '@/components/BrandLogo'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard,
@@ -108,9 +109,7 @@ export default function Layout({ children }: LayoutProps) {
       <aside className="admin-sidebar w-64 h-screen flex flex-col bg-sidebar text-sidebar-foreground shrink-0 sticky top-0">
         {/* Logo / App title */}
         <div className="flex items-center gap-2 px-5 py-5 border-b border-sidebar-border">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-sidebar-primary text-sidebar-primary-foreground font-bold text-sm select-none">
-            B
-          </div>
+          <BrandLogo variant="white" size={34} />
           <span className="text-lg font-bold tracking-wide text-sidebar-foreground">
             BHR Console
           </span>

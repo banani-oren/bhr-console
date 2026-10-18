@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import BrandLogo from '@/components/BrandLogo'
 import { Clock, CalendarCheck, UserCircle } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
@@ -14,9 +15,7 @@ export default function MobileShell() {
     <div dir="rtl" className="min-h-[100dvh] flex flex-col bg-gray-50">
       <header className="px-4 py-3 bg-purple-950 text-white flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-white/15 text-white font-bold text-sm">
-            B
-          </div>
+          <BrandLogo variant="white" size={28} />
           <div className="min-w-0">
             <p className="text-xs text-purple-100 truncate">
               {profile?.full_name ?? user?.email}

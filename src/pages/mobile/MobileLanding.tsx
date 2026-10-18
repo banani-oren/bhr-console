@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import BrandLogo from '@/components/BrandLogo'
 import { Clock, CalendarCheck, ChevronLeft, UserCircle, LogOut } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 
@@ -19,6 +20,7 @@ export default function MobileLanding() {
       dir="rtl"
       className="min-h-[100dvh] flex flex-col items-center bg-gradient-to-b from-purple-900 via-purple-800 to-purple-950 px-5 pt-10 pb-8 text-white"
     >
+      <BrandLogo variant="white" size={28} className="mb-5" />
       <div className="flex flex-col items-center gap-2 mb-8">
         <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-white/15 backdrop-blur text-white font-bold text-2xl">
           {initials}

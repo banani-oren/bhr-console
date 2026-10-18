@@ -4,6 +4,14 @@ import { supabase } from './supabase'
 import type { BillingReport, Client, HoursLog, Transaction } from './types'
 import type { ServiceType } from './serviceTypes'
 import { formatDate } from './dates'
+import { BRAND_LOGO_PNG, BRAND_LOGO_ASPECT } from './brandLogoData'
+
+// Repair 30: navy logo in every PDF header (height h, aspect preserved).
+function addBrandLogo(doc: jsPDF, x: number, y: number, h: number): number {
+  const w = h * BRAND_LOGO_ASPECT
+  doc.addImage(BRAND_LOGO_PNG, 'PNG', x, y, w, h)
+  return w
+}
 
 // jsPDF defaults to helvetica (no Hebrew glyphs). Characters outside the
 // ISO-Latin range render as squares. Reversing the string pre-draw lets
@@ -26,7 +34,8 @@ type TimeSheetArgs = {
 export function buildTimeSheetPdf({ transaction, client, entries, profileNameById }: TimeSheetArgs): jsPDF {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
   doc.setFontSize(18)
-  doc.text('BHR Console', 40, 50)
+  const logoW = addBrandLogo(doc, 40, 22, 38)
+  doc.text('BHR Console', 40 + logoW + 10, 50)
   doc.setFontSize(12)
   doc.text(label('דף שעות'), 555, 50, { align: 'right' })
   doc.setFontSize(10)
@@ -125,7 +134,8 @@ export function buildBillingReportPdf({
 }: BillingReportArgs): jsPDF {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
   doc.setFontSize(18)
-  doc.text('BHR Console', 40, 50)
+  const logoW = addBrandLogo(doc, 40, 22, 38)
+  doc.text('BHR Console', 40 + logoW + 10, 50)
   doc.setFontSize(13)
   doc.text(label('דוח חיוב'), 555, 50, { align: 'right' })
   doc.setFontSize(10)
@@ -269,6 +279,7 @@ export function generatePerformaPDF(
   doc.setFontSize(18)
   doc.setFont('helvetica', 'bold')
   doc.text('BHR - Banani HR', 105, 20, { align: 'center' })
+  addBrandLogo(doc, 15, 8, 16)
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
