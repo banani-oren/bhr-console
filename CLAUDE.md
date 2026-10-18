@@ -137,7 +137,7 @@ App Dev/
 │   │   ├── billingBuckets.ts           # Repair 29: BILL_BUCKETS (טרם חויב · לחיוב עכשיו · ממתין לתשלום · באיחור · שולם · מבוטל) with `match(event, today)` — the ONE definition shared by Transactions (חיובים popover) and BillingReports (סטטוס popover)
 │   │   ├── dealEvents.ts               # Repair 31: buildDealEvents() — the billing-event drafts of a deal save (extracted verbatim from TransactionDialog.handleSave); run in the browser for admin/administration and server-side by recruiter-save-deal
 │   │   ├── bonusOverview.ts            # Repair 31: buildBonusOverview() — recruiter bonus payload (amounts + deal COUNTS only) on top of bonus.ts; runs in my-bonus-overview
-│   │   ├── ilCalendar.ts               # Repair 32: THE Israeli working-day calendar — IL_NON_WORKING_DAYS (18 days, 2026–2027), isWorkday / isNonWorkingDay / isErevHoliday / addBusinessDays / workdaysBetween / expectedHours / workdaysLeftInMonth. Matched pair with il_non_working_days + bhr_is_workday + bhr_add_business_days; `npm run test:calendar` fails on any drift
+│   │   ├── ilCalendar.ts               # Repair 32: THE Israeli working-day calendar — IL_NON_WORKING_DAYS (19 days, 2026–2027), isWorkday / isNonWorkingDay / isErevHoliday / addBusinessDays / workdaysBetween / expectedHours / workdaysLeftInMonth. Matched pair with il_non_working_days + bhr_is_workday + bhr_add_business_days; `npm run test:calendar` fails on any drift
 │   │   ├── workHours.ts                # Repair 32 (D6): STANDARD_WORKDAY_HOURS = 8.4, EREV_HOLIDAY_HOURS = 7 — Oren to confirm
 │   │   ├── attendanceMonth.ts          # Repair 32: buildMonthDays()/monthTotals() — one month of attendance day by day (present/missing/holiday/erev/future/weekend); shared by the dashboard cards and the recruiter /attendance table
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
@@ -245,7 +245,7 @@ App Dev/
 │       ├── 20261018_delete_transaction.sql           # Repair 26: delete_transaction(p_id, p_hours_action, p_target_transaction) SECURITY DEFINER; hours_log joins the audit log (bhr_audit_row hours_log branch + trigger + audit_log CHECK)
 │       ├── 20261019_recruiter_portal.sql / 20261019_2_recruiter_lockdown.sql  # Repair 31
 │       ├── 20261020_repair32_hebrew_literals_fix.sql # Repair 32 hotfix: re-creates search_clients_for_picker + delete_transaction whose Hebrew literals were corrupted (U+FFFD) by a shell-piped apply
-│       ├── 20261020_il_working_days.sql              # Repair 32: il_non_working_days (18 rows) + bhr_is_workday + holiday-aware bhr_add_business_days (STABLE, SECURITY DEFINER, anon revoked)
+│       ├── 20261020_il_working_days.sql              # Repair 32: il_non_working_days (19 rows) + bhr_is_workday + holiday-aware bhr_add_business_days (STABLE, SECURITY DEFINER, anon revoked)
 │       ├── 20261020_2_attendance_recruiter_window.sql # Repair 32: recruiter attendance writes limited to the current month (RLS)
 │       └── 20261017_2_hours_deals_backfill.sql       # Repair 25: fill-only, idempotent backfill of hours deals (service type, kind, period, rate, net, close date, closing month/year); excludes recruitment-signal rows and probable duplicates of a paid deal
 │
@@ -1044,11 +1044,10 @@ Trigger: the dashboard showed "גבייה החודש 100% — ₪62,198 מתוך
 ## Working days (Repair 32, 2026-10-19)
 
 **One calendar for the whole system (D1).** A *workday* = Sunday–Thursday that is not an official non-working day. Friday/Saturday are never workdays for any count (missing attendance, expected hours, business days); a report entered on a weekend still shows but is never "missing". Eve days (ערב חג) and Chol HaMoed are workdays.
-- Table `il_non_working_days(day pk, name, kind)` — RLS SELECT for authenticated only, writes only through migrations. Seeded with exactly 18 days: 2026 (Pesach 04-02, 04-08 · Independence Day 04-22 · Shavuot 05-22 · Rosh Hashanah 09-12/09-13 · Yom Kippur 09-21 · Sukkot 09-26 · Simchat Torah 10-03; verified against timeanddate / officeholidays / Bank of Israel) and 2027 (rayclock.co.il/work-hours-2027.html: 04-22, 04-28, 05-12, 06-11, 10-02, 10-03, 10-11, 10-16, 10-23). Not seeded: Purim, Tisha B'Av, Chanukah, Lag BaOmer, Yom HaShoah/HaZikaron, Jerusalem Day, Chol HaMoed, erev days.
+- Table `il_non_working_days(day pk, name, kind)` — RLS SELECT for authenticated only, writes only through migrations. Seeded with exactly 19 days (18 from Repair 32 + election day 2026-10-27, Oren 2026-10-19, migration `20261021_election_day_2026.sql`): 2026 (Pesach 04-02, 04-08 · Independence Day 04-22 · Shavuot 05-22 · Rosh Hashanah 09-12/09-13 · Yom Kippur 09-21 · Sukkot 09-26 · Simchat Torah 10-03; verified against timeanddate / officeholidays / Bank of Israel) and 2027 (rayclock.co.il/work-hours-2027.html: 04-22, 04-28, 05-12, 06-11, 10-02, 10-03, 10-11, 10-16, 10-23). Not seeded: Purim, Tisha B'Av, Chanukah, Lag BaOmer, Yom HaShoah/HaZikaron, Jerusalem Day, Chol HaMoed, erev days.
 - SQL: `bhr_is_workday(date)`, `bhr_add_business_days(date,int)` (STABLE, SECURITY DEFINER, EXECUTE = authenticated + service_role, anon revoked); `bhr_calc_due_date` was made STABLE. TS: `src/lib/ilCalendar.ts` (re-exported `addBusinessDays` in `billingEvents.ts`; Edge copies via `sync:edge`). Tests: `npm run test:calendar` (Pesach/Rosh Hashanah/Yom Kippur cases, TS list == DB table, 200 random dates SQL == TS).
 - Effect on data (dry run 2026-10-19): 0 open, non-manual billing events belong to a מיידי client → no `due_date` changed; paid / cancelled / manual events are frozen as before.
 - **Expected hours (D6, Oren to confirm):** 8.4 h per workday, 7 h on an erev-holiday workday (`workHours.ts`).
-- ⚠️ Open: **Knesset election day 2026-10-27 (Tue)** is listed as a public holiday by officeholidays.com but was NOT in Oren's seed list, so it is not seeded (Repair 32 said "use only these dates"). Add a one-row migration if Oren confirms it is a day off for the company.
 
 ## Recruiter attendance (Repair 32, 2026-10-19)
 
