@@ -26,6 +26,8 @@ type Props = {
   className?: string
   /** Show a clear button when a selection is active. Default: true. */
   allowClear?: boolean
+  /** Extra classes for the dropdown panel (Repair 29: BillingReports widens it). Default: none. */
+  popoverClassName?: string
 }
 
 export default function ClientPicker({
@@ -38,9 +40,11 @@ export default function ClientPicker({
   disabled,
   className,
   allowClear = true,
+  popoverClassName,
 }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1) // keyboard highlight; -1 = none, 0 = the "all" sentinel when present
   const wrapperRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -88,6 +92,20 @@ export default function ClientPicker({
     return () => document.removeEventListener('mousedown', onDocDown)
   }, [open])
 
+  // Keyboard rows = [sentinel?] + filtered clients.
+  const sentinelOffset = allSentinelLabel ? 1 : 0
+  const rowCount = sentinelOffset + filtered.length
+
+  function chooseRow(i: number) {
+    if (allSentinelLabel && i === 0) {
+      onChange(null, null)
+      setOpen(false)
+      setQuery('')
+    } else if (filtered[i - sentinelOffset]) {
+      pickClient(filtered[i - sentinelOffset])
+    }
+  }
+
   function pickClient(c: Client) {
     onChange(c.id, c)
     setOpen(false)
@@ -130,9 +148,19 @@ export default function ClientPicker({
           onChange={(e) => {
             setQuery(e.target.value)
             setOpen(true)
+            setActive(-1)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              if (!open) { setOpen(true); return }
+              if (rowCount === 0) return
+              const step = e.key === 'ArrowDown' ? 1 : -1
+              setActive((a) => (a + step + rowCount) % rowCount)
+            } else if (e.key === 'Enter' && open && active >= 0) {
+              e.preventDefault()
+              chooseRow(active)
+            } else if (e.key === 'Escape') {
               setOpen(false)
               setQuery('')
               ;(e.target as HTMLInputElement).blur()
@@ -157,7 +185,7 @@ export default function ClientPicker({
       </div>
 
       {open && !disabled && (
-        <div className="absolute z-50 left-0 right-0 mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-y-auto">
+        <div className={`absolute z-50 left-0 right-0 mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-y-auto ${popoverClassName ?? ''}`}>
           {allSentinelLabel && (
             <button
               type="button"
@@ -168,7 +196,7 @@ export default function ClientPicker({
               }}
               className={`w-full text-right px-3 py-2 hover:bg-purple-50 text-sm font-medium border-b ${
                 !value ? 'text-purple-700 bg-purple-50/50' : 'text-purple-700'
-              }`}
+              } ${active === 0 ? 'bg-purple-100' : ''}`}
             >
               {allSentinelLabel}
             </button>
@@ -176,14 +204,14 @@ export default function ClientPicker({
           {filtered.length === 0 ? (
             <div className="p-3 text-sm text-muted-foreground text-center">{emptyLabel}</div>
           ) : (
-            filtered.map((c) => (
+            filtered.map((c, i) => (
               <button
                 key={c.id}
                 type="button"
                 onClick={() => pickClient(c)}
                 className={`w-full text-right px-3 py-2 hover:bg-purple-50 flex items-center justify-between ${
                   value === c.id ? 'bg-purple-50/50' : ''
-                }`}
+                } ${active === i + sentinelOffset ? 'bg-purple-100' : ''}`}
               >
                 <div>
                   <div className="text-sm font-medium">{c.name}</div>

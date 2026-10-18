@@ -411,3 +411,25 @@ export function paidLastMonths(events: FinanceEvent[], today: string, n = 6) {
   }
   return out.map((o) => ({ ...o, value: fromAgorot(sums.get(o.key)!) }))
 }
+
+/**
+ * Repair 29 — the part of a deal's סכום חשבונית that has no (non-cancelled)
+ * billing event yet: net_invoice_amount − Σ non-cancelled event amounts, in
+ * integer agorot, floored at 0. Null/0 net → 0 (nothing was contracted).
+ * BillingReports shows a positive remainder as a virtual "טרם חויב" row.
+ */
+export function ungeneratedRemainderAgorot(
+  transaction: Pick<FinanceTransaction, 'net_invoice_amount'>,
+  events: { amount: Numish; status?: string | null }[],
+): number {
+  const net = txInvoiceAgorot(transaction)
+  if (net <= 0) return 0
+  let billed = 0
+  for (const e of events) if (e.status !== 'cancelled') billed += toAgorot(e.amount)
+  return Math.max(0, net - billed)
+}
+
+export const ungeneratedRemainder = (
+  transaction: Pick<FinanceTransaction, 'net_invoice_amount'>,
+  events: { amount: Numish; status?: string | null }[],
+) => fromAgorot(ungeneratedRemainderAgorot(transaction, events))

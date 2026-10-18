@@ -8,7 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { toAgorot, txInvoiceAgorot, txSupplierAgorot, txIncomeAgorot, txSupplierAmount, txIncome, jerusalemYearMonth } from '@/lib/finance'
-import { isOverduePayment } from '@/lib/billingEvents'
+import { BILL_BUCKETS } from '@/lib/billingBuckets'
 import { normalizeLead } from '@/lib/bonus'
 import type {
   BillingEvent,
@@ -224,21 +224,10 @@ export default function Transactions() {
   const today = jerusalemYearMonth().today
   const showLeadFilter = profile?.role === 'admin' || profile?.role === 'administration'
 
-  // Billing-status buckets (Repair 26) — same semantics as the collection model:
-  // an event matches a bucket by its stored status; באיחור = invoiced, due_date
-  // passed, unpaid (isOverduePayment, the dashboard's פיגור rule).
-  const BILL_BUCKETS: { key: string; label: string; match: (e: BillingEvent) => boolean }[] = [
-    { key: 'not_billed', label: 'טרם חויב', match: (e) => e.status === 'pending' || e.status === 'to_bill' },
-    { key: 'to_bill', label: 'לחיוב עכשיו', match: (e) => e.status === 'to_bill' },
-    { key: 'awaiting', label: 'ממתין לתשלום', match: (e) => e.status === 'billed' },
-    { key: 'overdue', label: 'באיחור', match: (e) => isOverduePayment(e, today) && !e.payment_date },
-    { key: 'paid', label: 'שולם', match: (e) => e.status === 'paid' },
-    { key: 'cancelled', label: 'מבוטל', match: (e) => e.status === 'cancelled' },
-  ]
   const billMatches = (evs: BillingEvent[]) => {
     if (billBuckets.size === 0) return true
     if (evs.length === 0) return billBuckets.has('none')
-    return BILL_BUCKETS.some((b) => billBuckets.has(b.key) && evs.some(b.match))
+    return BILL_BUCKETS.some((b) => billBuckets.has(b.key) && evs.some((e) => b.match(e, today)))
   }
 
   // Distinct leads (normalised), displayed with the first-seen spelling.
