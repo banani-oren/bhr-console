@@ -1,0 +1,113 @@
+import type { BonusTier } from './types'
+import {
+  actualForecastProgress,
+  buildBonusDeals,
+  buildLedgerFromDeals,
+  calculateBonus,
+  type BonusDeal,
+  type BonusEvent,
+} from './bonus'
+import { fromAgorot, toAgorot } from './finance'
+
+// Repair 31 — the recruiter's bonus presentation payload. Pure function over the SAME
+// engine as every other bonus surface (bonus.ts: buildBonusDeals → buildLedgerFromDeals,
+// Repair 27: a deal counts only when fully collected, at full value, in the month of its
+// last payment). It adds NO second bonus rule — only counts and bonus amounts for display.
+//
+// Runs inside the my-bonus-overview Edge Function (service role, scoped to the caller's
+// own service_lead). The payload contains bonus amounts and deal COUNTS only — never a
+// deal amount, a revenue figure or a tier threshold in shekels.
+
+export type BonusOverviewMonth = {
+  month: string // 'YYYY-MM'
+  locked_bonus: number
+  expected_bonus: number
+  locked_deals_count: number
+  expected_deals_count: number
+}
+
+export type BonusOverview = {
+  months: BonusOverviewMonth[] // 6 back .. 2 forward
+  current: {
+    locked_bonus: number
+    locked_deals_count: number
+    expected_this_month: { bonus_if_completed: number; deals_count: number }
+    next_tier: { bonus: number; deals_needed: number | null } | null // null = top tier reached (or no model)
+    days_left_in_month: number
+  }
+  pending_unknown_count: number
+}
+
+const shiftMonth = (key: string, delta: number): string => {
+  const [y, m] = key.split('-').map(Number)
+  const idx = y * 12 + (m - 1) + delta
+  return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`
+}
+
+function daysLeftInMonth(todayIso: string): number {
+  const [y, m, d] = todayIso.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return Math.max(0, last - d)
+}
+
+export function buildBonusOverview(
+  events: BonusEvent[],
+  tiers: BonusTier[],
+  todayIso: string,
+): BonusOverview {
+  const todayKey = todayIso.slice(0, 7)
+  const deals: BonusDeal[] = buildBonusDeals(events, todayKey)
+  const ledger = buildLedgerFromDeals(deals, tiers, todayKey)
+
+  const countDeals = (monthKey: string, kind: 'actual' | 'expected') =>
+    deals.filter((d) => d.completionMonthKey === monthKey && d.kind === kind).length
+
+  const months: BonusOverviewMonth[] = []
+  for (let i = -6; i <= 2; i++) {
+    const key = shiftMonth(todayKey, i)
+    const lm = ledger.get(key)
+    const locked = lm?.actualBonus ?? 0
+    const forecast = lm?.forecastBonus ?? 0
+    months.push({
+      month: key,
+      locked_bonus: locked,
+      expected_bonus: Math.max(0, forecast - locked),
+      locked_deals_count: countDeals(key, 'actual'),
+      expected_deals_count: key < todayKey ? 0 : countDeals(key, 'expected'),
+    })
+  }
+
+  const cur = ledger.get(todayKey)
+  const actualRevenue = cur?.actualRevenue ?? 0
+  const forecastRevenue = cur?.forecastRevenue ?? 0
+  const { nextTier, amountToNext } = actualForecastProgress(actualRevenue, forecastRevenue, tiers)
+
+  // deals_needed: shekel gap to the next tier (by ACTUAL revenue) ÷ the average value of her
+  // completed deals over the last 12 months, rounded up, min 1; null when she has no history.
+  let dealsNeeded: number | null = null
+  if (nextTier) {
+    const from = shiftMonth(todayKey, -11)
+    const history = deals.filter(
+      (d) => d.kind === 'actual' && d.completionMonthKey && d.completionMonthKey >= from && d.completionMonthKey <= todayKey,
+    )
+    if (history.length > 0) {
+      const totalAg = history.reduce((s, d) => s + toAgorot(d.dealIncome), 0)
+      const avg = fromAgorot(Math.round(totalAg / history.length))
+      dealsNeeded = avg > 0 ? Math.max(1, Math.ceil(amountToNext / avg)) : null
+    }
+  }
+
+  const bonusIfCompleted = calculateBonus(forecastRevenue, tiers)
+
+  return {
+    months,
+    current: {
+      locked_bonus: cur?.actualBonus ?? 0,
+      locked_deals_count: countDeals(todayKey, 'actual'),
+      expected_this_month: { bonus_if_completed: bonusIfCompleted, deals_count: countDeals(todayKey, 'expected') },
+      next_tier: nextTier ? { bonus: nextTier.bonus, deals_needed: dealsNeeded } : null,
+      days_left_in_month: daysLeftInMonth(todayIso),
+    },
+    pending_unknown_count: deals.filter((d) => d.kind === 'unknown').length,
+  }
+}

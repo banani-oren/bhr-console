@@ -91,15 +91,11 @@ export default function MobileHours() {
         if (error) throw error
         return (data as Client[]) ?? []
       }
-      const { data, error } = await supabase
-        .from('client_time_log_permissions')
-        .select('client_id, clients(*)')
-        .eq('profile_id', profile!.id)
+      // Repair 31: a recruiter has no SELECT on clients (accounting data) — her permitted
+      // clients come from my_time_log_clients (id, name, ח.פ. only; no hourly rate / terms).
+      const { data, error } = await supabase.rpc('my_time_log_clients')
       if (error) throw error
-      const rows = (data as unknown as Array<{ clients: Client | Client[] | null }> | null) ?? []
-      return rows
-        .flatMap((r) => (Array.isArray(r.clients) ? r.clients : r.clients ? [r.clients] : []))
-        .filter((c) => c && c.time_log_enabled)
+      return ((data as Client[] | null) ?? [])
     },
   })
 

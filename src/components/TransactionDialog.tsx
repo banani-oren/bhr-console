@@ -23,15 +23,11 @@ import {
   buildBillingEventPatch,
   calculateTaxInvoiceDate,
   computeEventStatus,
-  generateHadrachaBillingEvent,
   generateServiceBillingEvents,
-  generateTimePeriodBillingEvent,
   parsePaymentTermSpec,
-  reconcileFinalSalaryBillingEvents,
   resolveAdvanceAmount,
   upsertBillingEvents,
   type EditableBillingField,
-  type BillingEventDraft,
   type PaymentTermSpec,
 } from '@/lib/billingEvents'
 import { DateCell } from '@/components/ui/date-cell'
@@ -51,6 +47,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Card } from '@/components/ui/card'
 import { isGiyusName, sumEventInvoice } from '@/lib/finance'
+import { buildDealEvents } from '@/lib/dealEvents'
 import { HOURS_SERVICE_NAME, hoursCloseFields, isHoursServiceName } from '@/lib/hoursService'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -190,9 +187,13 @@ export default function TransactionDialog({
 }: Props) {
   const queryClient = useQueryClient()
   const { profile } = useAuth()
+  // Repair 31: a recruiter works the deal, not its accounting — no clients/suppliers/billing
+  // reads, no billing sections; saving goes through the recruiter-save-deal Edge Function.
+  const isRecruiterView = profile?.role === 'recruiter'
 
-  const { data: clients = [] } = useQuery<Client[]>({
+  const { data: adminClients = [] } = useQuery<Client[]>({
     queryKey: ['clients'],
+    enabled: !isRecruiterView,
     queryFn: async () => {
       const { data, error } = await supabase.from('clients').select('*').order('name', { ascending: true })
       if (error) throw error
@@ -224,6 +225,7 @@ export default function TransactionDialog({
 
   const { data: suppliers = [] } = useQuery<Supplier[]>({
     queryKey: ['suppliers'],
+    enabled: !isRecruiterView,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('suppliers')
@@ -248,6 +250,18 @@ export default function TransactionDialog({
     setSaveError('השמירה לא הושלמה — פג זמן. בדוק חיבור לאינטרנט ונסה שנית.')
   })
 
+  // Recruiter: the one selected client via the picker RPC (id, name, ח.פ., % עמלה, ימי אחריות only).
+  const { data: recruiterClients = [] } = useQuery<Client[]>({
+    queryKey: ['recruiter-selected-client', state.client_id],
+    enabled: isRecruiterView && !!state.client_id,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('search_clients_for_picker', { p_query: '', p_id: state.client_id })
+      if (error) throw error
+      return ((data as Client[] | null) ?? []).filter((c) => c.id === state.client_id)
+    },
+  })
+  const clients = isRecruiterView ? recruiterClients : adminClients
+
   const selectedClient = useMemo(
     () => clients.find((c) => c.id === state.client_id) ?? null,
     [clients, state.client_id],
@@ -261,7 +275,7 @@ export default function TransactionDialog({
   // Billing events for the editing transaction
   const { data: txnBillingEvents = [], refetch: refetchEvents } = useQuery<BillingEvent[]>({
     queryKey: ['billing_events', editing?.id ?? 'none'],
-    enabled: !!editing?.id,
+    enabled: !!editing?.id && !isRecruiterView,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
@@ -538,190 +552,66 @@ export default function TransactionDialog({
         }
       }
 
-      // Compute the billing-events draft rows client-side (math unchanged —
-      // see billingEvents.ts) but do NOT write them yet. They're passed
-      // alongside the transaction payload to a single atomic RPC below, so
-      // the transaction row and its billing events either all persist or
-      // none do — no more orphaned partial saves from a stall between the
-      // separate round-trips this used to take.
-      let events: BillingEventDraft[] = []
-      let reconcileWarning: string | null = null
-      // Split events need a work-start date (their billing_date is derived from it).
-      const canGenerateSplits = state.kind === 'service' && !!state.work_start_date
-      // The advance does NOT — it is due the moment the placement is opened, so it
-      // is emitted from תאריך פתיחה (entry_date) as soon as the client has an advance.
-      const canGenerateAdvanceOnly = state.kind === 'service' && isGiyusNow && !state.work_start_date
-      // הדרכה bills as a single event, generated from the live price × execution-
-      // dates + travel total the dialog already computes (Batch 8 Phase 5) —
-      // mutually exclusive with the גיוס advance/split tracks above.
-      const isHadrachaNow = state.service_type_name === 'הדרכה'
-      const canGenerateHadracha = state.kind === 'service' && isHadrachaNow
-      // דיווח שעות bills as a single event per report, same shape as הדרכה —
-      // see generateTimePeriodBillingEvent for the billing_date rule (D2).
-      const canGenerateTimePeriod =
-        state.kind === 'time_period' && !!state.period_end && (Number(state.hours_total) || 0) > 0
-      const shouldGenerateEvents =
-        canGenerateSplits || canGenerateAdvanceOnly || canGenerateHadracha || canGenerateTimePeriod
-
-      if (canGenerateHadracha) {
-        const executionDatesRaw = (state.custom.execution_dates as { date: string; hours?: number }[] | undefined) ?? []
-        const executionDateStrings = executionDatesRaw.map((d) => d?.date).filter((d): d is string => !!d)
-        // Same total the on-screen "סה"כ לחיוב" card shows and the useEffect
-        // mirrors onto net_invoice_amount — reused here, not recomputed, so the
-        // displayed total and the billed amount can never drift.
-        const hadrachaAmount = Number(state.custom.net_invoice_amount) || 0
-        const hadrachaEvent = generateHadrachaBillingEvent({
-          transactionId: editing?.id ?? crypto.randomUUID(),
-          amount: hadrachaAmount,
-          executionDates: executionDateStrings,
-          entryDate: state.entry_date,
-          trainingName: String(state.custom.workshop_name ?? ''),
-          serviceType: state.service_type_name,
-          supplierPercent: state.supplier_percent ?? 0,
-        })
-
-        // The RPC's delete-then-insert only reinserts rows present in p_events,
-        // so a manually-added event (+ הוסף אירוע, always at index ≥2) that
-        // hasn't progressed yet must be carried through explicitly here or it
-        // would be silently wiped by every regeneration.
-        const manualSurvivors: BillingEventDraft[] = txnBillingEvents
-          .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
-          .map((e) => ({
-            transaction_id: e.transaction_id,
-            event_index: e.event_index,
-            amount: e.amount,
-            description: e.description,
-            billing_date: e.billing_date,
-            status: e.status,
-            invoice_number: e.invoice_number,
-            payment_date: e.payment_date,
-            receipt_number: e.receipt_number,
-            advance_applied: e.advance_applied,
-            supplier_amount: e.supplier_amount,
-          }))
-
-        events = hadrachaEvent ? [hadrachaEvent, ...manualSurvivors] : manualSurvivors
-
-        // The index-1 event may already be billed/paid (locked) — the RPC
-        // already skips inserting over an occupied index, so the DB is safe
-        // either way, but warn rather than silently diverging when the
-        // recomputed amount would have differed.
-        const existingIndex1 = txnBillingEvents.find((e) => e.event_index === 1)
-        const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
-        if (isLocked && hadrachaEvent && Math.abs(hadrachaEvent.amount - existingIndex1.amount) > 0.005) {
-          reconcileWarning =
-            'אירוע החיוב של הדרכה זו כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
-        }
-      } else if (canGenerateTimePeriod) {
-        const timePeriodEvent = generateTimePeriodBillingEvent({
-          transactionId: editing?.id ?? crypto.randomUUID(),
-          hoursTotal: Number(state.hours_total) || 0,
-          hourlyRate: Number(state.hourly_rate_used) || 0,
-          clientName: state.client_name,
-          periodStart: state.period_start ?? '',
-          periodEnd: state.period_end ?? '',
-        })
-
-        // Same reasoning as the הדרכה branch above: carry forward manually
-        // added events (event_index !== 1, not yet progressed) or the RPC's
-        // delete-then-insert wipes them.
-        const manualSurvivors: BillingEventDraft[] = txnBillingEvents
-          .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
-          .map((e) => ({
-            transaction_id: e.transaction_id,
-            event_index: e.event_index,
-            amount: e.amount,
-            description: e.description,
-            billing_date: e.billing_date,
-            status: e.status,
-            invoice_number: e.invoice_number,
-            payment_date: e.payment_date,
-            receipt_number: e.receipt_number,
-            advance_applied: e.advance_applied,
-            supplier_amount: e.supplier_amount,
-          }))
-
-        events = [timePeriodEvent, ...manualSurvivors]
-
-        const existingIndex1 = txnBillingEvents.find((e) => e.event_index === 1)
-        const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
-        if (isLocked && Math.abs(timePeriodEvent.amount - existingIndex1.amount) > 0.005) {
-          reconcileWarning =
-            'אירוע החיוב של דוח השעות הזה כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
-        }
-      } else if (shouldGenerateEvents) {
-        const workStartDate = state.work_start_date || null
-        // Never persisted — the RPC always resolves the real transaction_id
-        // server-side (see save_transaction_with_events), so this is just a
-        // placeholder to satisfy the draft shape for a not-yet-inserted row.
-        const placeholderTxnId = editing?.id ?? crypto.randomUUID()
-        const expectedSalary = Number(state.custom.salary) || 0
-        const finalSalaryVal = Number(state.custom.final_salary) || 0
-        const effectiveSalary = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
-        const commissionPct = Number(state.custom.commission_percent) || 0
-        const supplierPct = state.supplier_percent ?? 0
-        const paymentSplit = selectedClient?.payment_split_json ?? []
-        const advType: AdvanceType = effectiveAdvanceType
-        const advAmount = effectiveAdvanceAmount ? Number(effectiveAdvanceAmount) : null
-        // Advance is always derived from expected salary — locked once generated,
-        // never recalculated from final_salary.
-        const advance = resolveAdvanceAmount(advType || null, advAmount, expectedSalary, commissionPct)
-
-        // A transaction that previously held only an advance-only event (created
-        // before a work-start date existed) must take the full regeneration path
-        // once a work-start date is added — reconcile assumes a complete event
-        // set already exists (splits at index 2+), which an advance-only set
-        // doesn't have.
-        const hadOnlyAdvanceEvent =
-          hasExistingEvents && txnBillingEvents.length === 1 && txnBillingEvents[0].event_index === 1
-        const effectiveShouldReconcile = shouldReconcile && !hadOnlyAdvanceEvent
-
-        if (effectiveShouldReconcile && workStartDate) {
-          const { toUpsert, warning } = reconcileFinalSalaryBillingEvents({
-            transactionId: placeholderTxnId,
-            existingEvents: txnBillingEvents,
-            finalSalary: effectiveSalary,
-            commissionPercent: commissionPct,
-            workStartDate,
-            paymentSplit,
-            advanceAmount: advance,
-            supplierPercent: supplierPct,
-            candidateName: String(state.custom.candidate_name ?? ''),
-            serviceType: state.service_type_name,
-          })
-          events = toUpsert
-          reconcileWarning = warning
-        } else {
-          events = generateServiceBillingEvents({
-            transactionId: placeholderTxnId,
-            salary: effectiveSalary,
-            commissionPercent: commissionPct,
-            workStartDate,
-            paymentSplit,
-            advanceAmount: advance,
-            supplierPercent: supplierPct,
-            candidateName: String(state.custom.candidate_name ?? ''),
-            serviceType: state.service_type_name,
-            advanceBillingDate: state.entry_date,
-          })
-        }
-      }
+      // Compute the billing-events draft rows client-side (math unchanged — the
+      // block now lives in lib/dealEvents.ts, shared verbatim with the recruiter's
+      // server-side save, Repair 31) but do NOT write them yet. They're passed
+      // alongside the transaction payload to a single atomic RPC below, so the
+      // transaction row and its billing events either all persist or none do.
+      // Recruiter (Repair 31): no access to the client's billing terms or the deal's events, so
+      // generation happens server-side in recruiter-save-deal with this same function.
+      const { events, reconcileWarning, shouldGenerateEvents } = isRecruiterView
+        ? { events: [], reconcileWarning: null, shouldGenerateEvents: false }
+        : buildDealEvents({
+        editingId: editing?.id ?? null,
+        kind: state.kind,
+        serviceTypeName: state.service_type_name,
+        entryDate: state.entry_date,
+        workStartDate: state.work_start_date || null,
+        custom: state.custom,
+        supplierPercent: state.supplier_percent ?? null,
+        clientName: state.client_name,
+        periodStart: state.period_start,
+        periodEnd: state.period_end,
+        hoursTotal: state.hours_total,
+        hourlyRate: state.hourly_rate_used,
+        paymentSplit: selectedClient?.payment_split_json ?? [],
+        advanceType: effectiveAdvanceType,
+        advanceAmount: effectiveAdvanceAmount,
+        existingEvents: txnBillingEvents,
+        shouldReconcile,
+      })
 
       // Auto-flip pending → to_bill for past-dated events when the transaction is approved.
       const txnApproved = !!(approvalFields.approved_at != null || (editing && editing.approved_at))
 
-      const { data: rpcTxnId, error: rpcError } = await supabase
-        .rpc('save_transaction_with_events', {
-          p_mode: editing ? 'update' : 'insert',
-          p_id: editing?.id ?? null,
-          p_payload: payload,
-          p_events: events,
-          p_flip_to_bill: shouldGenerateEvents && txnApproved,
-          p_work_end_date: state.work_end_date || null,
+      let txnId: string | null
+      if (isRecruiterView) {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke('recruiter-save-deal', {
+          body: {
+            mode: editing ? 'update' : 'insert',
+            id: editing?.id ?? null,
+            payload,
+            final_salary_changed: finalSalaryChanged,
+            work_end_date: state.work_end_date || null,
+          },
+          signal: controller.signal,
         })
-        .abortSignal(controller.signal)
-      if (rpcError) throw rpcError
-      const txnId = rpcTxnId as string | null
+        if (fnError) throw fnError
+        txnId = (fnData as { id?: string } | null)?.id ?? null
+      } else {
+        const { data: rpcTxnId, error: rpcError } = await supabase
+          .rpc('save_transaction_with_events', {
+            p_mode: editing ? 'update' : 'insert',
+            p_id: editing?.id ?? null,
+            p_payload: payload,
+            p_events: events,
+            p_flip_to_bill: shouldGenerateEvents && txnApproved,
+            p_work_end_date: state.work_end_date || null,
+          })
+          .abortSignal(controller.signal)
+        if (rpcError) throw rpcError
+        txnId = rpcTxnId as string | null
+      }
 
       if (reconcileWarning) window.alert(reconcileWarning)
 
@@ -977,8 +867,8 @@ export default function TransactionDialog({
                   <p className="text-[11px] text-muted-foreground">
                     {selectedClient.commission_percent != null && <span>עמלה {selectedClient.commission_percent}% · </span>}
                     {selectedClient.warranty_days != null && <span>אחריות {selectedClient.warranty_days} ימים · </span>}
-                    {selectedClient.payment_terms && <span>תנאי תשלום {selectedClient.payment_terms} · </span>}
-                    {selectedClient.hourly_rate != null && <span>תעריף שעה {fmt(selectedClient.hourly_rate)}</span>}
+                    {!isRecruiterView && selectedClient.payment_terms && <span>תנאי תשלום {selectedClient.payment_terms} · </span>}
+                    {!isRecruiterView && selectedClient.hourly_rate != null && <span>תעריף שעה {fmt(selectedClient.hourly_rate)}</span>}
                   </p>
                 )}
               </div>
@@ -1090,13 +980,13 @@ export default function TransactionDialog({
                   )}
                 </div>
 
-                <div className="rounded-lg bg-purple-50 p-3 text-sm">
+                {!isRecruiterView && <div className="rounded-lg bg-purple-50 p-3 text-sm">
                   <p className="font-semibold text-purple-900">סה&quot;כ לחיוב: {fmt(hadrachaTotal)}</p>
                   <p className="text-xs text-muted-foreground">
                     ({fmt(hadrachaPrice)} × {executionDates.length} תאריכים
                     {hadrachaTravelEnabled ? ` + ${fmt(hadrachaTravelAmount)} נסיעות` : ''})
                   </p>
-                </div>
+                </div>}
               </div>
             )}
             {isTimePeriod && (
@@ -1114,14 +1004,18 @@ export default function TransactionDialog({
                     <Label className="text-xs">סה"כ שעות</Label>
                     <p>{(state.hours_total ?? 0).toFixed(2)}</p>
                   </div>
-                  <div>
-                    <Label className="text-xs">תעריף שעה</Label>
-                    <p>{fmt(state.hourly_rate_used)}</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs">סכום חשבונית</Label>
-                    <p>{fmt(state.net_invoice_amount)}</p>
-                  </div>
+                  {!isRecruiterView && (
+                    <>
+                      <div>
+                        <Label className="text-xs">תעריף שעה</Label>
+                        <p>{fmt(state.hourly_rate_used)}</p>
+                      </div>
+                      <div>
+                        <Label className="text-xs">סכום חשבונית</Label>
+                        <p>{fmt(state.net_invoice_amount)}</p>
+                      </div>
+                    </>
+                  )}
                 </div>
               </Card>
             )}
@@ -1143,7 +1037,7 @@ export default function TransactionDialog({
                       value={state.work_start_date ?? ''}
                       onChange={(e) => setState((s) => ({ ...s, work_start_date: e.target.value || null }))}
                     />
-                    <p className="text-[11px] text-muted-foreground">בעת שמירה — נוצרים אירועי חיוב לפי פיצול התשלום של הלקוח.</p>
+                    {!isRecruiterView && <p className="text-[11px] text-muted-foreground">בעת שמירה — נוצרים אירועי חיוב לפי פיצול התשלום של הלקוח.</p>}
                   </div>
                   <div className="space-y-1.5">
                     <Label>תאריך סיום עבודה</Label>
@@ -1151,7 +1045,7 @@ export default function TransactionDialog({
                       value={state.work_end_date ?? ''}
                       onChange={(e) => setState((s) => ({ ...s, work_end_date: e.target.value || null }))}
                     />
-                    <p className="text-[11px] text-muted-foreground">בעת שמירה — אירועי חיוב עתידיים מבוטלים.</p>
+                    {!isRecruiterView && <p className="text-[11px] text-muted-foreground">בעת שמירה — אירועי חיוב עתידיים מבוטלים.</p>}
                   </div>
                   <div className="space-y-1.5">
                     <Label className="flex items-center gap-1">
@@ -1196,7 +1090,7 @@ export default function TransactionDialog({
           </div>
 
           {/* Section 3 — מקדמה (only for service when client has advance configured OR override set) */}
-          {!isTimePeriod && (selectedClient?.advance_type || state.advance_type_override) && (
+          {!isRecruiterView && !isTimePeriod && (selectedClient?.advance_type || state.advance_type_override) && (
             <>
               <Separator />
               <div>
@@ -1214,7 +1108,8 @@ export default function TransactionDialog({
             </>
           )}
 
-          {/* Section 4 — ספק (supplier) */}
+          {/* Section 4 — ספק (supplier) — not for recruiters (Repair 31) */}
+          {!isRecruiterView && (<>
           <Separator />
           <div>
             <h3 className="text-sm font-semibold text-purple-700 mb-3">ספק</h3>
@@ -1265,9 +1160,10 @@ export default function TransactionDialog({
               </div>
             </div>
           </div>
+          </>)}
 
           {/* Section 5 — חיובים ותשלומים (only when editing) */}
-          {editing && (
+          {editing && !isRecruiterView && (
             <>
               <Separator />
               <BillingEventsPanel
@@ -1280,7 +1176,7 @@ export default function TransactionDialog({
             </>
           )}
 
-          {!editing && (
+          {!editing && !isRecruiterView && (
             <p className="text-xs text-muted-foreground">
               פרטי החיוב יחושבו לאחר שמירת העסקה
             </p>

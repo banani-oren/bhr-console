@@ -3,7 +3,6 @@ import { useSearchParams } from 'react-router-dom'
 import { Plus, Pencil, Trash2, Search, X, Check, Filter } from 'lucide-react'
 import { DateCell } from '@/components/ui/date-cell'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useTable } from '@/hooks/useSupabaseQuery'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
@@ -85,9 +84,23 @@ function BillingDots({ events }: { events: BillingEvent[] }) {
 export default function Transactions() {
   const queryClient = useQueryClient()
   const { profile } = useAuth()
-  const { data: transactions = [], isLoading } = useTable<Transaction>('transactions', {
-    orderBy: 'created_at',
-    ascending: false,
+  // Repair 31: a recruiter works the deal, not its accounting. Her deals come from the my_deals RPC
+  // (non-accounting columns, own service_lead only); she has no billing_events, totals, payment
+  // filters, billing dots or delete. Admin / administration are unchanged.
+  const isRecruiter = profile?.role === 'recruiter'
+  const { data: transactions = [], isLoading } = useQuery<Transaction[]>({
+    queryKey: ['transactions'],
+    enabled: !!profile,
+    queryFn: async () => {
+      if (isRecruiter) {
+        const { data, error } = await supabase.rpc('my_deals')
+        if (error) throw error
+        return (data as Transaction[] | null) ?? []
+      }
+      const { data, error } = await supabase.from('transactions').select('*').order('created_at', { ascending: false })
+      if (error) throw error
+      return data as Transaction[]
+    },
   })
 
   const { data: serviceTypes = [] } = useQuery<ServiceType[]>({
@@ -104,6 +117,7 @@ export default function Transactions() {
 
   const { data: allBillingEvents = [] } = useQuery<BillingEvent[]>({
     queryKey: ['billing_events'],
+    enabled: !isRecruiter,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('billing_events')
@@ -171,16 +185,27 @@ export default function Transactions() {
   const filterClosingYear = param('year', 'all')
   const filterLead = param('lead', 'all')
   const filterService = param('svc', 'all')
-  const payMode: 'due' | 'paid' = param('pm', 'due') === 'paid' ? 'paid' : 'due'
-  const payFrom = param('from')
-  const payTo = param('to')
+  const payMode: 'due' | 'paid' = !isRecruiter && param('pm', 'due') === 'paid' ? 'paid' : 'due'
+  const payFrom = isRecruiter ? '' : param('from')
+  const payTo = isRecruiter ? '' : param('to')
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const billBuckets = useMemo(() => new Set(param('bill').split(',').filter(Boolean)), [searchParams])
+  const billBuckets = useMemo(() => new Set(isRecruiter ? [] : param('bill').split(',').filter(Boolean)), [searchParams, isRecruiter])
   const toggleBucket = (b: string) => {
     const n = new Set(billBuckets)
     if (n.has(b)) n.delete(b); else n.add(b)
     setParam('bill', Array.from(n).join(','))
   }
+  // A recruiter session ignores (and strips) the accounting filters if the URL carries them.
+  useEffect(() => {
+    if (isRecruiter && ['pm', 'from', 'to', 'bill'].some((k) => searchParams.has(k))) {
+      setSearchParams((prev) => {
+        const n = new URLSearchParams(prev)
+        for (const k of ['pm', 'from', 'to', 'bill']) n.delete(k)
+        return n
+      }, { replace: true })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRecruiter, searchParams])
   const [searchInput, setSearchInput] = useState(param('q'))
   const searchDebounced = param('q').trim().toLowerCase()
   const [sort, setSort] = useState<SortState>({ key: 'close_date', dir: 'desc' })
@@ -213,7 +238,7 @@ export default function Transactions() {
       cf.candidate_name,
       cf.position_number,
       t.notes,
-      t.invoice_number,
+      isRecruiter ? null : t.invoice_number,
       resolveServiceName(t),
     ]
       .filter(Boolean)
@@ -355,7 +380,7 @@ export default function Transactions() {
             <Input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית..."
+              placeholder={isRecruiter ? 'חפש לפי לקוח, עובד, משרה, מועמד...' : 'חפש לפי לקוח, עובד, משרה, מועמד, מספר חשבונית...'}
               className="border-purple-200 focus-visible:ring-purple-400 pr-9 pl-9"
               dir="rtl"
             />
@@ -432,6 +457,15 @@ export default function Transactions() {
           </Select>
         </div>
 
+        {isRecruiter ? (
+          anyFilterActive && (
+            <div className="flex items-center gap-2 mt-2" data-testid="filter-row-2">
+              <Button size="sm" variant="outline" className="mr-auto" onClick={clearAllFilters} data-testid="clear-filters">
+                נקה סינונים
+              </Button>
+            </div>
+          )
+        ) : (
         <div className="flex items-center gap-2 flex-wrap mt-2" data-testid="filter-row-2">
           <span className="text-sm text-muted-foreground">מועד תשלום:</span>
           <div className="inline-flex rounded-md border border-purple-200 overflow-hidden" role="group" aria-label="מועד תשלום">
@@ -457,6 +491,7 @@ export default function Transactions() {
             </Button>
           )}
         </div>
+        )}
       </Card>
 
       <Card>
@@ -476,12 +511,12 @@ export default function Transactions() {
                   <SortableHead col="service_lead" label="מוביל" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="close_date" label="תאריך סגירה" sort={sort} onToggle={toggleSort} />
                   <SortableHead col="work_start_date" label="תחילת עבודה" sort={sort} onToggle={toggleSort} />
-                  <SortableHead col="net_invoice_amount" label="סכום חשבונית" sort={sort} onToggle={toggleSort} />
+                  {!isRecruiter && <SortableHead col="net_invoice_amount" label="סכום חשבונית" sort={sort} onToggle={toggleSort} />}
                   {showSupplier && (
                     <SortableHead col="supplier_amount_calc" label="עמלת ספק" sort={sort} onToggle={toggleSort} />
                   )}
-                  <SortableHead col="income_calc" label="הכנסה" sort={sort} onToggle={toggleSort} />
-                  <TableHead className="text-right text-purple-800 font-semibold">
+                  {!isRecruiter && <SortableHead col="income_calc" label="הכנסה" sort={sort} onToggle={toggleSort} />}
+                  {!isRecruiter && <TableHead className="text-right text-purple-800 font-semibold">
                     <Popover>
                       <PopoverTrigger
                         className="inline-flex items-center gap-1 font-semibold hover:text-purple-600"
@@ -503,7 +538,7 @@ export default function Transactions() {
                         <Button size="sm" variant="outline" disabled={billBuckets.size === 0} onClick={() => setParam('bill', null)}>נקה</Button>
                       </PopoverContent>
                     </Popover>
-                  </TableHead>
+                  </TableHead>}
                   <TableHead className="text-right text-purple-800 font-semibold">פעולות</TableHead>
                 </TableRow>
               </TableHeader>
@@ -549,16 +584,16 @@ export default function Transactions() {
                       <TableCell className="text-right">
                         <DateCell value={t.work_start_date} />
                       </TableCell>
-                      <TableCell className="text-right">{formatCurrency(t.net_invoice_amount)}</TableCell>
+                      {!isRecruiter && <TableCell className="text-right">{formatCurrency(t.net_invoice_amount)}</TableCell>}
                       {showSupplier && (
                         <TableCell className="text-right">
                           {toAgorot(t.supplier_percent) > 0 ? formatCurrency(txSupplierAmount(t)) : '—'}
                         </TableCell>
                       )}
-                      <TableCell className="text-right">{formatCurrency(txIncome(t))}</TableCell>
-                      <TableCell className="text-right">
+                      {!isRecruiter && <TableCell className="text-right">{formatCurrency(txIncome(t))}</TableCell>}
+                      {!isRecruiter && <TableCell className="text-right">
                         <BillingDots events={events} />
-                      </TableCell>
+                      </TableCell>}
                       <TableCell className="text-right">
                         <div className="flex gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                           {canApprove && isUnapproved && (
@@ -576,16 +611,18 @@ export default function Transactions() {
                           <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:bg-purple-100" onClick={() => openEdit(t)}>
                             <Pencil className="w-4 h-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDelete(t)}>
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                          {!isRecruiter && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDelete(t)}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
                   )
                 })}
               </TableBody>
-              <TableFooter>
+              {!isRecruiter && <TableFooter>
                 <TableRow className="bg-purple-50 hover:bg-purple-50 border-t-2 border-purple-200 font-semibold text-purple-900">
                   <TableCell className="text-right">
                     {totals.count === 1 ? 'סה"כ · עסקה אחת' : `סה"כ · ${totals.count} עסקאות`}
@@ -611,18 +648,20 @@ export default function Transactions() {
                   <TableCell className="text-right" />
                   <TableCell className="text-right" />
                 </TableRow>
-              </TableFooter>
+              </TableFooter>}
             </Table>
           </div>
         )}
       </Card>
 
-      <DeleteTransactionDialog
-        deal={deleting}
-        allDeals={transactions}
-        events={deleting ? eventsByTxn.get(deleting.id) ?? [] : []}
-        onClose={() => setDeleting(null)}
-      />
+      {!isRecruiter && (
+        <DeleteTransactionDialog
+          deal={deleting}
+          allDeals={transactions}
+          events={deleting ? eventsByTxn.get(deleting.id) ?? [] : []}
+          onClose={() => setDeleting(null)}
+        />
+      )}
 
       <TransactionDialog
         open={wizardOpen}

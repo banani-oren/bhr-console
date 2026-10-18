@@ -4,10 +4,11 @@ import type { UserRole } from '@/lib/types'
 import Layout from '@/components/Layout'
 import { useIsMobileDevice } from '@/hooks/useIsMobileDevice'
 
+// Repair 31: a recruiter's home is the dashboard (bonus + her deals); every blocked route lands here.
 export const DEFAULT_LANDING: Record<UserRole, string> = {
   admin: '/',
   administration: '/transactions',
-  recruiter: '/transactions',
+  recruiter: '/',
 }
 
 type Props = {

@@ -1,0 +1,199 @@
+import {
+  generateHadrachaBillingEvent,
+  generateServiceBillingEvents,
+  generateTimePeriodBillingEvent,
+  reconcileFinalSalaryBillingEvents,
+  resolveAdvanceAmount,
+  type BillingEventDraft,
+} from './billingEvents'
+import { isGiyusName } from './finance'
+import type { BillingEvent, PaymentSplit } from './types'
+
+// Repair 31: the billing-event drafts a deal save produces, extracted VERBATIM from
+// TransactionDialog.handleSave so that two callers run the exact same engine:
+//   • TransactionDialog (admin / administration) — in the browser, as before;
+//   • the recruiter-save-deal Edge Function — server-side, because a recruiter session can
+//     no longer read clients' billing terms or billing_events (accounting data).
+// Pure: no I/O. The caller supplies the client's billing config and the deal's existing events.
+
+export type AdvanceKind = 'fixed' | 'percent' | ''
+
+export type DealEventsInput = {
+  /** Existing transaction id; a placeholder is used for a not-yet-inserted deal (the RPC resolves the real id). */
+  editingId: string | null
+  kind: 'service' | 'time_period'
+  serviceTypeName: string
+  entryDate: string
+  workStartDate: string | null
+  /** state.custom — salary, final_salary, commission_percent, candidate_name, execution_dates, workshop_name, net_invoice_amount */
+  custom: Record<string, unknown>
+  supplierPercent: number | null
+  clientName: string
+  periodStart: string | null
+  periodEnd: string | null
+  hoursTotal: number | string | null
+  hourlyRate: number | string | null
+  /** The client's billing config (already merged with any per-deal advance override by the caller). */
+  paymentSplit: PaymentSplit[]
+  advanceType: AdvanceKind
+  advanceAmount: string
+  existingEvents: BillingEvent[]
+  /** final_salary changed AND the deal already has events (the admin dialog asks before setting this). */
+  shouldReconcile: boolean
+  /** a newPlaceholder id generator, injectable for tests; defaults to crypto.randomUUID */
+  newId?: () => string
+}
+
+export type DealEventsResult = {
+  events: BillingEventDraft[]
+  reconcileWarning: string | null
+  shouldGenerateEvents: boolean
+}
+
+const toDraft = (e: BillingEvent): BillingEventDraft => ({
+  transaction_id: e.transaction_id,
+  event_index: e.event_index,
+  amount: e.amount,
+  description: e.description,
+  billing_date: e.billing_date,
+  status: e.status,
+  invoice_number: e.invoice_number,
+  payment_date: e.payment_date,
+  receipt_number: e.receipt_number,
+  advance_applied: e.advance_applied,
+  supplier_amount: e.supplier_amount,
+})
+
+export function buildDealEvents(input: DealEventsInput): DealEventsResult {
+  const {
+    editingId, kind, serviceTypeName, entryDate, workStartDate: workStartRaw, custom, supplierPercent,
+    clientName, periodStart, periodEnd, hoursTotal, hourlyRate, paymentSplit, advanceType, advanceAmount,
+    existingEvents, shouldReconcile,
+  } = input
+  const newId = input.newId ?? (() => crypto.randomUUID())
+  const isGiyusNow = isGiyusName(serviceTypeName)
+  const hasExistingEvents = existingEvents.length > 0
+
+  let events: BillingEventDraft[] = []
+  let reconcileWarning: string | null = null
+  // Split events need a work-start date (their billing_date is derived from it).
+  const canGenerateSplits = kind === 'service' && !!workStartRaw
+  // The advance does NOT — it is due the moment the placement is opened, so it
+  // is emitted from תאריך פתיחה (entry_date) as soon as the client has an advance.
+  const canGenerateAdvanceOnly = kind === 'service' && isGiyusNow && !workStartRaw
+  // הדרכה bills as a single event, generated from the live price × execution-
+  // dates + travel total (Batch 8 Phase 5) — mutually exclusive with the גיוס tracks.
+  const isHadrachaNow = serviceTypeName === 'הדרכה'
+  const canGenerateHadracha = kind === 'service' && isHadrachaNow
+  // דיווח שעות bills as a single event per report, same shape as הדרכה.
+  const canGenerateTimePeriod =
+    kind === 'time_period' && !!periodEnd && (Number(hoursTotal) || 0) > 0
+  const shouldGenerateEvents =
+    canGenerateSplits || canGenerateAdvanceOnly || canGenerateHadracha || canGenerateTimePeriod
+
+  if (canGenerateHadracha) {
+    const executionDatesRaw = (custom.execution_dates as { date: string; hours?: number }[] | undefined) ?? []
+    const executionDateStrings = executionDatesRaw.map((d) => d?.date).filter((d): d is string => !!d)
+    // Same total the on-screen "סה"כ לחיוב" card shows and the useEffect
+    // mirrors onto net_invoice_amount — reused here, not recomputed.
+    const hadrachaAmount = Number(custom.net_invoice_amount) || 0
+    const hadrachaEvent = generateHadrachaBillingEvent({
+      transactionId: editingId ?? newId(),
+      amount: hadrachaAmount,
+      executionDates: executionDateStrings,
+      entryDate,
+      trainingName: String(custom.workshop_name ?? ''),
+      serviceType: serviceTypeName,
+      supplierPercent: supplierPercent ?? 0,
+    })
+
+    // The RPC's delete-then-insert only reinserts rows present in p_events, so a
+    // manually-added event (always at index ≥2) that hasn't progressed yet must be
+    // carried through explicitly or it would be wiped by every regeneration.
+    const manualSurvivors = existingEvents
+      .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
+      .map(toDraft)
+
+    events = hadrachaEvent ? [hadrachaEvent, ...manualSurvivors] : manualSurvivors
+
+    const existingIndex1 = existingEvents.find((e) => e.event_index === 1)
+    const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
+    if (isLocked && hadrachaEvent && Math.abs(hadrachaEvent.amount - existingIndex1.amount) > 0.005) {
+      reconcileWarning =
+        'אירוע החיוב של הדרכה זו כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
+    }
+  } else if (canGenerateTimePeriod) {
+    const timePeriodEvent = generateTimePeriodBillingEvent({
+      transactionId: editingId ?? newId(),
+      hoursTotal: Number(hoursTotal) || 0,
+      hourlyRate: Number(hourlyRate) || 0,
+      clientName,
+      periodStart: periodStart ?? '',
+      periodEnd: periodEnd ?? '',
+    })
+
+    const manualSurvivors = existingEvents
+      .filter((e) => e.event_index !== 1 && (e.status === 'pending' || e.status === 'to_bill'))
+      .map(toDraft)
+
+    events = [timePeriodEvent, ...manualSurvivors]
+
+    const existingIndex1 = existingEvents.find((e) => e.event_index === 1)
+    const isLocked = existingIndex1 && (existingIndex1.status === 'billed' || existingIndex1.status === 'paid')
+    if (isLocked && Math.abs(timePeriodEvent.amount - existingIndex1.amount) > 0.005) {
+      reconcileWarning =
+        'אירוע החיוב של דוח השעות הזה כבר חויב — הסכום החדש לא עודכן אוטומטית. יש לעדכן ידנית או להוסיף אירוע נוסף.'
+    }
+  } else if (shouldGenerateEvents) {
+    const workStartDate = workStartRaw || null
+    // Never persisted — the RPC always resolves the real transaction_id server-side.
+    const placeholderTxnId = editingId ?? newId()
+    const expectedSalary = Number(custom.salary) || 0
+    const finalSalaryVal = Number(custom.final_salary) || 0
+    const effectiveSalary = isGiyusNow && finalSalaryVal > 0 ? finalSalaryVal : expectedSalary
+    const commissionPct = Number(custom.commission_percent) || 0
+    const supplierPct = supplierPercent ?? 0
+    const advAmount = advanceAmount ? Number(advanceAmount) : null
+    // Advance is always derived from expected salary — locked once generated,
+    // never recalculated from final_salary.
+    const advance = resolveAdvanceAmount(advanceType || null, advAmount, expectedSalary, commissionPct)
+
+    // A transaction that previously held only an advance-only event must take the
+    // full regeneration path once a work-start date is added.
+    const hadOnlyAdvanceEvent =
+      hasExistingEvents && existingEvents.length === 1 && existingEvents[0].event_index === 1
+    const effectiveShouldReconcile = shouldReconcile && !hadOnlyAdvanceEvent
+
+    if (effectiveShouldReconcile && workStartDate) {
+      const { toUpsert, warning } = reconcileFinalSalaryBillingEvents({
+        transactionId: placeholderTxnId,
+        existingEvents,
+        finalSalary: effectiveSalary,
+        commissionPercent: commissionPct,
+        workStartDate,
+        paymentSplit,
+        advanceAmount: advance,
+        supplierPercent: supplierPct,
+        candidateName: String(custom.candidate_name ?? ''),
+        serviceType: serviceTypeName,
+      })
+      events = toUpsert
+      reconcileWarning = warning
+    } else {
+      events = generateServiceBillingEvents({
+        transactionId: placeholderTxnId,
+        salary: effectiveSalary,
+        commissionPercent: commissionPct,
+        workStartDate,
+        paymentSplit,
+        advanceAmount: advance,
+        supplierPercent: supplierPct,
+        candidateName: String(custom.candidate_name ?? ''),
+        serviceType: serviceTypeName,
+        advanceBillingDate: entryDate,
+      })
+    }
+  }
+
+  return { events, reconcileWarning, shouldGenerateEvents }
+}

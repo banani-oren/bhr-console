@@ -4,6 +4,7 @@ import { Check, ChevronsUpDown, X } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { Client } from '@/lib/types'
 import { Input } from '@/components/ui/input'
+import { useAuth } from '@/lib/auth'
 
 // Centralized client picker. Renders the client's NAME in the trigger
 // regardless of whether the outer component knows it yet. Used on /hours,
@@ -51,14 +52,38 @@ export default function ClientPicker({
   const wrapperRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const { data: clients = [] } = useQuery<Client[]>({
+  // Repair 31: a recruiter has no SELECT on clients (accounting data) — she searches through the
+  // search_clients_for_picker RPC (id, name, ח.פ., % עמלה, ימי אחריות; active clients only; the
+  // selected client is always included). Admin and administration keep the direct read.
+  const { profile } = useAuth()
+  const viaRpc = profile?.role === 'recruiter'
+  const [rpcQuery, setRpcQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setRpcQuery(query.trim()), 200)
+    return () => clearTimeout(t)
+  }, [query])
+
+  const { data: directClients = [] } = useQuery<Client[]>({
     queryKey: ['clients'],
+    enabled: !viaRpc,
     queryFn: async () => {
       const { data, error } = await supabase.from('clients').select('*').order('name', { ascending: true })
       if (error) throw error
       return (data as Client[]) ?? []
     },
   })
+
+  const { data: rpcClients = [] } = useQuery<Client[]>({
+    queryKey: ['clients-picker-rpc', rpcQuery, value],
+    enabled: viaRpc,
+    placeholderData: (prev) => prev,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc('search_clients_for_picker', { p_query: rpcQuery, p_id: value })
+      if (error) throw error
+      return (data as Client[] | null) ?? []
+    },
+  })
+  const clients = viaRpc ? rpcClients : directClients
 
   const pool = useMemo(
     () => (filter ? clients.filter(filter) : clients),
