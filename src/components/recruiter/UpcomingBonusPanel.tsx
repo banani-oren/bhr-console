@@ -51,7 +51,7 @@ function MonthCard({ m, isCurrent, hasModel }: { m: UpcomingMonth; isCurrent: bo
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
         <div className="flex items-baseline gap-2">
-          <span className="text-lg font-extrabold" style={{ color: 'var(--bonus-title-ink)' }}>{name}</span>
+          <span className="text-lg font-bold" style={{ color: 'var(--bonus-title-ink)' }}>{name}</span>
           {isCurrent && (
             <span className="rounded-full px-2 py-0.5 text-[11px] font-bold" style={{ background: 'var(--bonus-counted)', color: 'var(--bonus-counted-ink)' }} data-testid="current-label">החודש</span>
           )}
@@ -65,7 +65,7 @@ function MonthCard({ m, isCurrent, hasModel }: { m: UpcomingMonth; isCurrent: bo
         </p>
       )}
 
-      <p className="text-[34px] font-extrabold leading-none" style={{ color: empty ? 'var(--bonus-counted)' : 'var(--bonus-expected)' }} data-testid="month-big">
+      <p className="text-[34px] font-bold leading-none" style={{ color: empty ? 'var(--bonus-counted)' : 'var(--bonus-expected)' }} data-testid="month-big">
         {ILS.format(m.expected_bonus)}
       </p>
 
@@ -114,7 +114,7 @@ export default function UpcomingBonusPanel({ ov, onOpenDeal }: { ov: BonusOvervi
   return (
     <section className="space-y-5 rounded-xl border bg-card p-6 md:p-8" dir="rtl" data-testid="upcoming-panel" style={{ color: 'var(--bonus-text)' }}>
       <div>
-        <h2 className="text-[28px] font-extrabold leading-tight" style={{ color: 'var(--bonus-title-ink)' }}>הבונוסים הבאים שלך</h2>
+        <h2 className="text-[28px] font-bold leading-tight" style={{ color: 'var(--bonus-title-ink)' }}>הבונוסים הבאים שלך</h2>
         <p className="mt-1.5 text-[15px]" style={{ color: 'var(--bonus-muted)' }}>כל עסקה שתיסגר עכשיו נכנסת לחודש שבו הכסף ייכנס, ומקדמת אותך לדרגה הבאה</p>
       </div>
 
@@ -123,7 +123,7 @@ export default function UpcomingBonusPanel({ ov, onOpenDeal }: { ov: BonusOvervi
       </div>
 
       <div className="space-y-2.5" data-testid="upcoming-deals">
-        <h3 className="text-base font-extrabold" style={{ color: 'var(--bonus-title-ink)' }}>העסקאות שכבר בדרך לבונוס</h3>
+        <h3 className="text-base font-bold" style={{ color: 'var(--bonus-title-ink)' }}>העסקאות שכבר בדרך לבונוס</h3>
         {rows.length === 0 ? (
           <p className="text-sm" style={{ color: 'var(--bonus-muted)' }} data-testid="upcoming-deals-empty">עוד אין עסקאות בדרך לבונוס</p>
         ) : (
@@ -135,10 +135,10 @@ export default function UpcomingBonusPanel({ ov, onOpenDeal }: { ov: BonusOvervi
               style={{ background: 'var(--bonus-row)', borderColor: 'var(--bonus-expected)' }}
             >
               <div className="min-w-0">
-                <p className="truncate text-[15px] font-extrabold" style={{ color: 'var(--bonus-title-ink)' }}>{r.title}</p>
+                <p className="truncate text-[15px] font-bold" style={{ color: 'var(--bonus-title-ink)' }}>{r.title}</p>
                 <p className="text-xs" style={{ color: 'var(--bonus-expected-ink)' }}>ממתינה לתשלום מלא</p>
               </div>
-              <span className="shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-extrabold" style={{ background: 'var(--bonus-expected-chip)', color: 'var(--bonus-expected-ink)' }} data-testid="deal-chip">
+              <span className="shrink-0 whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-bold" style={{ background: 'var(--bonus-expected-chip)', color: 'var(--bonus-expected-ink)' }} data-testid="deal-chip">
                 נכנסת ל{monthNameHe(r.month)}
               </span>
             </div>
@@ -154,10 +154,10 @@ export default function UpcomingBonusPanel({ ov, onOpenDeal }: { ov: BonusOvervi
           data-testid="upcoming-cta"
         >
           <div>
-            <p className="text-base font-extrabold">פתיחת עסקה חדשה היום נכנסת ל{monthNameHe(last.month)}</p>
+            <p className="text-base font-bold">פתיחת עסקה חדשה היום נכנסת ל{monthNameHe(last.month)}</p>
             <p className="text-[13px] opacity-90">כל עסקה ממוצעת שלך מקרבת אותך לדרגה הבאה</p>
           </div>
-          <Button className="rounded-xl px-[18px] font-extrabold hover:opacity-90" style={{ background: 'var(--bonus-expected)', color: '#ffffff' }} onClick={onOpenDeal} data-testid="cta-open-deal">
+          <Button className="rounded-xl px-[18px] font-bold hover:opacity-90" style={{ background: 'var(--bonus-expected)', color: '#ffffff' }} onClick={onOpenDeal} data-testid="cta-open-deal">
             פתיחת עסקה
           </Button>
         </div>
