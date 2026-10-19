@@ -141,7 +141,7 @@ App Dev/
 │   │   ├── workHours.ts                # Repair 32 (D6): STANDARD_WORKDAY_HOURS = 8.4, EREV_HOLIDAY_HOURS = 7 — Oren to confirm
 │   │   ├── bonusBar.ts                 # Repair 33: barGeometry() — counted / expected / estimate fractions of an upcoming-month bar (pure; runs in my-bonus-overview; npm run test:bonus-bar)
 │   │   ├── attendanceMonth.ts          # Repair 32: buildMonthDays()/monthTotals() — one month of attendance day by day (present/missing/holiday/erev/future/weekend); shared by the dashboard cards and the recruiter /attendance table
-│   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation
+│   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation, (Repair 36) isUnsentInvoiceDue() + the send-state rules of buildBillingEventPatch
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
 │   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
 │   │   ├── dates.ts                    # Date/timezone utilities — Israeli locale helpers
@@ -161,6 +161,7 @@ App Dev/
 │   │   ├── RequireRole.tsx             # Route guard — checks profile.role
 │   │   ├── TransactionDialog.tsx       # Add/edit transaction (dynamic fields from ServiceType)
 │   │   ├── DeleteTransactionDialog.tsx # Repair 26: deliberate deal delete — shows what is deleted with the deal (billed/paid warning), forces release/move choice for linked hours, calls delete_transaction RPC, inline Hebrew errors, 10s abort
+│   │   ├── UnsentInvoicesDialog.tsx    # Repair 36: popup of חשבונות עסקה that should already have gone to the client (isUnsentInvoiceDue), once per full load for admin + administration; mounted in Layout.tsx
 │   │   ├── AgreementUploader.tsx       # PDF upload + extract-agreement edge function
 │   │   ├── BonusWidget.tsx             # Compact per-employee bonus card (current month, actual + תחזית) on AdminDashboard — mounted there since Repair 16 (previously built but never wired in anywhere)
 │   │   ├── ClientPicker.tsx            # Autocomplete client selector. Repair 31: for role recruiter it searches through the `search_clients_for_picker` RPC (clients has no recruiter SELECT). Repair 29: arrow-key/Enter navigation (Esc closes), optional `popoverClassName` (BillingReports passes `min-w-[16rem] max-h-72`); defaults unchanged — TransactionDialog still doesn't auto-open
@@ -181,7 +182,7 @@ App Dev/
 │   │   ├── Transactions.tsx            # Transaction table: filters, inline edit, export
 │   │   ├── AuditLog.tsx                # Repair 24: /audit-log (admin) — filters (date/user/entity/search), 50-row pages, Hebrew field diffs via get_audit_log()
 │   │   ├── Attendance.tsx              # Check-in/out + daily attendance report (report = admin/administration). V2: two-phase check-out with optional note (≤250); today's-log + report show check_in→check_out pairs (report = one TableRow per pair, name/date only on first); employee 'תיקון' edit-request form (insert into attendance_edit_requests); admin pencil direct-edit + 'בקשות תיקון ממתינות' approve/reject panel. Edit forms use toLocalInputValue() so datetime-local shows Israel local time. Repair 12: admin-only AdminDeleteButton (trash, two-step inline 'מחק? כן/ביטול') in the פעולות column deletes both pair entries; /attendance sidebar link now allows admin too (Layout.tsx).
-│   │   ├── BillingReports.tsx          # דוחות חיוב (Repair 29; Repair 30 header/width rules: all headers right-aligned, labels wrap to two lines (text unchanged), dates sized to dd/MM/yy or a 7.5rem input, document numbers to ~8 digits, the freed space goes to לקוח (w-36, two lines + title tooltip); client picker uses `compact` to match the h-8 neighbours). Rows = billing events + one virtual "טרם חויב" row per deal with `ungeneratedRemainderAgorot` > 0 (read-only, not selectable, click opens TransactionDialog; hidden while a date range is set). Events of unapproved deals show an amber "ממתין לאישור" badge, inputs + checkbox disabled. סטטוס header = sort + BILL_BUCKETS popover (default = all but מבוטל; cancelled events fetched only when מבוטל selected). URL: `bill=` (comma list), `client=`. Totals in agorot: טרם חויב + ממתין לתשלום + שולם = סה"כ of visible rows. Column-fit rule: all 12 columns visible at 1440px with no horizontal scroll (compact cells, wrapped תיאור/שירות, truncated לקוח); at 1024px the table scrolls inside its card with checkbox + לקוח sticky on the right. Sidebar order: … עסקאות → דוחות חיוב → יומן שעות …
+│   │   ├── BillingReports.tsx          # דוחות חיוב (Repair 29; Repair 30 header/width rules: all headers right-aligned, labels wrap to two lines (text unchanged), dates sized to dd/MM/yy or a 7.5rem input, document numbers to ~8 digits, the freed space goes to לקוח (w-36, two lines + title tooltip); client picker uses `compact` to match the h-8 neighbours). Rows = billing events + one virtual "טרם חויב" row per deal with `ungeneratedRemainderAgorot` > 0 (read-only, not selectable, click opens TransactionDialog; hidden while a date range is set). Events of unapproved deals show an amber "ממתין לאישור" badge, inputs + checkbox disabled. סטטוס header = sort + BILL_BUCKETS popover (default = all but מבוטל; cancelled events fetched only when מבוטל selected). URL: `bill=` (comma list), `client=`. Totals in agorot: טרם חויב + ממתין לתשלום + שולם = סה"כ of visible rows. Column-fit rule: all 13 columns visible at 1440px with no horizontal scroll (compact cells, wrapped תיאור/שירות, truncated לקוח; Repair 36 narrowed לקוח to 7.5rem, שירות, dates and document numbers to make room). Repair 36 order: ☐ · לקוח · שירות · תיאור · סכום · סטטוס · תאריך חיוב מתוכנן · מספר חשבון עסקה · תאריך הפקה · **נשלח ללקוח** (56px checkbox, optimistic + 10s abort + rollback, "—" without an invoice or on remainder rows, red dot + "היה צריך להישלח ב-dd/MM/yyyy" when unchecked and send date < today) · תאריך תשלום צפוי · מספר חשבונית מס קבלה · תאריך תשלום. Filter toggle "טרם נשלחו ללקוח" = URL `unsent=1` (isUnsentInvoiceDue); at 1024px the table scrolls inside its card with checkbox + לקוח sticky on the right. Sidebar order: … עסקאות → דוחות חיוב → יומן שעות …
 │   │   ├── FinanceReport.tsx           # Repair 23: דוח כספי שנתי body (sections A/B/C + Excel export), rendered by Reports.tsx
 │   │   ├── Reports.tsx                 # Admin-only דוחות section — TWO reports behind a picker (דוח גיוסים default + דוח כספי שנתי, Repair 23; both stay mounted so each keeps its filters). דוח גיוסים: KPIs + לפי מוביל/לקוח/משרה breakdowns with drill-down + Excel export (Batch 8 Phase 4)
 │   │   ├── Bonuses.tsx                 # Per-employee card: actual vs. forecast stats, two-layer progress bar, sortable per-month DEALS table (one row per deal, expandable payments; click a row → TransactionDialog; Repair 27) + partial-collection and ללא צפי השלמה sections, stacked 12-month chart (Repair 16 — tier table removed, moved to Team only)
@@ -249,6 +250,8 @@ App Dev/
 │       ├── 20261020_repair32_hebrew_literals_fix.sql # Repair 32 hotfix: re-creates search_clients_for_picker + delete_transaction whose Hebrew literals were corrupted (U+FFFD) by a shell-piped apply
 │       ├── 20261020_il_working_days.sql              # Repair 32: il_non_working_days (19 rows) + bhr_is_workday + holiday-aware bhr_add_business_days (STABLE, SECURITY DEFINER, anon revoked)
 │       ├── 20261020_2_attendance_recruiter_window.sql # Repair 32: recruiter attendance writes limited to the current month (RLS)
+│       ├── 20261022_repair35_picker_and_client_status.sql # Repair 35: picker always returns p_id; clients.status CHECK/NOT NULL/default
+│       ├── 20261023_repair36_invoice_sent.sql        # Repair 36: billing_events.invoice_sent / invoice_send_date / invoice_send_date_is_manual + trigger + save RPC INSERT list + backfill
 │       └── 20261017_2_hours_deals_backfill.sql       # Repair 25: fill-only, idempotent backfill of hours deals (service type, kind, period, rate, net, close date, closing month/year); excludes recruitment-signal rows and probable duplicates of a paid deal
 │
 ├── scripts/
@@ -406,6 +409,9 @@ billing_events                     -- Source of truth for all money events (adde
   receipt_number text              -- חשבונית מס קבלה number (entered manually → triggers paid)
   advance_applied numeric DEFAULT 0
   supplier_amount numeric DEFAULT 0
+  invoice_sent bool NOT NULL DEFAULT false           -- נשלח ללקוח (Repair 36, 20261023_repair36_invoice_sent.sql) — set by a user only; trigger clears it with the invoice number
+  invoice_send_date date                              -- תאריך שליחה ללקוח — = invoice_date unless invoice_send_date_is_manual (trigger bhr_billing_events_set_send_date)
+  invoice_send_date_is_manual bool NOT NULL DEFAULT false
   created_at timestamptz
   updated_at timestamptz
 
@@ -585,6 +591,17 @@ either function again, re-verify this interaction.
   being finished. `transactions.invoice_number` (singular, legacy) remains
   dead but undropped — a separate, still-open decision.
 
+### Invoice sent to the client — "נשלח ללקוח" (Repair 36, 2026-10-19)
+
+A חשבון עסקה is issued in the accounting system and must then be SENT to the client; the console records whether that happened.
+- **Columns:** `invoice_sent` (only a user sets it), `invoice_send_date` (תאריך שליחה ללקוח), `invoice_send_date_is_manual`.
+- **Send-date rule:** automatic = תאריך הפקה (`invoice_date`); a manual value survives a change of invoice_date (same pattern as `due_date_is_manual`); "↩" / `is_manual = false` hands it back to the trigger. **Trigger** `bhr_billing_events_set_send_date` (BEFORE INSERT/UPDATE, not SECURITY DEFINER — reads no other table): no invoice number → send date null, manual false, sent false; else if not manual → send date = invoice_date. It never sets `invoice_sent` to true.
+- **Single writer:** `buildBillingEventPatch` mirrors the trigger (clearing the number clears all three; a hand-typed send date ≠ invoice_date sets manual).
+- **`isUnsentInvoiceDue(event, today)`** (`billingEvents.ts`) = invoice number ∧ not sent ∧ status not paid/cancelled ∧ send date ≤ today (Asia/Jerusalem). ONE predicate for the BillingReports toggle, the red dot (strictly < today) and the popup.
+- **UI:** TransactionDialog חשבון עסקה block — "תאריך שליחה ללקוח" with (מחושב)/(ידני) + ↩ and a "נשלח ללקוח" checkbox, disabled with the hint "יוזן לאחר הפקת חשבון עסקה" until a number exists (this block never renders for a recruiter). BillingReports column + toggle (see the file map). **Popup** `UnsentInvoicesDialog`: title "חשבונות עסקה שטרם נשלחו ללקוחות", subtitle "{n} חשבונות · ₪{total}", table (☐ · לקוח · תיאור · מספר חשבון עסקה · סכום · תאריך שליחה — red when past, oldest first), actions "סמן כנשלחו" (one update per selected row through the patch builder → one audit entry per row), "פתח בדוחות חיוב" (→ `/billing-reports?unsent=1`), "סגור". Shown on every FULL load (module flag, not localStorage → a reload or a new tab shows it again, in-app navigation does not), only for admin + administration, never on `/m` or for a recruiter, nothing when the list is empty; a failed load is logged and ignored.
+- **Recruiters** never see these fields: `billing_events` has no recruiter RLS policy (verified 2026-10-19: REST read → [], PATCH → 0 rows), `my_deals` returns an explicit column list without them.
+- Edge-function copies (`supabase/functions/*/lib`) were NOT regenerated for Repair 36: the changes are a type, the unused predicate and patch rules, so deployed behaviour is identical; the next `sync:edge` will pick them up.
+
 ### Payment terms — two date shapes (Repair 19, 2026-10-06)
 
 `payment_terms` on the client resolves to exactly one of two shapes, never
@@ -742,7 +759,7 @@ This has now happened **twice**: `period_start`/`period_end`/`hours_total`/
 but never added to the RPC until `20261003_hours_billing_rpc.sql` (Repair 15,
 2026-10-03) — every hours transaction saved through the dialog silently lost
 them for over two months. Treat this as a standing checklist item whenever a
-column is added to either table.
+column is added to either table. (Repair 36, 2026-10-19: `invoice_sent`, `invoice_send_date`, `invoice_send_date_is_manual` were added to the INSERT list in the same change; the RPC never UPDATEs existing events, so billed/paid rows keep their sending state — proven by two saves with identical event rows.)
 
 ---
 
@@ -1106,6 +1123,7 @@ broken.
 | Repair 30: Billing Reports Polish + Company Logo | SortableHead right-aligned everywhere; דוחות חיוב two-line headers + tighter columns + compact client picker (same height as neighbours); company logo (favicon, PWA icons, sidebar, login, mobile, print view, PDFs) via `BrandLogo` + generated assets; no migration |
 | Repair 31: Recruiter Portal | Recruiters lose all accounting data at the data layer (RLS lockdown + my_deals / client-picker / hours-clients RPCs); bonus via my-bonus-overview Edge Function (same engine, counts + bonus only); recruiter-save-deal generates billing events server-side (parity proven); new recruiter dashboard (bonus hero, KPIs, chart, open deals), 8-column Transactions, trimmed deal dialog, delete = admin/administration only |
 | Repair 32: Recruiter Portal Corrections + Israeli Working Days | Client picker fixed (root cause: corrupted Hebrew literal in the RPC); il_non_working_days + holiday-aware business days (SQL + TS, parity-tested); recruiter bonus hero rewritten (מובטח/צפוי/הערכה, tiles, no conditional wording); שעות החודש = attendance, missing-days card links to the exact dates; recruiter attendance by month with server-enforced current-month edit window |
+| Repair 36: Invoice-Sent Tracking | billing_events gains נשלח ללקוח + תאריך שליחה (auto = תאריך הפקה, manual override); TransactionDialog fields, דוחות חיוב column (13 fit at 1440) + "טרם נשלחו" toggle, system-open popup for admin/administration; `isUnsentInvoiceDue` |
 | Repair 35: Clients Table + Recruiter Picker Fix | Clients table gains ימי אחריות + סוג הסכם, explicit status filter, inline active/inactive Switch; `search_clients_for_picker` always returns the selected id (root cause of the recruiter losing the client); `clients.status` CHECK + default |
 | Repair 34: Recruiter Portal Cleanup | Open-deals panel + KPI tile removed, one site font (`--font-sans` system stack; print templates no longer Arial; Recharts ticks `fontFamily: 'inherit'`), CTA band separated from the deal list, admin "דשבורד עובד" option removed |
 | Repair 33: Recruiter "Upcoming Bonuses" Panel | Forward-looking panel (current month + next three: counted / expected / estimate), deal list with "נכנסת ל{חודש}" chips, CTA band; new --bonus-* palette (recruiter portal only) + contrast script; payload `upcoming[4]` + bonusBar geometry; chart restyled; admin-visible fix for the ['transactions'] cache-key collision; design sketches versioned in docs/design/ |
