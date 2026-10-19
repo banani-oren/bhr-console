@@ -15,6 +15,9 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   invoice_date: 'תאריך הפקה',
   due_date: 'תאריך תשלום צפוי',
   due_date_is_manual: 'תאריך תשלום צפוי ידני',
+  invoice_sent: 'נשלח ללקוח',
+  invoice_send_date: 'תאריך שליחה ללקוח',
+  invoice_send_date_is_manual: 'תאריך שליחה ללקוח ידני',
   receipt_number: 'מספר חשבונית מס קבלה',
   payment_date: 'תאריך תשלום',
   transaction_id: 'עסקה',
@@ -93,7 +96,7 @@ const MONEY_KEYS = new Set([
   'commission_amount', 'hourly_rate', 'hourly_rate_used', 'advance_amount',
 ])
 const PERCENT_KEYS = new Set(['commission_percent', 'supplier_percent'])
-const BOOL_KEYS = new Set(['needs_approval', 'is_billable', 'due_date_is_manual', 'time_log_enabled'])
+const BOOL_KEYS = new Set(['needs_approval', 'is_billable', 'due_date_is_manual', 'time_log_enabled', 'invoice_sent', 'invoice_send_date_is_manual'])
 const HIDDEN_DETAIL_KEYS = new Set(['id', 'transaction_id', 'client_id', 'service_type_id', 'supplier_id', 'created_by', 'approved_by', 'profile_id', 'team_member_id', 'month', 'year'])
 
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 })

@@ -45,6 +45,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Card } from '@/components/ui/card'
 import { isGiyusName, sumEventInvoice } from '@/lib/finance'
 import { buildDealEvents } from '@/lib/dealEvents'
@@ -1538,6 +1539,10 @@ function BillingEventRow({
   // termsMissing.
   const notYetInvoiced = !hasInvoice && !event.due_date_is_manual
   const [dueDateInput, setDueDateInput] = useState(event.due_date ?? calculatedTaxDate ?? '')
+  // Repair 36: תאריך שליחה ללקוח (automatic = תאריך הפקה) + נשלח ללקוח. Both exist
+  // only once a חשבון עסקה number is set.
+  const hasInvoiceNumber = !!event.invoice_number
+  const [sendDateInput, setSendDateInput] = useState(event.invoice_send_date ?? '')
   const [paymentDateActual, setPaymentDateActual] = useState(event.payment_date ?? '')
   const [amountOverride, setAmountOverride] = useState(String(event.amount))
   const [savingField, setSavingField] = useState<string | null>(null)
@@ -1569,10 +1574,11 @@ function BillingEventRow({
     setInvoiceDateInput(event.invoice_date ?? '')
     setReceiptNumber(event.receipt_number ?? '')
     setDueDateInput(event.due_date ?? calculatedTaxDate ?? '')
+    setSendDateInput(event.invoice_send_date ?? '')
     setPaymentDateActual(event.payment_date ?? '')
     setAmountOverride(String(event.amount))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event.id, event.invoice_number, event.invoice_date, event.receipt_number, event.due_date, event.payment_date, event.amount])
+  }, [event.id, event.invoice_number, event.invoice_date, event.receipt_number, event.due_date, event.invoice_send_date, event.payment_date, event.amount])
 
   // Repair 17: the ONLY status-computation + document-pairing logic lives in
   // buildBillingEventPatch (src/lib/billingEvents.ts) — never set status or
@@ -1708,7 +1714,8 @@ function BillingEventRow({
               longer has a UI slot in this dialog — it's an internal
               scheduling field only (still drives the pending→to_bill
               worklist and the not-yet-invoiced sections elsewhere). */}
-          <div className="space-y-1 pt-1 border-t border-blue-100">
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-blue-100">
+          <div className="space-y-1">
             <Label className="text-[11px] text-muted-foreground">
               תאריך תשלום צפוי
               {event.due_date_is_manual && (
@@ -1760,6 +1767,61 @@ function BillingEventRow({
                 יחושב לאחר הפקת חשבון עסקה — ניתן גם להזין תאריך ידנית כבר עכשיו
               </p>
             )}
+          </div>
+          {/* Repair 36: תאריך שליחה ללקוח + נשלח ללקוח — admin/administration (this block is
+              never rendered for a recruiter). Automatic = תאריך הפקה; a manual value survives. */}
+          <div className="space-y-1" data-testid="invoice-send-block">
+            <Label className="text-[11px] text-muted-foreground">
+              תאריך שליחה ללקוח
+              {hasInvoiceNumber && event.invoice_send_date_is_manual && (
+                <span className="text-amber-600 mr-1" data-testid="send-date-marker">(ידני)</span>
+              )}
+              {hasInvoiceNumber && !event.invoice_send_date_is_manual && (
+                <span className="text-purple-600 mr-1" data-testid="send-date-marker">(מחושב)</span>
+              )}
+            </Label>
+            <div className="flex gap-1 items-center">
+              <Input
+                type="date"
+                className="h-7 text-sm"
+                data-testid="invoice-send-date"
+                value={sendDateInput}
+                disabled={!hasInvoiceNumber}
+                onChange={(e) => setSendDateInput(e.target.value)}
+                onBlur={() => {
+                  if (sendDateInput !== (event.invoice_send_date ?? '')) {
+                    void saveField('invoice_send_date', sendDateInput)
+                  }
+                }}
+              />
+              {hasInvoiceNumber && event.invoice_send_date_is_manual && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  title="אפס לתאריך מחושב"
+                  data-testid="send-date-reset"
+                  onClick={() => {
+                    void saveField('invoice_send_date_is_manual', false)
+                  }}
+                >
+                  ↩
+                </button>
+              )}
+            </div>
+            <label className={`flex items-center gap-2 text-xs pt-1 ${hasInvoiceNumber ? 'cursor-pointer' : 'opacity-60'}`}>
+              <Checkbox
+                checked={event.invoice_sent}
+                disabled={!hasInvoiceNumber || savingField === 'invoice_sent'}
+                onCheckedChange={(v) => void saveField('invoice_sent', !!v)}
+                data-testid="invoice-sent-checkbox"
+                aria-label="נשלח ללקוח"
+              />
+              נשלח ללקוח
+            </label>
+            {!hasInvoiceNumber && (
+              <p className="text-[11px] text-muted-foreground">יוזן לאחר הפקת חשבון עסקה</p>
+            )}
+          </div>
           </div>
         </div>
 

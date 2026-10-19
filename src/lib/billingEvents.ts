@@ -185,10 +185,31 @@ export function isDueToInvoice(
   return e.status === 'to_bill'
 }
 
+/**
+ * Repair 36 (2026-10-19): an issued חשבון עסקה that should already have gone to
+ * the client and has not — the ONE predicate behind the BillingReports
+ * "טרם נשלחו ללקוח" filter, the red dot and the system-open popup. `today` is
+ * an Asia/Jerusalem "YYYY-MM-DD" string.
+ */
+export function isUnsentInvoiceDue(
+  e: Pick<BillingEvent, 'status' | 'invoice_number' | 'invoice_sent' | 'invoice_send_date'>,
+  today: string,
+): boolean {
+  return (
+    !!e.invoice_number &&
+    !e.invoice_sent &&
+    e.status !== 'paid' &&
+    e.status !== 'cancelled' &&
+    !!e.invoice_send_date &&
+    e.invoice_send_date <= today
+  )
+}
+
 export type EditableBillingField =
   | 'invoice_number' | 'invoice_date'
   | 'receipt_number' | 'payment_date'
   | 'amount' | 'billing_date' | 'due_date' | 'due_date_is_manual'
+  | 'invoice_sent' | 'invoice_send_date' | 'invoice_send_date_is_manual'
 
 /**
  * Builds the full patch for a single-field edit on an existing billing_event
@@ -208,7 +229,18 @@ export function buildBillingEventPatch(
 
   if (field === 'invoice_number') {
     if (value && !event.invoice_date) patch.invoice_date = new Date().toISOString().slice(0, 10)
-    else if (!value) patch.invoice_date = null
+    else if (!value) {
+      patch.invoice_date = null
+      // Repair 36: the sending state goes with the document (the DB trigger does the same).
+      patch.invoice_sent = false
+      patch.invoice_send_date = null
+      patch.invoice_send_date_is_manual = false
+    }
+  }
+  // Repair 36: a hand-typed send date is a manual override unless it equals the
+  // computed one (= invoice_date); clearing it hands the date back to the trigger.
+  if (field === 'invoice_send_date') {
+    patch.invoice_send_date_is_manual = !!value && value !== event.invoice_date
   }
   if (field === 'receipt_number') {
     if (value && !event.payment_date) patch.payment_date = new Date().toISOString().slice(0, 10)
@@ -235,7 +267,7 @@ export function buildBillingEventPatch(
 // and persisted by the DB trigger `trg_billing_events_due_date` on insert,
 // never set by draft-generation code. invoice_date is omitted for the same
 // reason as it: a document date entered by hand, never by a generator.
-export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at' | 'due_date' | 'due_date_is_manual' | 'invoice_date'>
+export type BillingEventDraft = Omit<BillingEvent, 'id' | 'created_at' | 'updated_at' | 'due_date' | 'due_date_is_manual' | 'invoice_date' | 'invoice_sent' | 'invoice_send_date' | 'invoice_send_date_is_manual'>
 
 export function generateServiceBillingEvents(params: {
   transactionId: string

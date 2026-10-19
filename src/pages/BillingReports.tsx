@@ -14,6 +14,7 @@ import {
   buildBillingEventPatch,
   isDueToInvoice,
   isOverduePayment,
+  isUnsentInvoiceDue,
   type EditableBillingField,
 } from '@/lib/billingEvents'
 import type {
@@ -97,7 +98,7 @@ const formatCurrency = (n: number | null | undefined) => {
   return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n)
 }
 
-// Repair 29 column-fit: compact cells so all 12 columns fit at 1440px (content
+// Repair 29 column-fit (13 columns since Repair 36): compact cells so all columns fit at 1440px (content
 // ≈ 1136px beside the w-64 sidebar). Below that the table scrolls inside its card;
 // the checkbox + לקוח columns are sticky on the right (RTL) with opaque backgrounds.
 const CELL = 'px-1.5 py-1.5 align-middle'
@@ -105,11 +106,13 @@ const CELL = 'px-1.5 py-1.5 align-middle'
 const HEAD = 'px-1.5 whitespace-normal leading-tight h-auto py-2 align-bottom text-right'
 // Column widths: dates sized to dd/MM/yy or a dd/MM/yyyy input, document numbers to ~8 digits;
 // the space freed goes to לקוח.
-const W_DATE = 'w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]'
+const W_DATE = 'w-[4.25rem] min-w-[4.25rem] max-w-[4.25rem]'
 const W_DATE_INPUT = 'w-[7.5rem] min-w-[7.5rem]'
-const W_DOC = 'w-[5.75rem] min-w-[5.75rem] max-w-[5.75rem]'
+const W_DOC = 'w-[5.25rem] min-w-[5.25rem] max-w-[5.25rem]'
+// Repair 36: the narrow "נשלח ללקוח" checkbox column.
+const W_SENT = 'w-14 min-w-14 max-w-14'
 const STICKY_CHK = 'sticky right-0 z-10 w-8 min-w-8'
-const STICKY_CLIENT = 'sticky right-8 z-10 w-36 min-w-36 max-w-36'
+const STICKY_CLIENT = 'sticky right-8 z-10 w-[7.5rem] min-w-[7.5rem] max-w-[7.5rem]'
 const stickyBg = (selected: boolean) => (selected ? 'bg-purple-50' : 'bg-background group-hover:bg-purple-50')
 
 export default function BillingReports() {
@@ -122,6 +125,8 @@ export default function BillingReports() {
       return n
     }, { replace: true })
   const clientId = param('client') || null
+  // Repair 36: "טרם נשלחו ללקוח" — invoices that should already have gone out (isUnsentInvoiceDue).
+  const unsentOnly = param('unsent') === '1'
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const billBuckets = useMemo(() => new Set(param('bill').split(',').filter(Boolean)), [searchParams])
   const toggleBucket = (b: string) => {
@@ -197,7 +202,7 @@ export default function BillingReports() {
       billBuckets.size === 0
         ? e.status !== 'cancelled'
         : BILL_BUCKETS.some((b) => billBuckets.has(b.key) && b.match(e, today))
-    const rows = rawEvents.filter(byBucket)
+    const rows = rawEvents.filter(byBucket).filter((e) => !unsentOnly || isUnsentInvoiceDue(e, today))
     if (!searchDebounced) return rows
     return rows.filter((e) => {
       const haystack = [
@@ -211,12 +216,13 @@ export default function BillingReports() {
         .map((s) => String(s).toLowerCase())
       return haystack.some((s) => s.includes(searchDebounced))
     })
-  }, [rawEvents, billBuckets, today, searchDebounced])
+  }, [rawEvents, billBuckets, today, searchDebounced, unsentOnly])
 
   const remainderRows = useMemo<RemainderRow[]>(() => {
     // A virtual row has no dates, so it can never satisfy a date-range filter,
     // and it only belongs to the טרם חויב bucket.
     if (dateRangeActive) return []
+    if (unsentOnly) return [] // a remainder has no invoice, so it can never be an unsent one
     if (billBuckets.size > 0 && !billBuckets.has('not_billed')) return []
     const rows: RemainderRow[] = []
     for (const d of deals) {
@@ -233,7 +239,7 @@ export default function BillingReports() {
         .filter(Boolean)
         .some((s) => String(s).toLowerCase().includes(searchDebounced)),
     )
-  }, [deals, dateRangeActive, billBuckets, searchDebounced])
+  }, [deals, dateRangeActive, billBuckets, searchDebounced, unsentOnly])
 
   const getRowSortValue = (r: Row, key: string): unknown => {
     if (r.kind === 'remainder') {
@@ -440,6 +446,19 @@ export default function BillingReports() {
               )}
             </SelectContent>
           </Select>
+
+          {/* Repair 36: invoices that should already have been sent to the client */}
+          <Button
+            type="button"
+            variant={unsentOnly ? 'default' : 'outline'}
+            size="sm"
+            aria-pressed={unsentOnly}
+            data-testid="unsent-filter"
+            onClick={() => setParam('unsent', unsentOnly ? null : '1')}
+            className={cn('shrink-0 h-8', unsentOnly ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'border-purple-300 text-purple-700 hover:bg-purple-50')}
+          >
+            טרם נשלחו ללקוח
+          </Button>
         </div>
       </Card>
 
@@ -529,6 +548,7 @@ export default function BillingReports() {
                 <SortableHead col="billing_date" label="תאריך חיוב מתוכנן" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE)} />
                 <TableHead className={cn(HEAD, 'text-purple-800', W_DOC)}>מספר חשבון עסקה</TableHead>
                 <SortableHead col="invoice_date" label="תאריך הפקה" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE_INPUT)} />
+                <TableHead className={cn(HEAD, 'text-purple-800', W_SENT)} data-testid="sent-head">נשלח ללקוח</TableHead>
                 <SortableHead col="due_date" label="תאריך תשלום צפוי" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE)} />
                 <TableHead className={cn(HEAD, 'text-purple-800', W_DOC)}>מספר חשבונית מס קבלה</TableHead>
                 <SortableHead col="payment_date" label="תאריך תשלום" sort={sort} onToggle={toggleSort} className={cn(HEAD, W_DATE_INPUT)} />
@@ -616,7 +636,7 @@ function RemainderDashRow({ row, onOpen }: { row: RemainderRow; onOpen: () => vo
       <TableCell className={cn(CELL, 'font-medium', STICKY_CLIENT, stickyBg(false))}>
         <div className="line-clamp-2 break-words whitespace-normal leading-tight" title={deal.client_name}>{deal.client_name}</div>
       </TableCell>
-      <TableCell className={cn(CELL, 'min-w-24 max-w-[6.5rem] whitespace-normal leading-tight')}>{deal.service_type || '—'}</TableCell>
+      <TableCell className={cn(CELL, 'min-w-20 max-w-[5.5rem] whitespace-normal leading-tight')}>{deal.service_type || '—'}</TableCell>
       <TableCell className={cn(CELL, 'text-xs min-w-28 max-w-40 whitespace-normal leading-tight')}>
         <div className="line-clamp-2" title={row.description}>{row.description}</div>
       </TableCell>
@@ -627,7 +647,7 @@ function RemainderDashRow({ row, onOpen }: { row: RemainderRow; onOpen: () => vo
           <Badge variant="outline" className="mt-1 bg-amber-50 text-amber-700 border-amber-200 text-[10px] whitespace-nowrap">ממתין לאישור</Badge>
         )}
       </TableCell>
-      {Array.from({ length: 6 }).map((_, i) => (
+      {Array.from({ length: 7 }).map((_, i) => (
         <TableCell key={i} className={cn(CELL, 'text-muted-foreground')}>—</TableCell>
       ))}
     </TableRow>
@@ -643,7 +663,7 @@ function BillingEventDashRow({
 }: {
   event: EventWithTxn
   today: string
-  onChanged: () => void
+  onChanged: () => void | Promise<unknown>
   selected: boolean
   onToggleSelect: () => void
 }) {
@@ -653,6 +673,10 @@ function BillingEventDashRow({
   const [receipt, setReceipt] = useState(event.receipt_number ?? '')
   const [busy, setBusy] = useState<string | null>(null)
   const [rowError, setRowError] = useState<string | null>(null)
+  // Repair 36: optimistic "נשלח ללקוח" — an override shown until the refetch lands,
+  // dropped (rolled back) if the save fails.
+  const [sentOverride, setSentOverride] = useState<boolean | null>(null)
+  const sent = sentOverride ?? event.invoice_sent
 
   useEffect(() => {
     setInvoice(event.invoice_number ?? '')
@@ -686,6 +710,34 @@ function BillingEventDashRow({
     }
   }
 
+  const toggleSent = async (next: boolean) => {
+    setSentOverride(next)
+    setBusy('invoice_sent')
+    setRowError(null)
+    const patch = buildBillingEventPatch(event, 'invoice_sent', next, transactionApproved)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
+    try {
+      const { error } = await supabase.from('billing_events').update(patch).eq('id', event.id).abortSignal(controller.signal)
+      if (error) throw error
+      await onChanged()
+    } catch (err) {
+      console.error('BillingEventDashRow sent error:', err)
+      const isTimeout = err instanceof DOMException && err.name === 'AbortError'
+      setRowError(isTimeout ? 'פג זמן — סימון "נשלח ללקוח" בוטל, נסה שנית' : 'שגיאה בשמירת "נשלח ללקוח" — השינוי בוטל')
+    } finally {
+      clearTimeout(timer)
+      setSentOverride(null)
+      setBusy(null)
+    }
+  }
+  const hasInvoiceNumber = !!event.invoice_number
+  // The dot: an issued invoice, not marked sent, whose send date is already in the past.
+  const lateSend = !sent && isUnsentInvoiceDue({ ...event, invoice_sent: false }, today) && !!event.invoice_send_date && event.invoice_send_date < today
+  const lateSendTitle = lateSend && event.invoice_send_date
+    ? 'היה צריך להישלח ב-' + event.invoice_send_date.split('-').reverse().join('/')
+    : undefined
+
   const dueRed = isOverduePayment(event, today)
   const billingRed = isDueToInvoice(event, today)
 
@@ -705,7 +757,7 @@ function BillingEventDashRow({
       <TableCell className={cn(CELL, 'font-medium', STICKY_CLIENT, stickyBg(selected))}>
         <div className="line-clamp-2 break-words whitespace-normal leading-tight" title={event.transactions.client_name}>{event.transactions.client_name}</div>
       </TableCell>
-      <TableCell className={cn(CELL, 'min-w-24 max-w-[6.5rem] whitespace-normal leading-tight')}>{event.transactions.service_type ?? '—'}</TableCell>
+      <TableCell className={cn(CELL, 'min-w-20 max-w-[5.5rem] whitespace-normal leading-tight')}>{event.transactions.service_type ?? '—'}</TableCell>
       <TableCell className={cn(CELL, 'text-xs min-w-28 max-w-40 whitespace-normal leading-tight')}>
         <div className="line-clamp-2" title={event.description ?? undefined}>{event.description ?? '—'}</div>
       </TableCell>
@@ -742,6 +794,22 @@ function BillingEventDashRow({
           title={awaitingApprovalTitle}
         />
       </TableCell>
+      <TableCell className={cn(CELL, 'text-center', W_SENT)} data-testid="sent-cell">
+        {hasInvoiceNumber ? (
+          <span className="inline-flex items-center justify-center gap-1" title={lateSendTitle}>
+            <Checkbox
+              checked={sent}
+              disabled={!transactionApproved || busy === 'invoice_sent'}
+              onCheckedChange={(v) => void toggleSent(!!v)}
+              aria-label="נשלח ללקוח"
+              data-testid="sent-checkbox"
+            />
+            {lateSend && <span className="inline-block h-2 w-2 rounded-full bg-red-500" data-testid="sent-late-dot" aria-label={lateSendTitle} />}
+          </span>
+        ) : (
+          <span className="text-muted-foreground" title="יוזן לאחר הפקת חשבון עסקה">—</span>
+        )}
+      </TableCell>
       <TableCell className={cn(CELL, dueRed ? 'text-red-600 font-medium' : '')}>
         <DueDateCell
           dueDate={event.due_date}
@@ -773,7 +841,7 @@ function BillingEventDashRow({
     </TableRow>
     {rowError && (
       <TableRow className="hover:bg-transparent">
-        <TableCell colSpan={12} className="py-1 text-[11px] text-destructive text-left" dir="rtl">
+        <TableCell colSpan={13} className="py-1 text-[11px] text-destructive text-left" dir="rtl">
           {rowError}
         </TableCell>
       </TableRow>

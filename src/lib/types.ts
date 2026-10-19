@@ -92,6 +92,11 @@ export type BillingEvent = {
   payment_date: string | null
   due_date: string | null
   due_date_is_manual: boolean
+  /** Repair 36: נשלח ללקוח — set by a user only; cleared with the invoice number (DB trigger). */
+  invoice_sent: boolean
+  /** Repair 36: תאריך שליחה ללקוח — = invoice_date unless invoice_send_date_is_manual. */
+  invoice_send_date: string | null
+  invoice_send_date_is_manual: boolean
   receipt_number: string | null
   advance_applied: number
   supplier_amount: number

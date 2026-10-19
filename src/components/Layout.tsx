@@ -22,6 +22,7 @@ import { useAuth } from '@/lib/auth'
 import type { UserRole } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { usePendingApprovals } from '@/hooks/usePendingApprovals'
+import UnsentInvoicesDialog from '@/components/UnsentInvoicesDialog'
 
 // Captured by the beforeinstallprompt listener so the sidebar can call prompt()
 // at a user-initiated moment (Chrome / Edge on desktop + Android only).
@@ -193,6 +194,8 @@ export default function Layout({ children }: LayoutProps) {
       <main className="flex-1 overflow-y-auto">
         {children}
       </main>
+      {/* Repair 36: admin/administration — unsent חשבונות עסקה, once per full load */}
+      <UnsentInvoicesDialog />
     </div>
   )
 }
