@@ -164,7 +164,7 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
   <meta charset="UTF-8">
   <title>דוח שעות – ${escapeHtml(selectedClient.name)}</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; direction: rtl; margin: 32px; color: #111; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; direction: rtl; margin: 32px; color: #111; }
     .brand { height: 56px; width: auto; display: block; margin-bottom: 12px; }
     h1 { font-size: 20px; margin-bottom: 4px; }
     .meta { font-size: 13px; color: #555; margin-bottom: 24px; }

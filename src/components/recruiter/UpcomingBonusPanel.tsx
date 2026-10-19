@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 const ILS = new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 })
 const NUM = new Intl.NumberFormat('he-IL')
 const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר']
-export const monthNameHe = (key: string) => HE_MONTHS[Number(key.slice(5)) - 1]
+const monthNameHe = (key: string) => HE_MONTHS[Number(key.slice(5)) - 1]
 
 const countLine = (n: number) => (n === 0 ? 'עוד לא נפתחו עסקאות' : n === 1 ? 'עסקה אחת בדרך' : `${NUM.format(n)} עסקאות בדרך`)
 const dealsNeeded = (n: number) => (n === 1 ? 'עוד כ-1 עסקה' : `עוד כ-${NUM.format(n)} עסקאות`)
@@ -146,18 +146,21 @@ export default function UpcomingBonusPanel({ ov, onOpenDeal }: { ov: BonusOvervi
         )}
       </div>
 
-      <div
-        className="flex flex-col items-start justify-between gap-3 rounded-2xl px-5 py-4 sm:flex-row sm:items-center"
-        style={{ background: 'linear-gradient(90deg, var(--bonus-counted), color-mix(in srgb, var(--bonus-counted) 90%, white))', color: 'var(--bonus-counted-ink)' }}
-        data-testid="upcoming-cta"
-      >
-        <div>
-          <p className="text-base font-extrabold">פתיחת עסקה חדשה היום נכנסת ל{monthNameHe(last.month)}</p>
-          <p className="text-[13px] opacity-90">כל עסקה ממוצעת שלך מקרבת אותך לדרגה הבאה</p>
+      {/* Repair 34: own block, outside the deal list, divided from it */}
+      <div className="mt-6 border-t pt-6" style={{ borderColor: 'var(--bonus-track)' }} data-testid="upcoming-cta-wrap">
+        <div
+          className="flex flex-col items-start justify-between gap-3 rounded-2xl px-5 py-4 sm:flex-row sm:items-center"
+          style={{ background: 'linear-gradient(90deg, var(--bonus-counted), color-mix(in srgb, var(--bonus-counted) 90%, white))', color: 'var(--bonus-counted-ink)' }}
+          data-testid="upcoming-cta"
+        >
+          <div>
+            <p className="text-base font-extrabold">פתיחת עסקה חדשה היום נכנסת ל{monthNameHe(last.month)}</p>
+            <p className="text-[13px] opacity-90">כל עסקה ממוצעת שלך מקרבת אותך לדרגה הבאה</p>
+          </div>
+          <Button className="rounded-xl px-[18px] font-extrabold hover:opacity-90" style={{ background: 'var(--bonus-expected)', color: '#ffffff' }} onClick={onOpenDeal} data-testid="cta-open-deal">
+            פתיחת עסקה
+          </Button>
         </div>
-        <Button className="rounded-xl px-[18px] font-extrabold hover:opacity-90" style={{ background: 'var(--bonus-expected)', color: '#ffffff' }} onClick={onOpenDeal} data-testid="cta-open-deal">
-          פתיחת עסקה
-        </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-[18px] gap-y-2 text-xs" style={{ color: 'var(--bonus-muted)' }} data-testid="upcoming-legend">

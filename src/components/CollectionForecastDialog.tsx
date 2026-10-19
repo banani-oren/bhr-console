@@ -200,7 +200,7 @@ export default function CollectionForecastDialog({ open, onOpenChange }: Collect
   <meta charset="UTF-8">
   <title>דוח צפי גבייה – ${escapeHtml(monthLabel)}</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; direction: rtl; margin: 32px; color: #111; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; direction: rtl; margin: 32px; color: #111; }
     header { display: flex; align-items: center; gap: 10px; border-bottom: 3px solid #7c3aed; padding-bottom: 12px; margin-bottom: 8px; }
     header h1 { font-size: 22px; margin: 0; color: #4c1d95; }
     .meta { font-size: 13px; color: #555; margin-bottom: 24px; }

@@ -11,17 +11,7 @@ import { buildMonthDays, monthTotals, shiftMonthKey } from '@/lib/attendanceMont
 import { addCalendarDays, expectedHours } from '@/lib/ilCalendar'
 import { formatHours } from '@/lib/attendance'
 import TransactionDialog from '@/components/TransactionDialog'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { DateCell } from '@/components/ui/date-cell'
 import {
   BarChart,
   Bar,
@@ -31,7 +21,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { Briefcase, Trophy, Clock, CalendarX, CalendarCheck, Check, Pencil } from 'lucide-react'
+import { Trophy, Clock, CalendarX, CalendarCheck, Check } from 'lucide-react'
 
 // Repair 31 — the recruiter dashboard shows her deals, her attendance and a live, HONEST bonus. No
 // accounting data: no revenue, amounts, invoices, payments or collection wording (Oren, 2026-10-18).
@@ -50,16 +40,12 @@ const COUNTED = 'var(--bonus-counted)'
 
 const dealsWord = (n: number) => (n === 1 ? 'עסקה' : 'עסקאות')
 
-const isoMs = (iso: string) => Date.parse(iso + 'T00:00:00Z')
-const daysBetween = (fromIso: string, toIso: string) => Math.max(0, Math.round((isoMs(toIso) - isoMs(fromIso)) / 86_400_000))
-
 export default function RecruiterDashboard() {
   const { profile } = useAuth()
   const { year, month, today } = jerusalemYearMonth()
   const monthKey = `${year}-${String(month).padStart(2, '0')}`
   const firstOfMonth = `${monthKey}-01`
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<Transaction | null>(null)
 
   const overviewQ = useQuery<BonusOverview>({
     queryKey: ['my-bonus-overview', profile?.id],
@@ -105,14 +91,6 @@ export default function RecruiterDashboard() {
   const expectedToDate = today > firstOfMonth ? expectedHours(firstOfMonth, yesterday) : 0
 
   const deals = useMemo(() => dealsQ.data ?? [], [dealsQ.data])
-  const openDeals = useMemo(
-    () =>
-      deals
-        .filter((d) => !d.close_date)
-        .map((d) => ({ deal: d, daysOpen: d.entry_date ? daysBetween(d.entry_date, today) : 0 }))
-        .sort((a, b) => b.daysOpen - a.daysOpen),
-    [deals, today],
-  )
   const closedThisMonth = useMemo(() => deals.filter((d) => (d.close_date ?? '').slice(0, 7) === monthKey).length, [deals, monthKey])
 
   const ov = overviewQ.data
@@ -133,8 +111,7 @@ export default function RecruiterDashboard() {
     })
   }, [ov, monthKey])
 
-  const openAdd = () => { setEditing(null); setDialogOpen(true) }
-  const openEdit = (t: Transaction) => { setEditing(t); setDialogOpen(true) }
+  const openAdd = () => setDialogOpen(true)
 
   const hoursLoading = attendanceQ.isLoading
   const noHours = totals.hours <= 0
@@ -156,8 +133,7 @@ export default function RecruiterDashboard() {
         <UpcomingBonusPanel ov={ov} onOpenDeal={openAdd} />
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCard title="העסקאות הפתוחות שלי" icon={<Briefcase size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(openDeals.length)} testId="kpi-open-deals" />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard title="נסגרו החודש" icon={<Trophy size={18} className="text-purple-600" />} value={dealsQ.isLoading ? '…' : NUM.format(closedThisMonth)} testId="kpi-closed-month" />
 
         <Card data-testid="kpi-hours">
@@ -247,8 +223,8 @@ export default function RecruiterDashboard() {
                     </pattern>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-                  <YAxis tickFormatter={(v: number) => ILS.format(v)} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fontFamily: 'inherit' }} tickLine={false} axisLine={false} />
+                  <YAxis tickFormatter={(v: number) => ILS.format(v)} tick={{ fontSize: 11, fontFamily: 'inherit' }} tickLine={false} axisLine={false} width={64} />
                   <Tooltip content={<BonusTooltip />} cursor={{ fill: 'rgba(100,100,100,0.08)' }} />
                   <Bar dataKey="locked" stackId="b" fill="var(--bonus-counted)" maxBarSize={40} name="locked" />
                   <Bar dataKey="expected" stackId="b" fill="url(#bonus-expected-stripes)" stroke="var(--bonus-expected)" radius={[4, 4, 0, 0]} maxBarSize={40} name="expected" />
@@ -259,56 +235,7 @@ export default function RecruiterDashboard() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">העסקאות הפתוחות שלי</CardTitle>
-        </CardHeader>
-        <CardContent className="px-0">
-          {dealsQ.isError ? (
-            <p className="text-sm text-destructive py-8 text-center">שגיאה בטעינת העסקאות.</p>
-          ) : openDeals.length === 0 && !dealsQ.isLoading ? (
-            <div className="py-8 text-center space-y-3" data-testid="open-deals-empty">
-              <p className="text-muted-foreground">אין עסקאות פתוחות כרגע</p>
-              <Button className="bg-purple-600 hover:bg-purple-700 text-white" onClick={openAdd}>פתח עסקה</Button>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-right px-4">לקוח</TableHead>
-                  <TableHead className="text-right px-4">משרה / מועמד</TableHead>
-                  <TableHead className="text-right px-4">נפתחה</TableHead>
-                  <TableHead className="text-right px-4">ימים פתוחה</TableHead>
-                  <TableHead className="text-right px-4 w-16" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {dealsQ.isLoading ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">טוען...</TableCell></TableRow>
-                ) : (
-                  openDeals.map(({ deal, daysOpen }) => (
-                    <TableRow key={deal.id} className="cursor-pointer hover:bg-purple-50/50" onClick={() => openEdit(deal)}>
-                      <TableCell className="px-4 font-medium">{deal.client_name}</TableCell>
-                      <TableCell className="px-4 text-muted-foreground">
-                        {[deal.position_name, deal.candidate_name].filter(Boolean).join(' · ') || '—'}
-                      </TableCell>
-                      <TableCell className="px-4"><DateCell value={deal.entry_date} /></TableCell>
-                      <TableCell className="px-4">{NUM.format(daysOpen)}</TableCell>
-                      <TableCell className="px-4">
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-purple-600 hover:bg-purple-100" aria-label="עריכה" onClick={(e) => { e.stopPropagation(); openEdit(deal) }}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      <TransactionDialog open={dialogOpen} onOpenChange={setDialogOpen} editing={editing} />
+      <TransactionDialog open={dialogOpen} onOpenChange={setDialogOpen} editing={null} />
     </div>
   )
 }

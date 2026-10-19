@@ -4,10 +4,9 @@ import AdminDashboard from '@/pages/dashboards/AdminDashboard'
 import RecruiterDashboard from '@/pages/dashboards/RecruiterDashboard'
 import AdministrationDashboard from '@/pages/dashboards/AdministrationDashboard'
 
-// Phase B: admins see a three-pill toggle at the top of / and can preview the
-// three dashboards (manager, employee=recruiter view, collections=administration
-// view). Non-admins see only their scoped dashboard.
-type AdminView = 'manager' | 'employee' | 'collections'
+// Admins see a two-pill toggle at the top of / (manager, collections=administration view).
+// Non-admins see only their scoped dashboard. (Repair 34: the "דשבורד עובד" recruiter preview was removed.)
+type AdminView = 'manager' | 'collections'
 
 export default function Dashboard() {
   const { profile } = useAuth()
@@ -41,15 +40,6 @@ export default function Dashboard() {
           </button>
           <button
             type="button"
-            onClick={() => setView('employee')}
-            className={`px-4 py-1.5 rounded-md ${
-              view === 'employee' ? 'bg-purple-600 text-white' : 'text-purple-700 hover:bg-purple-50'
-            }`}
-          >
-            דשבורד עובד
-          </button>
-          <button
-            type="button"
             onClick={() => setView('collections')}
             className={`px-4 py-1.5 rounded-md ${
               view === 'collections' ? 'bg-purple-600 text-white' : 'text-purple-700 hover:bg-purple-50'
@@ -60,7 +50,6 @@ export default function Dashboard() {
         </div>
       </div>
       {view === 'manager' && <AdminDashboard />}
-      {view === 'employee' && <RecruiterDashboard />}
       {view === 'collections' && <AdministrationDashboard />}
     </div>
   )
