@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '@/lib/supabase'
@@ -29,6 +30,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { agreementTypeLabel } from '@/lib/clients'
 import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
@@ -139,10 +142,6 @@ function formToPayload(form: ClientForm) {
 
 function statusLabel(s: string) {
   return s === 'פעיל' || s === 'active' ? 'פעיל' : 'לא פעיל'
-}
-
-function statusVariant(s: string): 'default' | 'secondary' {
-  return s === 'פעיל' || s === 'active' ? 'default' : 'secondary'
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +265,13 @@ export default function Clients() {
   const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
+  // Repair 35: the status filter lives in the URL (?status=active|inactive); default = all.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const filterStatus = ((s) => (s === 'active' || s === 'inactive' ? s : 'all'))(searchParams.get('status'))
+  const setFilterStatus = (v: string) =>
+    setSearchParams((p) => { const n = new URLSearchParams(p); if (v === 'all') n.delete('status'); else n.set('status', v); return n }, { replace: true })
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set())
+  const [toggleError, setToggleError] = useState<string | null>(null)
   const [filterGroup, setFilterGroup] = useState('all')
   const [sort, setSort] = useState<SortState>({ key: 'name', dir: 'asc' })
   const toggleSort = (key: string) => setSort((prev) => toggleSortKey(prev, key))
@@ -302,7 +307,8 @@ export default function Clients() {
   const filtered = useMemo(() => {
     return clients.filter((c) => {
       if (search && !c.name.toLowerCase().includes(search.toLowerCase())) return false
-      if (filterStatus !== 'all' && c.status !== filterStatus) return false
+      if (filterStatus === 'active' && statusLabel(c.status) !== 'פעיל') return false
+      if (filterStatus === 'inactive' && statusLabel(c.status) !== 'לא פעיל') return false
       if (filterGroup !== 'all' && c.group_name !== filterGroup) return false
       return true
     })
@@ -741,6 +747,30 @@ export default function Clients() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  // Repair 35: inline active/inactive toggle — optimistic, 10s abort, rollback + inline error on failure.
+  async function toggleStatus(client: Client, nextActive: boolean) {
+    const next = nextActive ? 'פעיל' : 'לא פעיל'
+    const prev = client.status
+    setToggleError(null)
+    setTogglingIds((s) => new Set(s).add(client.id))
+    const patch = (status: string) =>
+      queryClient.setQueryData<Client[]>(['clients'], (old) => (old ?? []).map((x) => (x.id === client.id ? { ...x, status } : x)))
+    patch(next)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), 10000)
+    try {
+      const { error } = await supabase.from('clients').update({ status: next }).eq('id', client.id).abortSignal(controller.signal)
+      if (error) throw error
+    } catch {
+      patch(prev)
+      setToggleError(`עדכון הסטטוס של ${client.name} נכשל — השינוי בוטל. נסה שנית.`)
+    } finally {
+      clearTimeout(timer)
+      setTogglingIds((s) => { const n = new Set(s); n.delete(client.id); return n })
+      void queryClient.invalidateQueries({ queryKey: ['clients'] })
+    }
+  }
+
   // ---- Render ----
   return (
     <div dir="rtl" className="p-6 space-y-4">
@@ -766,16 +796,19 @@ export default function Clients() {
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="חיפוש לפי שם..." value={search} onChange={(e) => setSearch(e.target.value)} className="pr-9" />
         </div>
-        <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v ?? 'all')}>
-          <SelectTrigger className="w-32">
-            <span className="text-sm truncate">{filterStatus === 'all' ? 'הכל' : filterStatus}</span>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">הכל</SelectItem>
-            <SelectItem value="פעיל">פעיל</SelectItem>
-            <SelectItem value="לא פעיל">לא פעיל</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2" data-testid="clients-status-filter">
+          <span className="text-sm text-muted-foreground whitespace-nowrap">סטטוס:</span>
+          <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v ?? 'all')}>
+            <SelectTrigger className="w-32">
+              <span className="text-sm truncate">{filterStatus === 'active' ? 'פעילים' : filterStatus === 'inactive' ? 'לא פעילים' : 'הכל'}</span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">הכל</SelectItem>
+              <SelectItem value="active">פעילים</SelectItem>
+              <SelectItem value="inactive">לא פעילים</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         {groups.length > 0 && (
           <Select value={filterGroup} onValueChange={(v) => setFilterGroup(v ?? 'all')}>
             <SelectTrigger className="w-36">
@@ -789,8 +822,12 @@ export default function Clients() {
         )}
       </div>
 
+      {toggleError && (
+        <p className="text-sm text-destructive" role="alert" data-testid="clients-toggle-error">{toggleError}</p>
+      )}
+
       {/* Table */}
-      <Card>
+      <Card className="[&_th]:whitespace-normal [&_th]:px-1 [&_td]:px-1 [&_td]:whitespace-normal">
         {isLoading ? (
           <div className="p-8 text-center text-muted-foreground">טוען...</div>
         ) : (
@@ -801,6 +838,8 @@ export default function Clients() {
                 <SortableHead col="contact_name" label="איש קשר" sort={sort} onToggle={toggleSort} />
                 <SortableHead col="phone" label="נייד" sort={sort} onToggle={toggleSort} />
                 <SortableHead col="commission_percent" label="עמלה %" sort={sort} onToggle={toggleSort} />
+                <SortableHead col="warranty_days" label="ימי אחריות" sort={sort} onToggle={toggleSort} />
+                <TableHead className="text-right">סוג הסכם</TableHead>
                 <SortableHead col="hourly_rate" label="תעריף/שעה" sort={sort} onToggle={toggleSort} />
                 <SortableHead col="status" label="סטטוס" sort={sort} onToggle={toggleSort} />
                 <TableHead className="text-right">פעולות</TableHead>
@@ -809,15 +848,15 @@ export default function Clients() {
             <TableBody>
               {sorted.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     לא נמצאו לקוחות
                   </TableCell>
                 </TableRow>
               ) : (
                 sorted.map((client) => (
                   <TableRow key={client.id} className="cursor-pointer hover:bg-purple-50/50" onClick={() => openEdit(client)}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
+                    <TableCell className="font-medium whitespace-normal min-w-[110px] max-w-[250px]">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span>{client.name}</span>
                         {parsePaymentTermSpec(client.payment_terms) == null && (
                           <Badge
@@ -835,13 +874,28 @@ export default function Clients() {
                     <TableCell dir="ltr" className="text-right">
                       {client.commission_percent != null ? `${client.commission_percent}%` : '—'}
                     </TableCell>
+                    <TableCell>{client.warranty_days != null ? `${client.warranty_days} ימים` : '—'}</TableCell>
+                    <TableCell data-testid="agreement-type" className="whitespace-normal min-w-[80px] max-w-[150px]">{agreementTypeLabel(client)}</TableCell>
                     <TableCell dir="ltr" className="text-right">
                       {client.hourly_rate != null
                         ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(client.hourly_rate)
                         : '—'}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant={statusVariant(client.status)}>{statusLabel(client.status)}</Badge>
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <label
+                        className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm"
+                        title="לקוח לא פעיל לא יוצג לעובדים בפתיחת עסקה"
+                      >
+                        <Switch
+                          checked={statusLabel(client.status) === 'פעיל'}
+                          disabled={togglingIds.has(client.id)}
+                          onCheckedChange={(v) => void toggleStatus(client, v)}
+                          aria-label={`סטטוס ${client.name}`}
+                          dir="ltr"
+                          data-testid="client-status-switch"
+                        />
+                        <span data-testid="client-status-label">{statusLabel(client.status)}</span>
+                      </label>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>

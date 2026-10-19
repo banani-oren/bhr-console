@@ -123,3 +123,22 @@ export async function deleteClient(id: string): Promise<void> {
     clearTimeout(timer)
   }
 }
+
+// Repair 35: the "סוג הסכם" column of the Clients table, derived from the agreement fields.
+// Split: payment_split_json with more than one part → "חלוקה 30/70". Advance: percent → "מקדמה 30%",
+// fixed → "מקדמה ₪1,500". Both → joined with " · ". Neither → "תשלום מלא".
+const NUM_0 = new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 })
+export function agreementTypeLabel(c: {
+  payment_split_json?: PaymentSplit[] | null
+  advance_type?: 'fixed' | 'percent' | null
+  advance_amount?: number | null
+}): string {
+  const parts: string[] = []
+  const split = Array.isArray(c.payment_split_json) ? c.payment_split_json : []
+  if (split.length > 1) parts.push(`חלוקה ${split.map((s) => s.percent).join('/')}`)
+  if (c.advance_amount != null && Number(c.advance_amount) > 0) {
+    if (c.advance_type === 'percent') parts.push(`מקדמה ${Number(c.advance_amount)}%`)
+    else if (c.advance_type === 'fixed') parts.push(`מקדמה ₪${NUM_0.format(Number(c.advance_amount))}`)
+  }
+  return parts.length ? parts.join(' · ') : 'תשלום מלא'
+}
