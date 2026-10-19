@@ -121,7 +121,7 @@ export default function UnsentInvoicesDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent dir="rtl" className="sm:max-w-3xl" data-testid="unsent-invoices-dialog">
+      <DialogContent dir="rtl" className="w-[min(1100px,calc(100vw-4rem))] sm:max-w-[min(1100px,calc(100vw-4rem))]" data-testid="unsent-invoices-dialog">
         <DialogHeader>
           <DialogTitle>חשבונות עסקה שטרם נשלחו ללקוחות</DialogTitle>
           <DialogDescription data-testid="unsent-subtitle">
@@ -129,11 +129,12 @@ export default function UnsentInvoicesDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="max-h-[50vh] overflow-y-auto rounded-md border">
-          <Table className="text-sm">
+        {/* the wrapper scrolls (not the table container) so the sticky header works */}
+        <div className="max-h-[70vh] overflow-y-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible" data-testid="unsent-scroll">
+          <Table className="text-sm table-fixed">
             <TableHeader>
-              <TableRow className="bg-purple-50">
-                <TableHead className="w-8 text-center">
+              <TableRow className="bg-purple-50 hover:bg-purple-50">
+                <TableHead className="sticky top-0 z-10 bg-purple-50 w-10 text-center">
                   <Checkbox
                     checked={allSelected}
                     onCheckedChange={(v) => setSelected(v ? new Set(rows.map((r) => r.id)) : new Set())}
@@ -141,11 +142,11 @@ export default function UnsentInvoicesDialog() {
                     data-testid="unsent-select-all"
                   />
                 </TableHead>
-                <TableHead className="text-right">לקוח</TableHead>
-                <TableHead className="text-right">תיאור</TableHead>
-                <TableHead className="text-right">מספר חשבון עסקה</TableHead>
-                <TableHead className="text-right">סכום</TableHead>
-                <TableHead className="text-right">תאריך שליחה</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-purple-50 text-right whitespace-normal leading-tight align-bottom py-2 w-[14rem]">לקוח</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-purple-50 text-right whitespace-normal leading-tight align-bottom py-2 ">תיאור</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-purple-50 text-right whitespace-normal leading-tight align-bottom py-2 w-[7.5rem]">מספר חשבון עסקה</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-purple-50 text-right whitespace-normal leading-tight align-bottom py-2 w-[6.9rem]">סכום</TableHead>
+                <TableHead className="sticky top-0 z-10 bg-purple-50 text-right whitespace-normal leading-tight align-bottom py-2 w-[6.9rem]">תאריך שליחה</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -159,9 +160,9 @@ export default function UnsentInvoicesDialog() {
                       data-testid="unsent-row-check"
                     />
                   </TableCell>
-                  <TableCell className="font-medium whitespace-normal">{r.transactions.client_name}</TableCell>
+                  <TableCell className="font-medium whitespace-normal"><div className="line-clamp-2 break-words" title={r.transactions.client_name}>{r.transactions.client_name}</div></TableCell>
                   <TableCell className="text-xs whitespace-normal">{r.description ?? '—'}</TableCell>
-                  <TableCell>{r.invoice_number}</TableCell>
+                  <TableCell className="whitespace-nowrap">{r.invoice_number}</TableCell>
                   <TableCell className="whitespace-nowrap">₪{NUM_0.format(Number(r.amount))}</TableCell>
                   <TableCell className={cn('whitespace-nowrap', (r.invoice_send_date ?? '') < today && 'text-red-600 font-medium')} data-testid="unsent-date">
                     {fmtDate(r.invoice_send_date)}
