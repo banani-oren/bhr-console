@@ -147,9 +147,10 @@ function yearOf(iso: string | null): number | null {
   return new Date(iso).getFullYear()
 }
 
-function fmt(n: number | null | undefined): string {
+// `exact` keeps agorot (hours block: rate ₪250.50, amount ₪1,440.38); default stays whole shekels.
+function fmt(n: number | null | undefined, exact = false): string {
   if (n == null) return '—'
-  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(n)
+  return new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: exact ? 2 : 0 }).format(n)
 }
 
 function emptyState(profileName: string): DialogState {
@@ -1018,13 +1019,13 @@ export default function TransactionDialog({
                     <>
                       <div>
                         <Label className="text-xs">תעריף שעה</Label>
-                        <p>{fmt(state.hourly_rate_used)}</p>
+                        <p>{fmt(state.hourly_rate_used, true)}</p>
                       </div>
                       <div>
                         <Label className="text-xs">סכום חשבונית</Label>
                         {hoursAmountMissingRate
                           ? <p className="text-amber-700">תעריף לא מוגדר</p>
-                          : <p>{fmt(hoursAmount ?? state.net_invoice_amount)}</p>}
+                          : <p>{fmt(hoursAmount ?? state.net_invoice_amount, true)}</p>}
                       </div>
                     </>
                   )}
