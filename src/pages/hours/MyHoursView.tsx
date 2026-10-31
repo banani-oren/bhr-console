@@ -507,14 +507,14 @@ export default function MyHoursView() {
                 <span className="text-muted-foreground">תעריף שעה:</span>
                 <span>
                   {selectedClient?.hourly_rate != null
-                    ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(selectedClient.hourly_rate)
+                    ? new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 }).format(selectedClient.hourly_rate)
                     : '—'}
                 </span>
               </div>
               <div className="border-t pt-2 flex justify-between">
                 <span className="text-muted-foreground">סכום לחיוב:</span>
                 <span className="font-bold text-lg">
-                  {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(billingAmount)}
+                  {new Intl.NumberFormat('he-IL', { style: 'currency', currency: 'ILS', maximumFractionDigits: 2 }).format(billingAmount)}
                 </span>
               </div>
               <div className="flex justify-between">
