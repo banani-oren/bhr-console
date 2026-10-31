@@ -47,7 +47,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Card } from '@/components/ui/card'
-import { isGiyusName, sumEventInvoice } from '@/lib/finance'
+import { computeHoursInvoiceAmount, isGiyusName, sumEventInvoice } from '@/lib/finance'
 import { buildDealEvents } from '@/lib/dealEvents'
 import { HOURS_SERVICE_NAME, hoursCloseFields, isHoursServiceName } from '@/lib/hoursService'
 import { Badge } from '@/components/ui/badge'
@@ -440,6 +440,12 @@ export default function TransactionDialog({
   const transactionApproved = !!editing?.approved_at || !editing?.needs_approval
 
   const handleSave = async () => {
+    // An hours deal without a known rate must never save as ₪0 (Repair 38).
+    if (state.kind === 'time_period' && !editing && computeHoursInvoiceAmount(state.hours_total, state.hourly_rate_used) == null) {
+      setSaveStatus('error')
+      setSaveError('לא ניתן לשמור עסקת שעות ללא תעריף שעה ללקוח')
+      return
+    }
     // Ask BEFORE starting the abort timer — window.confirm() blocks the thread,
     // and a slow decision here must not eat into the network request's timeout
     // budget (which would fire the moment the dialog closes).
@@ -520,10 +526,9 @@ export default function TransactionDialog({
         payload.period_end = state.period_end
         payload.hours_total = state.hours_total
         payload.hourly_rate_used = state.hourly_rate_used
-        const hrs = Number(state.hours_total) || 0
-        const rate = Number(state.hourly_rate_used) || 0
-        if (hrs > 0 && rate > 0) {
-          payload.net_invoice_amount = Math.round(hrs * rate * 100) / 100
+        const hoursAmount = computeHoursInvoiceAmount(state.hours_total, state.hourly_rate_used)
+        if (hoursAmount != null) {
+          payload.net_invoice_amount = hoursAmount
         } else if (editing) {
           // No hours × rate to derive from → the sum of the deal's non-cancelled
           // billing events (never leave an invoiced hours deal at NULL).
@@ -842,6 +847,10 @@ export default function TransactionDialog({
   }
 
   const isTimePeriod = state.kind === 'time_period'
+  // Hours deal amount: always derived from hours × rate (live); the stored amount
+  // is only the fallback for an existing deal that has no hours/rate (Repair 38).
+  const hoursAmount = computeHoursInvoiceAmount(state.hours_total, state.hourly_rate_used)
+  const hoursAmountMissingRate = isTimePeriod && !editing && !!state.hours_total && hoursAmount == null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1013,7 +1022,9 @@ export default function TransactionDialog({
                       </div>
                       <div>
                         <Label className="text-xs">סכום חשבונית</Label>
-                        <p>{fmt(state.net_invoice_amount)}</p>
+                        {hoursAmountMissingRate
+                          ? <p className="text-amber-700">תעריף לא מוגדר</p>
+                          : <p>{fmt(hoursAmount ?? state.net_invoice_amount)}</p>}
                       </div>
                     </>
                   )}

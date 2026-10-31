@@ -46,6 +46,19 @@ export function fromAgorot(a: number): number {
   return a / 100
 }
 
+/**
+ * THE hours-deal amount (Repair 38): hours × hourly rate, rounded once to
+ * agorot. null when either input is missing, non-numeric or not positive —
+ * never a guessed rate, never ₪0.
+ */
+export function computeHoursInvoiceAmount(hours: Numish, rate: Numish): number | null {
+  if (hours == null || hours === '' || rate == null || rate === '') return null
+  const h = Number(hours)
+  const r = Number(rate)
+  if (!Number.isFinite(h) || !Number.isFinite(r) || h <= 0 || r <= 0) return null
+  return fromAgorot(Math.round(h * r * 100))
+}
+
 // ── Event level (agorot) ────────────────────────────────────────────────
 export const eventInvoiceAgorot = (ev: FinanceEvent) => toAgorot(ev.amount)
 export const eventSupplierAgorot = (ev: FinanceEvent) => toAgorot(ev.supplier_amount ?? 0)

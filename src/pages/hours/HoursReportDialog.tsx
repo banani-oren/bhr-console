@@ -222,7 +222,7 @@ export default function HoursReportDialog({ open, onOpenChange, presetClientId }
       period_start: periodStart,
       period_end: periodEnd,
       hours_total: totalHours,
-      hourly_rate_used: hourlyRate,
+      hourly_rate_used: selectedClient.hourly_rate ?? undefined,
     })
     setTxnDialogOpen(true)
   }

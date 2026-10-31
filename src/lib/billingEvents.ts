@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { addBusinessDays } from '@/lib/ilCalendar'
+import { computeHoursInvoiceAmount } from '@/lib/finance'
 import type { BillingEvent, PaymentSplit } from '@/lib/types'
 
 /**
@@ -413,7 +414,7 @@ export function generateTimePeriodBillingEvent(params: {
 }): BillingEventDraft {
   const { transactionId, hoursTotal, hourlyRate, clientName,
           periodStart, periodEnd } = params
-  const amount = Math.round(hoursTotal * hourlyRate * 100) / 100
+  const amount = computeHoursInvoiceAmount(hoursTotal, hourlyRate) ?? 0
   const billingDate = endOfMonth(periodEnd || periodStart || new Date().toISOString().slice(0, 10))
 
   return {

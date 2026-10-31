@@ -11,6 +11,10 @@
 import { supabase } from '@/lib/supabase'
 import { endOfMonth } from '@/lib/billingEvents'
 
+// The one hours × rate function lives with the other money math (finance.ts);
+// re-exported so hours code imports it from here.
+export { computeHoursInvoiceAmount } from '@/lib/finance'
+
 export const HOURS_SERVICE_NAME = 'שירות משאבי אנוש'
 
 export const isHoursServiceName = (name: string | null | undefined) => name === HOURS_SERVICE_NAME
