@@ -112,7 +112,7 @@ Filters (Repair 26, requested by Oren 2026-10-18 — do NOT "restore" Repair 8's
 
 Footer: totals row (Repair 20) — count in col 1, סכום נטו total + ממתין לאישור sub-line in col 9, derived from the visible (`sorted`) set. No footer in loading/empty states.
 
-⚠️ Known limitation (verified 2026-10-17): the חודש סגירה filter matches `closing_month` (1–12) **without a year**. Once 2027 data exists, "אוגוסט" will merge Aug 2026 and Aug 2027 — and so will the totals row. Filter intentionally unchanged; needs a separate decision. (Also: 11 of 52 transactions have no `closing_month` and appear only under כל החודשים.)
+(The old "חודש סגירה has no year" limitation was resolved by Repair 25's שנה filter, 2026-10-17. The table above is the pre-Repair 21 column list, kept for history only.)
 
 ---
 
@@ -131,7 +131,7 @@ App Dev/
 │   │   ├── auth.tsx                    # AuthProvider + useAuth hook (user, profile, loading, recoveryMode)
 │   │   ├── utils.ts                    # cn() helper (clsx + tailwind-merge)
 │   │   ├── clients.ts                  # Client CRUD: getClients, getClientById, upsertClient, deleteClient
-│   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth, and (Repair 28) `collectionMonth()` + `paidLastMonths()` for the collections dashboard, and (Repair 29) `ungeneratedRemainderAgorot()`/`ungeneratedRemainder()` = net_invoice_amount − Σ non-cancelled events (floored at 0). See "Money terminology" and "Collections dashboard math (Repair 28)".
+│   │   ├── finance.ts                  # Money definitions — single source of truth (Repair 21): agorot math, event/tx invoice·supplier·income, isGiyus/isGiyusName, dealDate, paidEventsInRange (by payment_date), jerusalemYearMonth, and (Repair 28) `collectionMonth()` + `paidLastMonths()` for the collections dashboard, (Repair 38) `computeHoursInvoiceAmount(hours, rate)` = THE hours × rate function (agorot, null when hours or rate missing/≤0), and (Repair 29) `ungeneratedRemainderAgorot()`/`ungeneratedRemainder()` = net_invoice_amount − Σ non-cancelled events (floored at 0). See "Money terminology" and "Collections dashboard math (Repair 28)".
 │   │   ├── auditLabels.ts              # Repair 24: Hebrew field-label map + value formatting + Jerusalem timestamp/boundary helpers for the audit log
 │   │   ├── bonus.ts                    # Bonus engine — single source of truth for every bonus surface (Repair 16). fetchBonusEvents() → buildBonusDeals() → buildLedgerFromDeals(): a DEAL counts only when fully collected, at full value, in the month of its last payment (Repair 27); paymentIncomeByMonth() = per-payment INCOME (not bonus). See "Bonus Engine".
 │   │   ├── billingBuckets.ts           # Repair 29: BILL_BUCKETS (טרם חויב · לחיוב עכשיו · ממתין לתשלום · באיחור · שולם · מבוטל) with `match(event, today)` — the ONE definition shared by Transactions (חיובים popover) and BillingReports (סטטוס popover)
@@ -143,7 +143,7 @@ App Dev/
 │   │   ├── attendanceMonth.ts          # Repair 32: buildMonthDays()/monthTotals() — one month of attendance day by day (present/missing/holiday/erev/future/weekend); shared by the dashboard cards and the recruiter /attendance table
 │   │   ├── billingEvents.ts            # Billing event helpers — generation, status, שוטף+X calculation, (Repair 36) isUnsentInvoiceDue() + the send-state rules of buildBillingEventPatch
 │   │   ├── attendance.ts               # Attendance helpers — Israel-tz today/time, status, pair-matching hours (dayHours), dayPairs() (check_in→check_out AttendancePair[]), toLocalInputValue() (UTC→browser-local for datetime-local inputs)
-│   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it.
+│   │   ├── hoursService.ts             # Repair 25: HOURS_SERVICE_NAME ('שירות משאבי אנוש'), resolveHoursServiceTypeId/findHoursServiceTypeId, hoursCloseFields() (close_date = end of period_end's month + closing month/year). Both hours paths (MyHoursView, HoursReportDialog→TransactionDialog) use it. Repair 38: re-exports `computeHoursInvoiceAmount` (defined in finance.ts); used by the TransactionDialog דיווח שעות block (live, derived from hours_total × hourly_rate_used, shown with agorot), its save payload, and `generateTimePeriodBillingEvent` — no other place multiplies hours by rate. Missing rate → amber "תעריף לא מוגדר" + save blocked.
 │   │   ├── dates.ts                    # Date/timezone utilities — Israeli locale helpers
 │   │   ├── pdf.ts                      # PDF export helpers (jsPDF)
 │   │   ├── serviceTypes.ts             # ServiceType/ServiceField types + evalDerived() formula evaluator
